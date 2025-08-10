@@ -1,0 +1,59 @@
+[gd_scene load_steps=2 format=3 uid="uid://n21343b8xw15"]
+
+[ext_resource type="Script" uid="uid://ciu5utighsdlo" path="res://worldgentest/scripts/Main.gd" id="1_cm0pq"]
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_cm0pq")
+
+[node name="TopBar" type="HBoxContainer" parent="."]
+layout_mode = 2
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 1216.0
+offset_bottom = 40.0
+theme_override_constants/separation = 6
+
+[node name="PlayPause" type="Button" parent="TopBar"]
+layout_mode = 2
+text = "Play"
+
+[node name="Reset" type="Button" parent="TopBar"]
+layout_mode = 2
+text = "Reset"
+
+[node name="Settings" type="Button" parent="TopBar"]
+layout_mode = 2
+text = "Settings"
+
+[node name="AsciiToggle" type="Button" parent="TopBar"]
+layout_mode = 2
+text = "ASCII"
+
+[node name="ZoomIn" type="Button" parent="TopBar"]
+layout_mode = 2
+text = "+"
+
+[node name="ZoomOut" type="Button" parent="TopBar"]
+layout_mode = 2
+text = "-"
+
+[node name="WorldView" type="Control" parent="."]
+layout_mode = 2
+anchors_preset = 0
+offset_left = 8.0
+offset_top = 48.0
+offset_right = 1216.0
+offset_bottom = 728.0
+
+[node name="InspectPanel" type="Panel" parent="."]
+layout_mode = 2
+offset_left = 8.0
+offset_top = 736.0
+offset_right = 1216.0
+offset_bottom = 972.0

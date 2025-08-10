@@ -1,0 +1,21 @@
+# File: .gitignore
+
+# Godot 4 project artifacts
+.godot/
+.import/
+.mono/
+
+# OS/editor junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# Build/cache
+dist/
+build/
+*.tmp
+*.log
+
+

@@ -1,0 +1,112 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/SettingsDialog.gd" id="1"]
+
+[node name="SettingsDialog" type="Window"]
+title = "World Settings"
+size = Vector2i(420, 520)
+exclusive = true
+initial_position = 1
+visible = false
+script = ExtResource("1")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_top = 12.0
+offset_right = -12.0
+offset_bottom = -12.0
+theme_override_constants/separation = 8
+
+[node name="Grid" type="GridContainer" parent="VBox"]
+columns = 2
+
+[node name="LabelSeed" type="Label" parent="VBox/Grid"]
+text = "Seed"
+
+[node name="Seed" type="LineEdit" parent="VBox/Grid"]
+placeholder_text = "random if empty"
+
+[node name="LabelWidth" type="Label" parent="VBox/Grid"]
+text = "Width"
+
+[node name="Width" type="SpinBox" parent="VBox/Grid"]
+min_value = 40.0
+max_value = 400.0
+step = 1.0
+value = 275.0
+
+[node name="LabelHeight" type="Label" parent="VBox/Grid"]
+text = "Height"
+
+[node name="Height" type="SpinBox" parent="VBox/Grid"]
+min_value = 20.0
+max_value = 200.0
+step = 1.0
+value = 62.0
+
+[node name="LabelOctaves" type="Label" parent="VBox/Grid"]
+text = "Octaves"
+
+[node name="Octaves" type="SpinBox" parent="VBox/Grid"]
+min_value = 1.0
+max_value = 10.0
+step = 1.0
+value = 5.0
+
+[node name="LabelFrequency" type="Label" parent="VBox/Grid"]
+text = "Base Frequency"
+
+[node name="Frequency" type="SpinBox" parent="VBox/Grid"]
+min_value = 0.001
+max_value = 0.2
+step = 0.001
+value = 0.02
+
+[node name="LabelLacunarity" type="Label" parent="VBox/Grid"]
+text = "Lacunarity"
+
+[node name="Lacunarity" type="SpinBox" parent="VBox/Grid"]
+min_value = 1.1
+max_value = 4.0
+step = 0.05
+value = 2.0
+
+[node name="LabelGain" type="Label" parent="VBox/Grid"]
+text = "Gain"
+
+[node name="Gain" type="SpinBox" parent="VBox/Grid"]
+min_value = 0.1
+max_value = 1.0
+step = 0.05
+value = 0.5
+
+[node name="LabelWarp" type="Label" parent="VBox/Grid"]
+text = "Domain Warp Amp"
+
+[node name="Warp" type="SpinBox" parent="VBox/Grid"]
+min_value = 0.0
+max_value = 80.0
+step = 1.0
+value = 24.0
+
+[node name="LabelSea" type="Label" parent="VBox/Grid"]
+text = "Sea Level"
+
+[node name="SeaLevel" type="SpinBox" parent="VBox/Grid"]
+min_value = -1.0
+max_value = 1.0
+step = 0.01
+value = 0.0
+
+[node name="Buttons" type="HBoxContainer" parent="VBox"]
+alignment = 2
+
+[node name="Apply" type="Button" parent="VBox/Buttons"]
+text = "Apply"
+
+[node name="Close" type="Button" parent="VBox/Buttons"]
+text = "Close"
+
+
