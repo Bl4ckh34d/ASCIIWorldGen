@@ -79,7 +79,7 @@ func _generate_and_draw() -> void:
 	var w: int = generator.config.width
 	var h: int = generator.config.height
 	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_river, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c)
+	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c)
 	ascii_map.clear()
 	ascii_map.append_text(ascii_str)
 	last_ascii_text = ascii_str
@@ -124,6 +124,14 @@ func _apply_seed_from_ui() -> void:
 		cfg2["moist_base_offset"] = (jitter.randf() - 0.5) * 0.10
 		cfg2["moist_scale"] = 0.95 + 0.1 * jitter.randf()
 		cfg2["continentality_scale"] = 0.9 + 0.3 * jitter.randf()
+		# Also jitter the per-seed extremes slightly even with fixed seed
+		var tmin: float = float(generator.config.temp_min_c)
+		var tmax: float = float(generator.config.temp_max_c)
+		var span: float = max(1.0, tmax - tmin)
+		var shift: float = (jitter.randf() - 0.5) * 6.0 # ±3°C shift
+		var expand: float = 0.95 + 0.1 * jitter.randf() # 0.95..1.05 span change
+		cfg2["temp_min_c"] = tmin + shift
+		cfg2["temp_max_c"] = tmin + shift + span * expand
 		generator.apply_config(cfg2)
 		# Reflect randomized sea level to slider without emitting value_changed
 		sea_signal_blocked = true
@@ -168,7 +176,7 @@ func _generate_and_draw_preserve_seed() -> void:
 	var w: int = generator.config.width
 	var h: int = generator.config.height
 	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_river, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c)
+	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c)
 	ascii_map.clear()
 	ascii_map.append_text(ascii_str)
 	last_ascii_text = ascii_str
@@ -221,7 +229,6 @@ func _on_ascii_input(event: InputEvent) -> void:
 					temp_c = float(info["temp_c"])
 				var flags: PackedStringArray = []
 				if info.get("is_beach", false): flags.append("Beach")
-				if info.get("is_river", false): flags.append("River")
 				if info.get("is_lava", false): flags.append("Lava")
 				var extra := ""
 				if flags.size() > 0: extra = " - " + ", ".join(flags)
@@ -286,9 +293,6 @@ func _glyph_at(x: int, y: int) -> String:
 	var biome_id: int = 0
 	if i < generator.last_biomes.size():
 		biome_id = generator.last_biomes[i]
-	# river override
-	if i < generator.last_river.size() and generator.last_river[i] != 0 and not beach_flag:
-		return "≈"
 	if styler_single == null:
 		styler_single = AsciiStyler.new()
 	return styler_single.glyph_for(x, y, land, biome_id, beach_flag, generator.config.rng_seed)

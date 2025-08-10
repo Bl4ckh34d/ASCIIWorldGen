@@ -21,16 +21,8 @@ class Config:
 	var shore_noise_mult: float = 4.0
 	# Polar cap control
 	var polar_cap_frac: float = 0.12
-	# Rivers controls
-	var river_enabled: bool = true
-	var river_droplets_factor: float = 0.20
-	var river_threshold_factor: float = 1.50
-	var river_erosion_strength: float = 0.0005
-	var river_min_start_height: float = 0.02
-	var river_polar_cutoff: float = 0.80 # 0..1 latitude; > cutoff => no rivers
-	var river_delta_widening: bool = true
 	# Height to meters scale (for info panel)
-	var height_scale_m: float = 4000.0
+	var height_scale_m: float = 6000.0
 	# Temperature extremes per seed (for Celsius scaling and lava)
 	var temp_min_c: float = -40.0
 	var temp_max_c: float = 70.0
@@ -59,9 +51,6 @@ var last_beach: PackedByteArray = PackedByteArray()
 var last_biomes: PackedInt32Array = PackedInt32Array()
 var last_water_distance: PackedFloat32Array = PackedFloat32Array()
 var last_turquoise_strength: PackedFloat32Array = PackedFloat32Array()
-var last_flow_dir: PackedInt32Array = PackedInt32Array()
-var last_flow_accum: PackedFloat32Array = PackedFloat32Array()
-var last_river: PackedByteArray = PackedByteArray()
 var last_temperature: PackedFloat32Array = PackedFloat32Array()
 var last_moisture: PackedFloat32Array = PackedFloat32Array()
 var last_distance_to_coast: PackedFloat32Array = PackedFloat32Array()
@@ -102,20 +91,6 @@ func apply_config(dict: Dictionary) -> void:
 		config.shore_noise_mult = clamp(float(dict["shore_noise_mult"]), 0.1, 20.0)
 	if dict.has("polar_cap_frac"):
 		config.polar_cap_frac = clamp(float(dict["polar_cap_frac"]), 0.0, 0.5)
-	if dict.has("river_enabled"):
-		config.river_enabled = bool(dict["river_enabled"]) 
-	if dict.has("river_droplets_factor"):
-		config.river_droplets_factor = clamp(float(dict["river_droplets_factor"]), 0.0, 2.0) 
-	if dict.has("river_threshold_factor"):
-		config.river_threshold_factor = clamp(float(dict["river_threshold_factor"]), 0.1, 5.0)
-	if dict.has("river_erosion_strength"):
-		config.river_erosion_strength = clamp(float(dict["river_erosion_strength"]), 0.0, 0.01)
-	if dict.has("river_min_start_height"):
-		config.river_min_start_height = clamp(float(dict["river_min_start_height"]), -1.0, 1.0)
-	if dict.has("river_polar_cutoff"):
-		config.river_polar_cutoff = clamp(float(dict["river_polar_cutoff"]), 0.0, 1.0)
-	if dict.has("river_delta_widening"):
-		config.river_delta_widening = bool(dict["river_delta_widening"]) 
 	if dict.has("height_scale_m"):
 		config.height_scale_m = float(dict["height_scale_m"]) 
 	if dict.has("temp_min_c"):
@@ -141,7 +116,10 @@ func apply_config(dict: Dictionary) -> void:
 	if dict.has("mountain_radiance_passes"):
 		config.mountain_radiance_passes = int(dict["mountain_radiance_passes"]) 
 	_setup_noises()
-	_setup_temperature_extremes()
+	# Only randomize temperature extremes if caller didn't override both
+	var override_extremes: bool = dict.has("temp_min_c") and dict.has("temp_max_c")
+	if not override_extremes:
+		_setup_temperature_extremes()
 
 func _setup_noises() -> void:
 	_noise.seed = config.rng_seed
@@ -171,8 +149,8 @@ func _setup_noises() -> void:
 func _setup_temperature_extremes() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(config.rng_seed) ^ 0x1234ABCD
-	config.temp_min_c = lerp(-75.0, -25.0, rng.randf())
-	config.temp_max_c = lerp(15.0, 75.0, rng.randf())
+	config.temp_min_c = lerp(-50.0, -15.0, rng.randf())
+	config.temp_max_c = lerp(35.0, 85.0, rng.randf())
 	config.lava_temp_threshold_c = clamp(config.lava_temp_threshold_c, config.temp_min_c, config.temp_max_c)
 
 func clear() -> void:
@@ -212,10 +190,7 @@ func generate() -> PackedByteArray:
 			ocean_count += 1
 	last_ocean_fraction = float(ocean_count) / float(max(1, w * h))
 
-	# Step 1b: rivers and light erosion before shoreline
-	if config.river_enabled:
-		_simulate_rivers(w, h)
-	# Land mask may change slightly after erosion; refresh it
+	# Rivers disabled for now; refresh land mask only
 	for iy in range(h):
 		for ix in range(w):
 			var ii: int = ix + iy * w
@@ -352,19 +327,6 @@ func generate() -> PackedByteArray:
 
 	# Step 4c2: cold override — below ~2°C snow/ice dominates depending on humidity
 	_apply_cold_temperature_override(w, h)
-
-	# Step 4d: compute lava streams from rivers in extreme heat
-	last_lava.resize(w * h)
-	for li in range(w * h):
-		last_lava[li] = 0
-	for ylv in range(h):
-		for xlv in range(w):
-			var ii: int = xlv + ylv * w
-			if last_river.size() == w * h and last_river[ii] != 0:
-				var t_norm: float = (last_temperature[ii] if ii < last_temperature.size() else 0.0)
-				var t_c: float = config.temp_min_c + t_norm * (config.temp_max_c - config.temp_min_c)
-				if t_c >= config.lava_temp_threshold_c:
-					last_lava[ii] = 1
 
 	# Step 4b: ensure ocean ice sheets are present from classifier immediately
 	for yo in range(h):
@@ -532,10 +494,6 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	last_moisture = climate["moisture"]
 	last_distance_to_coast = climate.get("distance_to_coast", PackedFloat32Array())
 
-	# 4) Rivers (fast recompute without erosion) so they react to coastline
-	if config.river_enabled:
-		_simulate_rivers_fast(w, h)
-
 	# 5) Reclassify biomes using updated climate
 	var params2 := params.duplicate()
 	params2["freeze_temp_threshold"] = 0.16
@@ -546,103 +504,19 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	_apply_hot_temperature_override(w, h)
 	_apply_cold_temperature_override(w, h)
 
-	# 6) Update lava mask based on new temperatures and updated rivers
+	# 6) Update lava mask based on new temperatures
 	last_lava.resize(size)
 	for li in range(size):
 		last_lava[li] = 0
 	for ylv in range(h):
 		for xlv in range(w):
 			var ii: int = xlv + ylv * w
-			if last_river.size() == size and last_river[ii] != 0:
-				var t_norm: float = (last_temperature[ii] if ii < last_temperature.size() else 0.0)
-				var t_c: float = config.temp_min_c + t_norm * (config.temp_max_c - config.temp_min_c)
-				if t_c >= config.lava_temp_threshold_c:
-					last_lava[ii] = 1
+			# Rivers disabled; lava mask only by temperature
+			var t_norm: float = (last_temperature[ii] if ii < last_temperature.size() else 0.0)
+			var t_c: float = config.temp_min_c + t_norm * (config.temp_max_c - config.temp_min_c)
+			if t_c >= config.lava_temp_threshold_c:
+				last_lava[ii] = 1
 	return last_is_land
-
-func _simulate_rivers_fast(w: int, h: int) -> void:
-	var size: int = w * h
-	last_flow_dir.resize(size)
-	last_flow_accum.resize(size)
-	last_river.resize(size)
-	for i in range(size):
-		last_flow_dir[i] = -1
-		last_flow_accum[i] = 0.0
-		last_river[i] = 0
-
-	# Build simple steepest-descent flow directions (8 neighbors)
-	for y in range(h):
-		for x in range(w):
-			var i0: int = x + y * w
-			if last_is_land[i0] == 0:
-				continue
-			var cur_h: float = last_height[i0]
-			var best_h: float = cur_h
-			var best_i: int = -1
-			for dy in range(-1, 2):
-				for dx in range(-1, 2):
-					if dx == 0 and dy == 0:
-						continue
-					var nx: int = x + dx
-					var ny: int = y + dy
-					if nx < 0 or ny < 0 or nx >= w or ny >= h:
-						continue
-					var j: int = nx + ny * w
-					var nh: float = last_height[j]
-					# Prefer any ocean neighbor immediately
-					if last_is_land[j] == 0:
-						best_i = j
-						best_h = nh
-						break
-					if nh < best_h:
-						best_h = nh
-						best_i = j
-			if best_i != -1:
-				last_flow_dir[i0] = best_i
-
-	# Accumulate flow by path-walk to sea/sink (skip polar latitudes)
-	for i2 in range(size):
-		if last_is_land[i2] == 0:
-			continue
-		var y2: int = int(float(i2) / float(w))
-		var lat: float = abs(float(y2) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
-		if lat >= config.river_polar_cutoff:
-			continue
-		var steps: int = 0
-		var cur: int = i2
-		while steps < size:
-			var dn: int = last_flow_dir[cur]
-			if dn == -1:
-				break
-			last_flow_accum[dn] += 1.0
-			cur = dn
-			steps += 1
-			if last_is_land[cur] == 0:
-				break
-
-	# Decide river mask adaptively (no erosion/droplets)
-	var samples: Array = []
-	for sk in range(size):
-		if last_is_land[sk] == 0:
-			continue
-		var sky: int = int(float(sk) / float(w))
-		var sklat: float = abs(float(sky) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
-		if sklat >= config.river_polar_cutoff:
-			continue
-		samples.append(last_flow_accum[sk])
-	var target_density: float = clamp(0.02 / max(0.1, config.river_threshold_factor), 0.002, 0.08)
-	var thresh: float = 1e9
-	if samples.size() > 0:
-		samples.sort()
-		var idx: int = int(max(0.0, float(samples.size() - 1) - float(samples.size()) * target_density))
-		thresh = float(samples[idx])
-	for k in range(size):
-		var ky: int = int(float(k) / float(w))
-		var klat: float = abs(float(ky) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
-		if klat >= config.river_polar_cutoff:
-			continue
-		if last_is_land[k] != 0 and last_flow_accum[k] >= thresh:
-			last_river[k] = 1
 
 func get_width() -> int:
 	return config.width
@@ -693,7 +567,6 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 		"is_land": land,
 		"is_beach": beach,
 		"is_turquoise_water": turq,
-		"is_river": (i >= 0 and i < last_river.size() and last_river[i] != 0),
 		"is_lava": is_lava,
 		"biome": biome_id,
 		"biome_name": biome_name,
@@ -862,9 +735,11 @@ func _apply_hot_temperature_override(w: int, h: int) -> void:
 					var sand_prob: float = clamp(0.25 + 0.6 * hot, 0.0, 0.98)
 					last_biomes[i] = BiomeClassifier.Biome.DESERT_SAND if noise_val < sand_prob else BiomeClassifier.Biome.DESERT_ROCK
 				else:
-					# Hot but not very dry: mountains/hills -> badlands; others -> steppe (no grassland at 55°C)
-					if b == BiomeClassifier.Biome.MOUNTAINS or b == BiomeClassifier.Biome.ALPINE or b == BiomeClassifier.Biome.HILLS or b == BiomeClassifier.Biome.FOOTHILLS:
-						last_biomes[i] = BiomeClassifier.Biome.DESERT_ROCK
+					# Hot but not very dry: keep relief unless quite dry
+					if (b == BiomeClassifier.Biome.MOUNTAINS or b == BiomeClassifier.Biome.ALPINE or b == BiomeClassifier.Biome.HILLS or b == BiomeClassifier.Biome.FOOTHILLS):
+						if m < 0.35:
+							last_biomes[i] = BiomeClassifier.Biome.DESERT_ROCK
+						# else keep relief biome
 					else:
 						last_biomes[i] = BiomeClassifier.Biome.STEPPE
 
@@ -883,128 +758,3 @@ func _apply_cold_temperature_override(w: int, h: int) -> void:
 					last_biomes[i] = BiomeClassifier.Biome.DESERT_ICE
 				else:
 					last_biomes[i] = BiomeClassifier.Biome.DESERT_ROCK
-
-func _simulate_rivers(w: int, h: int) -> void:
-	var size: int = w * h
-	last_flow_dir.resize(size)
-	last_flow_accum.resize(size)
-	last_river.resize(size)
-	for i in range(size):
-		last_flow_dir[i] = -1
-		last_flow_accum[i] = 0.0
-		last_river[i] = 0
-
-	# Build simple steepest-descent flow directions (8 neighbors)
-	for y in range(h):
-		for x in range(w):
-			var i0: int = x + y * w
-			if last_is_land[i0] == 0:
-				continue
-			var cur_h: float = last_height[i0]
-			var best_h: float = cur_h
-			var best_i: int = -1
-			for dy in range(-1, 2):
-				for dx in range(-1, 2):
-					if dx == 0 and dy == 0:
-						continue
-					var nx: int = x + dx
-					var ny: int = y + dy
-					if nx < 0 or ny < 0 or nx >= w or ny >= h:
-						continue
-					var j: int = nx + ny * w
-					var nh: float = last_height[j]
-					# Prefer any ocean neighbor immediately
-					if last_is_land[j] == 0:
-						best_i = j
-						best_h = nh
-						break
-					if nh < best_h:
-						best_h = nh
-						best_i = j
-				if best_i != -1:
-					last_flow_dir[i0] = best_i
-
-	# Uniform rainfall accumulation by path-walk to sea/sink (skip polar latitudes)
-	for i2 in range(size):
-		if last_is_land[i2] == 0:
-			continue
-		var y2: int = int(float(i2) / float(w))
-		var lat: float = abs(float(y2) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
-		if lat >= config.river_polar_cutoff:
-			continue
-		var steps: int = 0
-		var cur: int = i2
-		while steps < size:
-			var dn: int = last_flow_dir[cur]
-			if dn == -1:
-				# local sink
-				break
-			last_flow_accum[dn] += 1.0
-			cur = dn
-			steps += 1
-			if last_is_land[cur] == 0:
-				break
-
-	# Optional stochastic droplets to strengthen principal paths and erode slightly
-	var rng := RandomNumberGenerator.new()
-	rng.seed = int(config.rng_seed) ^ 0xD1CEBEEF
-	var droplet_count: int = int(float(w * h) * config.river_droplets_factor)
-	var erosion_strength: float = config.river_erosion_strength
-	for d in range(droplet_count):
-		var tries: int = 0
-		var start: int = -1
-		while tries < 10 and start == -1:
-			var rx: int = rng.randi() % w
-			var ry: int = rng.randi() % h
-			# skip polar
-			var lat2: float = abs(float(ry) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
-			if lat2 >= config.river_polar_cutoff:
-				tries += 1
-				continue
-			var ri: int = rx + ry * w
-			if last_is_land[ri] != 0 and last_height[ri] > config.sea_level + 0.02:
-				start = ri
-			else:
-				tries += 1
-		if start == -1:
-			continue
-		var cur2: int = start
-		var step2: int = 0
-		while step2 < (w + h):
-			var dn2: int = last_flow_dir[cur2]
-			if dn2 == -1:
-				break
-			last_flow_accum[dn2] += 1.0
-			# light erosion on the channel cell to carve a bit
-			if last_is_land[dn2] != 0:
-				last_height[dn2] -= erosion_strength
-			cur2 = dn2
-			step2 += 1
-			if last_is_land[cur2] == 0:
-				break
-
-	# Decide river mask by adaptive percentile threshold for robust visibility
-	var samples: Array = []
-	for sk in range(size):
-		if last_is_land[sk] == 0:
-			continue
-		var sky: int = int(float(sk) / float(w))
-		var sklat: float = abs(float(sky) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
-		if sklat >= config.river_polar_cutoff:
-			continue
-		samples.append(last_flow_accum[sk])
-	var target_density: float = clamp(0.02 / max(0.1, config.river_threshold_factor), 0.002, 0.08)
-	var thresh: float = 1e9
-	if samples.size() > 0:
-		samples.sort()
-		var idx: int = int(max(0.0, float(samples.size() - 1) - float(samples.size()) * target_density))
-		thresh = float(samples[idx])
-	for k in range(size):
-		var ky: int = int(float(k) / float(w))
-		var klat: float = abs(float(ky) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
-		if klat >= config.river_polar_cutoff:
-			continue
-		if last_is_land[k] != 0 and last_flow_accum[k] >= thresh:
-			last_river[k] = 1
-
-	# Delta widening disabled (prevent shore flooding)

@@ -31,6 +31,16 @@ func color_for_land(_h_val: float, biome: int, is_beach: bool) -> Color:
 	match biome:
 		BiomeClassifier.Biome.ICE_SHEET:
 			return Color(0.95, 0.98, 1.0)
+		BiomeClassifier.Biome.GLACIER:
+			return Color(0.96, 0.99, 1.0)
+		BiomeClassifier.Biome.TUNDRA:
+			return Color(0.85, 0.90, 0.85)
+		BiomeClassifier.Biome.SAVANNA:
+			return Color(0.60, 0.70, 0.35)
+		BiomeClassifier.Biome.FROZEN_FOREST:
+			return Color(0.88, 0.94, 0.92)
+		BiomeClassifier.Biome.FROZEN_MARSH:
+			return Color(0.90, 0.95, 0.96)
 		BiomeClassifier.Biome.TROPICAL_FOREST:
 			return Color(0.12, 0.78, 0.28)
 		BiomeClassifier.Biome.DESERT_SAND:
@@ -69,6 +79,16 @@ func _glyph_for_biome(biome: int, is_beach: bool) -> String:
 		return "░"
 	match biome:
 		BiomeClassifier.Biome.ICE_SHEET:
+			return "~"
+		BiomeClassifier.Biome.GLACIER:
+			return "*"
+		BiomeClassifier.Biome.TUNDRA:
+			return ","
+		BiomeClassifier.Biome.SAVANNA:
+			return "'"
+		BiomeClassifier.Biome.FROZEN_FOREST:
+			return "^"
+		BiomeClassifier.Biome.FROZEN_MARSH:
 			return "~"
 		BiomeClassifier.Biome.TROPICAL_FOREST:
 			return "T"
@@ -135,6 +155,16 @@ func _chars_for_biome(biome: int, is_beach: bool) -> PackedStringArray:
 	match biome:
 		BiomeClassifier.Biome.DESERT_SAND:
 			return PackedStringArray([".", ":", "·", ","])
+		BiomeClassifier.Biome.GLACIER:
+			return PackedStringArray(["*", "°", "·"])
+		BiomeClassifier.Biome.TUNDRA:
+			return PackedStringArray([",", ".", "·"])
+		BiomeClassifier.Biome.SAVANNA:
+			return PackedStringArray(["'", ",", "."])
+		BiomeClassifier.Biome.FROZEN_FOREST:
+			return PackedStringArray(["^", "†", "‡"]) 
+		BiomeClassifier.Biome.FROZEN_MARSH:
+			return PackedStringArray(["~", ",", "."]) 
 		BiomeClassifier.Biome.DESERT_ROCK:
 			return PackedStringArray([":", ";", "."])
 		BiomeClassifier.Biome.DESERT_ICE:
@@ -180,7 +210,7 @@ func glyph_for(x: int, y: int, is_land: bool, biome_id: int, is_beach: bool, rng
 		var idx_w: int = _hash2(x, y, rng_seed) % max(1, set_w.size())
 		return set_w[idx_w]
 
-func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, is_turq: PackedByteArray, turq_strength: PackedFloat32Array, is_beach: PackedByteArray, water_distance: PackedFloat32Array, biomes: PackedInt32Array, sea_level: float, rng_seed: int, river_mask: PackedByteArray = PackedByteArray(), temperature: PackedFloat32Array = PackedFloat32Array(), temp_min_c: float = 0.0, temp_max_c: float = 1.0) -> String:
+func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, is_turq: PackedByteArray, turq_strength: PackedFloat32Array, is_beach: PackedByteArray, water_distance: PackedFloat32Array, biomes: PackedInt32Array, sea_level: float, rng_seed: int, temperature: PackedFloat32Array = PackedFloat32Array(), temp_min_c: float = 0.0, temp_max_c: float = 1.0) -> String:
 	var sb: PackedStringArray = []
 	var depth_scale: float = max(8.0, float(min(w, h)) / 3.0)
 	# Smooth transition factor across extreme ocean fractions to avoid visual jump
@@ -206,10 +236,6 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 				var set_w: PackedStringArray = _chars_for_water()
 				var idx_w: int = _hash2(x, y, rng_seed) % max(1, set_w.size())
 				glyph = set_w[idx_w]
-			# Rivers override land glyph only (keep underlying terrain color)
-			var is_river: bool = (i < river_mask.size()) and (river_mask[i] != 0) and land
-			if is_river:
-				glyph = "≈"
 			# Ocean ice sheet override: draw ocean cells tagged as ICE_SHEET in white
 			var ocean_ice: bool = (not land) and (i < biomes.size()) and (biomes[i] == BiomeClassifier.Biome.ICE_SHEET)
 			var shelf_mask: float = 0.0

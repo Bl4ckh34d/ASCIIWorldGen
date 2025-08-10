@@ -91,7 +91,11 @@ func generate(params: Dictionary) -> Dictionary:
 				var r: float = sqrt(dx * dx + dy * dy) / max_r
 				var falloff: float = clamp(1.0 - r * 0.85, 0.0, 1.0)
 				hval = hval * 0.85 + falloff * 0.15
-			# For wrap_x, skip radial falloff to preserve seamless seam
+			# Signed-power shaping to increase extremes (Option B) + slight linear contrast
+			var gamma: float = 0.65
+			var a: float = abs(hval)
+			hval = (1.0 if hval >= 0.0 else -1.0) * pow(a, gamma)
+			hval *= 1.10
 			hval = clamp(hval, -1.0, 1.0)
 
 			var i: int = x + y * w
