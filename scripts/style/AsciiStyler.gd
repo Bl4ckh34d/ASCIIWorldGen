@@ -5,22 +5,23 @@ extends RefCounted
 
 const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 
-func color_for_water(h_val: float, sea_level: float, is_turq: bool, turq_strength: float, dist_to_land: float, depth_scale: float) -> Color:
-	var depth: float = sea_level - h_val
-	var t: float = clamp(depth / 0.8, 0.0, 1.0)
+func color_for_water(h_val: float, sea_level: float, is_turq: bool, turq_strength: float, _dist_to_land: float, _depth_scale: float, shelf_pattern: float) -> Color:
+	var depth: float = max(0.0, sea_level - h_val)
+	# Use actual depth to drive shade: shallow → turquoise, deep → dark blue
+	var depth_norm: float = clamp(depth / 0.5, 0.0, 1.0)
+	# Gentle shelf variation only in shallow water
+	if shelf_pattern > 0.0:
+		var shelf_influence := (1.0 - depth_norm) * 0.08
+		depth_norm = clamp(depth_norm - shelf_pattern * shelf_influence, 0.0, 1.0)
+	# Non-linear response so deep water darkens quickly (steeper gradient)
+	var shade: float = pow(1.0 - depth_norm, 2.0)
 	var deep := Color(0.02, 0.10, 0.25)
 	var shallow := Color(0.05, 0.65, 0.80)
-	var c := deep.lerp(shallow, t)
-	# Distance-based deepening: farther from land → darker, limited by depth_scale
-	var d_norm: float = 0.0
-	if depth_scale > 0.0:
-		d_norm = clamp(dist_to_land / depth_scale, 0.0, 1.0)
-	if is_turq:
-		d_norm *= 0.2
-	c = c.lerp(deep, d_norm)
-	# Smooth turquoise overlay using strength factor
+	var c := deep.lerp(shallow, shade)
+	# Turquoise overlay fades with depth and local coastal strength
 	if is_turq or turq_strength > 0.0:
-		c = c.lerp(Color(0.10, 0.85, 0.95), clamp(turq_strength, 0.0, 0.85))
+		var overlay: float = float(clamp((1.0 - depth_norm) * turq_strength, 0.0, 0.85))
+		c = c.lerp(Color(0.10, 0.85, 0.95), overlay)
 	return c
 
 func color_for_land(_h_val: float, biome: int, is_beach: bool) -> Color:
@@ -110,6 +111,21 @@ func _hash2(x: int, y: int, s: int) -> int:
 	var v: int = int(x) * 73856093 ^ int(y) * 19349663 ^ int(s) * 83492791
 	return abs(v)
 
+func _value_noise2d(x: float, y: float, rng_seed: int, scale: float) -> float:
+	var sx: float = x / max(0.0001, scale)
+	var sy: float = y / max(0.0001, scale)
+	var xi: int = int(floor(sx))
+	var yi: int = int(floor(sy))
+	var tx: float = sx - float(xi)
+	var ty: float = sy - float(yi)
+	var h00: float = float(_hash2(xi + 0, yi + 0, rng_seed) % 1000) / 1000.0
+	var h10: float = float(_hash2(xi + 1, yi + 0, rng_seed) % 1000) / 1000.0
+	var h01: float = float(_hash2(xi + 0, yi + 1, rng_seed) % 1000) / 1000.0
+	var h11: float = float(_hash2(xi + 1, yi + 1, rng_seed) % 1000) / 1000.0
+	var nx0: float = lerp(h00, h10, tx)
+	var nx1: float = lerp(h01, h11, tx)
+	return lerp(nx0, nx1, ty)
+
 func _chars_for_water() -> PackedStringArray:
 	return PackedStringArray(["~", "~", "~", "-", "_", "~"])
 
@@ -167,6 +183,13 @@ func glyph_for(x: int, y: int, is_land: bool, biome_id: int, is_beach: bool, rng
 func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, is_turq: PackedByteArray, turq_strength: PackedFloat32Array, is_beach: PackedByteArray, water_distance: PackedFloat32Array, biomes: PackedInt32Array, sea_level: float, rng_seed: int, river_mask: PackedByteArray = PackedByteArray(), temperature: PackedFloat32Array = PackedFloat32Array(), temp_min_c: float = 0.0, temp_max_c: float = 1.0) -> String:
 	var sb: PackedStringArray = []
 	var depth_scale: float = max(8.0, float(min(w, h)) / 3.0)
+	# Smooth transition factor across extreme ocean fractions to avoid visual jump
+	var ocean_cells: int = 0
+	for i0 in range(w * h):
+		if i0 < is_land.size() and is_land[i0] == 0:
+			ocean_cells += 1
+	var ocean_frac: float = float(ocean_cells) / float(max(1, w * h))
+	var global_shelf_mix: float = clamp((ocean_frac - 0.0) / 1.0, 0.0, 1.0)
 	for y in range(h):
 		for x in range(w):
 			var i: int = x + y * w
@@ -184,12 +207,22 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 				var idx_w: int = _hash2(x, y, rng_seed) % max(1, set_w.size())
 				glyph = set_w[idx_w]
 			# Rivers override land glyph only (keep underlying terrain color)
-			var is_river: bool = (i < river_mask.size()) and (river_mask[i] != 0) and land and not beach_flag
+			var is_river: bool = (i < river_mask.size()) and (river_mask[i] != 0) and land
 			if is_river:
 				glyph = "≈"
 			# Ocean ice sheet override: draw ocean cells tagged as ICE_SHEET in white
 			var ocean_ice: bool = (not land) and (i < biomes.size()) and (biomes[i] == BiomeClassifier.Biome.ICE_SHEET)
-			var color := color_for_land(hv, biome_id, beach_flag) if land else color_for_water(hv, sea_level, (i < is_turq.size()) and is_turq[i] != 0, (turq_strength[i] if i < turq_strength.size() else 0.0), (water_distance[i] if i < water_distance.size() else 0.0), depth_scale)
+			var shelf_mask: float = 0.0
+			if not land:
+				var dist: float = (water_distance[i] if i < water_distance.size() else 0.0)
+				# Blend shelf mask by global ocean coverage to avoid a hard cut near full-ocean
+				var local_mask: float = 1.0 - clamp(dist / 14.0, 0.0, 1.0)
+				shelf_mask = clamp(lerp(local_mask, 0.0, pow(global_shelf_mix, 1.5)), 0.0, 1.0)
+			var shelf_noise: float = 0.0
+			if shelf_mask > 0.0:
+				# Coarse value noise for shelf variation
+				shelf_noise = _value_noise2d(float(x), float(y), rng_seed ^ 0x5E1F, 20.0) * shelf_mask
+			var color := color_for_land(hv, biome_id, beach_flag) if land else color_for_water(hv, sea_level, (i < is_turq.size()) and is_turq[i] != 0, (turq_strength[i] if i < turq_strength.size() else 0.0), (water_distance[i] if i < water_distance.size() else 0.0), depth_scale, shelf_noise)
 			if ocean_ice:
 				color = Color(1, 1, 1)
 			# Temperature-based whitening for very cold land (<= -10°C)

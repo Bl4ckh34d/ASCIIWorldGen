@@ -11,6 +11,7 @@ func generate(params: Dictionary, height: PackedFloat32Array, is_land: PackedByt
 	var moist_base_offset: float = float(params.get("moist_base_offset", 0.0))
 	var moist_scale: float = float(params.get("moist_scale", 1.0))
 	var continentality_scale: float = float(params.get("continentality_scale", 1.0))
+	var _sea_level: float = float(params.get("sea_level", 0.0))
 
 	var temp_noise := FastNoiseLite.new()
 	temp_noise.seed = rng_seed ^ 0x5151
@@ -40,6 +41,13 @@ func generate(params: Dictionary, height: PackedFloat32Array, is_land: PackedByt
 	moisture.resize(w * h)
 	precip.resize(w * h)
 	distance_to_coast.resize(w * h)
+
+	# Global ocean fraction to modulate world humidity (high sea -> wetter; low sea -> drier)
+	var ocean_cells: int = 0
+	for i0 in range(w * h):
+		if is_land[i0] == 0:
+			ocean_cells += 1
+	var ocean_frac: float = float(ocean_cells) / max(1.0, float(w * h))
 
 	# Precompute distance to coast (0 at ocean or immediate coast; grows inland)
 	var inf := 1e9
@@ -118,6 +126,19 @@ func generate(params: Dictionary, height: PackedFloat32Array, is_land: PackedByt
 			# Polar dryness bias
 			var polar_dry: float = 0.20 * lat
 			var m: float = m_base + m_noise + m_adv - polar_dry
+			# Global humidity modulation by ocean coverage (0..1) and sea level slider (-1..1)
+			# 1) Ocean fraction effect: high ocean -> wetter, low ocean -> drier
+			var humid_amp: float = lerp(0.40, 1.60, ocean_frac)
+			var humid_bias: float = lerp(-0.30, 0.30, ocean_frac)
+			m = (m - 0.5) * humid_amp + 0.5 + humid_bias
+			# 2) Additional sea level effect even when ocean coverage saturates
+			var s_norm: float = clamp(_sea_level, -1.0, 1.0)
+			var dryness_strength: float = max(0.0, -s_norm)
+			var wet_strength: float = max(0.0, s_norm)
+			var amp2: float = 1.0 + 0.5 * wet_strength - 0.5 * dryness_strength
+			var bias2: float = 0.25 * wet_strength - 0.25 * dryness_strength
+			m = (m - 0.5) * amp2 + 0.5 + bias2
+			# Final per-world offsets and scaling
 			m = clamp((m + moist_base_offset - 0.5) * moist_scale + 0.5, 0.0, 1.0)
 			# Precip proxy
 			var slope_y: float = 0.0

@@ -116,7 +116,8 @@ func _apply_seed_from_ui() -> void:
 		cfg2["gain"] = clamp(generator.config.gain * (0.85 + 0.3 * jitter.randf()), 0.1, 1.0)
 		cfg2["warp"] = max(0.0, generator.config.warp * (0.75 + 0.5 * jitter.randf()))
 		# Narrow ocean randomization to 0.30 .. 0.70
-		cfg2["sea_level"] = 0.3 + 0.4 * jitter.randf()
+		# Sea level range is -1..1; randomize within [-0.35, 0.35]
+		cfg2["sea_level"] = -0.35 + 0.70 * jitter.randf()
 		# Climate baseline jitter
 		cfg2["temp_base_offset"] = (jitter.randf() - 0.5) * 0.10
 		cfg2["temp_scale"] = 0.95 + 0.1 * jitter.randf()

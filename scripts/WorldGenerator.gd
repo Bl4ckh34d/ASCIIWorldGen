@@ -66,6 +66,7 @@ var last_temperature: PackedFloat32Array = PackedFloat32Array()
 var last_moisture: PackedFloat32Array = PackedFloat32Array()
 var last_distance_to_coast: PackedFloat32Array = PackedFloat32Array()
 var last_lava: PackedByteArray = PackedByteArray()
+var last_ocean_fraction: float = 0.0
 
 func _init() -> void:
 	randomize()
@@ -190,6 +191,7 @@ func generate() -> PackedByteArray:
 		"gain": config.gain,
 		"warp": config.warp,
 		"sea_level": config.sea_level,
+		"wrap_x": true,
 		"temp_base_offset": config.temp_base_offset,
 		"temp_scale": config.temp_scale,
 		"moist_base_offset": config.moist_base_offset,
@@ -203,6 +205,12 @@ func generate() -> PackedByteArray:
 	var terrain := TerrainNoise.new().generate(params)
 	last_height = terrain["height"]
 	last_is_land = terrain["is_land"]
+	# Track ocean coverage fraction for rendering transitions
+	var ocean_count: int = 0
+	for i_count in range(w * h):
+		if last_is_land[i_count] == 0:
+			ocean_count += 1
+	last_ocean_fraction = float(ocean_count) / float(max(1, w * h))
 
 	# Step 1b: rivers and light erosion before shoreline
 	if config.river_enabled:
@@ -238,9 +246,9 @@ func generate() -> PackedByteArray:
 						for dx2 in range(-1, 2):
 							if dx2 == 0 and dy2 == 0:
 								continue
-							var nx: int = x + dx2
+							var nx: int = (x + dx2 + w) % w
 							var ny: int = y + dy2
-							if nx < 0 or ny < 0 or nx >= w or ny >= h:
+							if ny < 0 or ny >= h:
 								continue
 							var ni: int = nx + ny * w
 							if last_is_land[ni] != 0:
@@ -254,9 +262,9 @@ func generate() -> PackedByteArray:
 								for dx3 in range(-1, 2):
 									if dx3 == 0 and dy3 == 0:
 										continue
-									var nx2: int = x + dx3
+									var nx2: int = (x + dx3 + w) % w
 									var ny2: int = y + dy3
-									if nx2 < 0 or ny2 < 0 or nx2 >= w or ny2 >= h:
+									if ny2 < 0 or ny2 >= h:
 										continue
 									var ni2: int = nx2 + ny2 * w
 									if last_is_land[ni2] != 0:
@@ -279,9 +287,9 @@ func generate() -> PackedByteArray:
 				for dx4 in range(-1, 2):
 					if dx4 == 0 and dy4 == 0:
 						continue
-					var nx3: int = x0 + dx4
+					var nx3: int = (x0 + dx4 + w) % w
 					var ny3: int = y0 + dy4
-					if nx3 < 0 or ny3 < 0 or nx3 >= w or ny3 >= h:
+					if ny3 < 0 or ny3 >= h:
 						continue
 					var ni3: int = nx3 + ny3 * w
 					if visited[ni3] != 0:
@@ -386,6 +394,12 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_is_land.resize(size)
 	for i in range(size):
 		last_is_land[i] = 1 if last_height[i] > config.sea_level else 0
+	# Update ocean fraction
+	var ocean_ct: int = 0
+	for ii in range(size):
+		if last_is_land[ii] == 0:
+			ocean_ct += 1
+	last_ocean_fraction = float(ocean_ct) / float(max(1, size))
 	# 2) Recompute shoreline features (turquoise, beaches) and distance to land
 	if last_turquoise_water.size() != size:
 		last_turquoise_water.resize(size)
@@ -494,24 +508,141 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 			var strength: float = clamp(s_depth * s_dist * s_noise, 0.0, 1.0)
 			last_turquoise_strength[j] = strength
 			last_turquoise_water[j] = 1 if strength > 0.5 else 0
-	# 3) Update biomes minimally based on new land/ocean state
-	if last_biomes.size() != size:
-		last_biomes.resize(size)
-	for k in range(size):
-		if last_is_land[k] == 0:
-			# Ocean or ice sheet depending on temp
-			var t_norm: float = (last_temperature[k] if k < last_temperature.size() else 0.5)
-			var t_c: float = config.temp_min_c + t_norm * (config.temp_max_c - config.temp_min_c)
-			if t_c <= -10.0:
-				last_biomes[k] = BiomeClassifier.Biome.ICE_SHEET
-			else:
-				last_biomes[k] = BiomeClassifier.Biome.OCEAN
-		else:
-			# Land cells: if previously ocean-type, assign fallback quickly
-			var bprev: int = last_biomes[k]
-			if bprev == BiomeClassifier.Biome.OCEAN or bprev == BiomeClassifier.Biome.ICE_SHEET:
-				last_biomes[k] = _fallback_biome(k)
+	# 3) Recompute climate fields to reflect new coastline and sea coverage
+	var params := {
+		"width": w,
+		"height": h,
+		"seed": config.rng_seed,
+		"frequency": config.frequency,
+		"octaves": config.octaves,
+		"lacunarity": config.lacunarity,
+		"gain": config.gain,
+		"warp": config.warp,
+		"sea_level": config.sea_level,
+		"temp_base_offset": config.temp_base_offset,
+		"temp_scale": config.temp_scale,
+		"moist_base_offset": config.moist_base_offset,
+		"moist_scale": config.moist_scale,
+		"continentality_scale": config.continentality_scale,
+		"temp_min_c": config.temp_min_c,
+		"temp_max_c": config.temp_max_c,
+	}
+	var climate: Dictionary = ClimateNoise.new().generate(params, last_height, last_is_land)
+	last_temperature = climate["temperature"]
+	last_moisture = climate["moisture"]
+	last_distance_to_coast = climate.get("distance_to_coast", PackedFloat32Array())
+
+	# 4) Rivers (fast recompute without erosion) so they react to coastline
+	if config.river_enabled:
+		_simulate_rivers_fast(w, h)
+
+	# 5) Reclassify biomes using updated climate
+	var params2 := params.duplicate()
+	params2["freeze_temp_threshold"] = 0.16
+	params2["height_scale_m"] = config.height_scale_m
+	params2["lapse_c_per_km"] = 5.5
+	last_biomes = BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
+	_ensure_valid_biomes()
+	_apply_hot_temperature_override(w, h)
+	_apply_cold_temperature_override(w, h)
+
+	# 6) Update lava mask based on new temperatures and updated rivers
+	last_lava.resize(size)
+	for li in range(size):
+		last_lava[li] = 0
+	for ylv in range(h):
+		for xlv in range(w):
+			var ii: int = xlv + ylv * w
+			if last_river.size() == size and last_river[ii] != 0:
+				var t_norm: float = (last_temperature[ii] if ii < last_temperature.size() else 0.0)
+				var t_c: float = config.temp_min_c + t_norm * (config.temp_max_c - config.temp_min_c)
+				if t_c >= config.lava_temp_threshold_c:
+					last_lava[ii] = 1
 	return last_is_land
+
+func _simulate_rivers_fast(w: int, h: int) -> void:
+	var size: int = w * h
+	last_flow_dir.resize(size)
+	last_flow_accum.resize(size)
+	last_river.resize(size)
+	for i in range(size):
+		last_flow_dir[i] = -1
+		last_flow_accum[i] = 0.0
+		last_river[i] = 0
+
+	# Build simple steepest-descent flow directions (8 neighbors)
+	for y in range(h):
+		for x in range(w):
+			var i0: int = x + y * w
+			if last_is_land[i0] == 0:
+				continue
+			var cur_h: float = last_height[i0]
+			var best_h: float = cur_h
+			var best_i: int = -1
+			for dy in range(-1, 2):
+				for dx in range(-1, 2):
+					if dx == 0 and dy == 0:
+						continue
+					var nx: int = x + dx
+					var ny: int = y + dy
+					if nx < 0 or ny < 0 or nx >= w or ny >= h:
+						continue
+					var j: int = nx + ny * w
+					var nh: float = last_height[j]
+					# Prefer any ocean neighbor immediately
+					if last_is_land[j] == 0:
+						best_i = j
+						best_h = nh
+						break
+					if nh < best_h:
+						best_h = nh
+						best_i = j
+			if best_i != -1:
+				last_flow_dir[i0] = best_i
+
+	# Accumulate flow by path-walk to sea/sink (skip polar latitudes)
+	for i2 in range(size):
+		if last_is_land[i2] == 0:
+			continue
+		var y2: int = int(float(i2) / float(w))
+		var lat: float = abs(float(y2) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
+		if lat >= config.river_polar_cutoff:
+			continue
+		var steps: int = 0
+		var cur: int = i2
+		while steps < size:
+			var dn: int = last_flow_dir[cur]
+			if dn == -1:
+				break
+			last_flow_accum[dn] += 1.0
+			cur = dn
+			steps += 1
+			if last_is_land[cur] == 0:
+				break
+
+	# Decide river mask adaptively (no erosion/droplets)
+	var samples: Array = []
+	for sk in range(size):
+		if last_is_land[sk] == 0:
+			continue
+		var sky: int = int(float(sk) / float(w))
+		var sklat: float = abs(float(sky) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
+		if sklat >= config.river_polar_cutoff:
+			continue
+		samples.append(last_flow_accum[sk])
+	var target_density: float = clamp(0.02 / max(0.1, config.river_threshold_factor), 0.002, 0.08)
+	var thresh: float = 1e9
+	if samples.size() > 0:
+		samples.sort()
+		var idx: int = int(max(0.0, float(samples.size() - 1) - float(samples.size()) * target_density))
+		thresh = float(samples[idx])
+	for k in range(size):
+		var ky: int = int(float(k) / float(w))
+		var klat: float = abs(float(ky) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
+		if klat >= config.river_polar_cutoff:
+			continue
+		if last_is_land[k] != 0 and last_flow_accum[k] >= thresh:
+			last_river[k] = 1
 
 func get_width() -> int:
 	return config.width
@@ -852,8 +983,22 @@ func _simulate_rivers(w: int, h: int) -> void:
 			if last_is_land[cur2] == 0:
 				break
 
-	# Decide river mask by threshold relative to map size
-	var thresh: float = max(8.0, (float(w * h) / 1500.0) * config.river_threshold_factor)
+	# Decide river mask by adaptive percentile threshold for robust visibility
+	var samples: Array = []
+	for sk in range(size):
+		if last_is_land[sk] == 0:
+			continue
+		var sky: int = int(float(sk) / float(w))
+		var sklat: float = abs(float(sky) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
+		if sklat >= config.river_polar_cutoff:
+			continue
+		samples.append(last_flow_accum[sk])
+	var target_density: float = clamp(0.02 / max(0.1, config.river_threshold_factor), 0.002, 0.08)
+	var thresh: float = 1e9
+	if samples.size() > 0:
+		samples.sort()
+		var idx: int = int(max(0.0, float(samples.size() - 1) - float(samples.size()) * target_density))
+		thresh = float(samples[idx])
 	for k in range(size):
 		var ky: int = int(float(k) / float(w))
 		var klat: float = abs(float(ky) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
