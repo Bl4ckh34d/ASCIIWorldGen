@@ -1,7 +1,5 @@
 extends Node
 class_name WorldModel
-const WorldConfig = preload("res://scripts/WorldConfig.gd")
-const Utils = preload("res://scripts/Utils.gd")
 
 var w: int
 var h: int

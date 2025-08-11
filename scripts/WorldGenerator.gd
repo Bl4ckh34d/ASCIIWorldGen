@@ -4,6 +4,16 @@ extends RefCounted
 const TerrainNoise = preload("res://scripts/generation/TerrainNoise.gd")
 var ClimateNoise = load("res://scripts/generation/ClimateNoise.gd")
 const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
+const WorldState = preload("res://scripts/core/WorldState.gd")
+const FeatureNoiseCache = preload("res://scripts/systems/FeatureNoiseCache.gd")
+const DistanceTransform = preload("res://scripts/systems/DistanceTransform.gd")
+const ContinentalShelf = preload("res://scripts/systems/ContinentalShelf.gd")
+var ClimatePost = load("res://scripts/systems/ClimatePost.gd")
+const PoolingSystem = preload("res://scripts/systems/PoolingSystem.gd")
+const ClimateBase = preload("res://scripts/systems/ClimateBase.gd")
+const ClimateAdjust = preload("res://scripts/systems/ClimateAdjust.gd")
+var BiomePost = load("res://scripts/systems/BiomePost.gd")
+var FlowErosionSystem = load("res://scripts/systems/FlowErosionSystem.gd")
 
 class Config:
 	var rng_seed: int = 0
@@ -27,6 +37,8 @@ class Config:
 	var temp_min_c: float = -40.0
 	var temp_max_c: float = 70.0
 	var lava_temp_threshold_c: float = 55.0
+	# Rivers toggle
+	var rivers_enabled: bool = true
 	# Climate jitter and continentality
 	var temp_base_offset: float = 0.25
 	var temp_scale: float = 1.0
@@ -56,12 +68,33 @@ var last_moisture: PackedFloat32Array = PackedFloat32Array()
 var last_distance_to_coast: PackedFloat32Array = PackedFloat32Array()
 var last_lava: PackedByteArray = PackedByteArray()
 var last_ocean_fraction: float = 0.0
+var last_shelf_value_noise_field: PackedFloat32Array = PackedFloat32Array()
+var last_lake: PackedByteArray = PackedByteArray()
+var last_lake_id: PackedInt32Array = PackedInt32Array()
+var last_flow_dir: PackedInt32Array = PackedInt32Array()
+var last_flow_accum: PackedFloat32Array = PackedFloat32Array()
+var last_river: PackedByteArray = PackedByteArray()
+var last_pooled_lake: PackedByteArray = PackedByteArray()
+
+# Phase 0 scaffolding: central state and shared noise cache (currently unused)
+var _world_state: Object = null
+var _feature_noise_cache: Object = null
+var _climate_base: Dictionary = {}
 
 func _init() -> void:
 	randomize()
 	config.rng_seed = randi()
 	_setup_noises()
 	_setup_temperature_extremes()
+	# Initialize refactor scaffolding (kept unused in behavior for now)
+	_world_state = WorldState.new()
+	_world_state.configure(config.width, config.height, config.rng_seed)
+	_world_state.height_scale_m = config.height_scale_m
+	_world_state.temp_min_c = config.temp_min_c
+	_world_state.temp_max_c = config.temp_max_c
+	_world_state.lava_temp_threshold_c = config.lava_temp_threshold_c
+	_feature_noise_cache = FeatureNoiseCache.new()
+	_climate_base = ClimateBase.new().build(config.rng_seed)
 
 func apply_config(dict: Dictionary) -> void:
 	if dict.has("seed"):
@@ -120,6 +153,16 @@ func apply_config(dict: Dictionary) -> void:
 	var override_extremes: bool = dict.has("temp_min_c") and dict.has("temp_max_c")
 	if not override_extremes:
 		_setup_temperature_extremes()
+	# Keep WorldState metadata in sync; create on first use
+	if _world_state == null:
+		_world_state = WorldState.new()
+	_world_state.configure(config.width, config.height, config.rng_seed)
+	_world_state.height_scale_m = config.height_scale_m
+	_world_state.temp_min_c = config.temp_min_c
+	_world_state.temp_max_c = config.temp_max_c
+	_world_state.lava_temp_threshold_c = config.lava_temp_threshold_c
+	# Rebuild climate base when seed changes
+	_climate_base = ClimateBase.new().build(config.rng_seed)
 
 func _setup_noises() -> void:
 	_noise.seed = config.rng_seed
@@ -196,137 +239,75 @@ func generate() -> PackedByteArray:
 			var ii: int = ix + iy * w
 			last_is_land[ii] = 1 if last_height[ii] > config.sea_level else 0
 
-	# Step 2: shoreline features (turquoise water & beaches)
-	var shallow_threshold: float = config.shallow_threshold
+	# PoolingSystem: tag inland lakes (optional; not yet used in rendering)
+	var pool := PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
+	last_lake = pool["lake"]
+	last_lake_id = pool["lake_id"]
+
+	# Build shared feature noise cache (shore/shelf/desert/ice fields)
+	if _feature_noise_cache != null:
+		var cache_params := {
+			"width": w,
+			"height": h,
+			"seed": config.rng_seed,
+			"frequency": config.frequency,
+		}
+		_feature_noise_cache.build(cache_params)
+		last_shelf_value_noise_field = _feature_noise_cache.shelf_value_noise_field
+
+	# Step 2: shoreline features via ContinentalShelf system (keeps behavior)
 	var size: int = w * h
 	last_turquoise_water.resize(size)
 	last_beach.resize(size)
 	last_water_distance.resize(size)
 	last_turquoise_strength.resize(size)
-	for i in range(size):
-		last_turquoise_water[i] = 0
-		last_beach[i] = 0
-		last_water_distance[i] = 0.0
-		last_turquoise_strength[i] = 0.0
-	for y in range(h):
-		for x in range(w):
-			var i2: int = x + y * w
-			if last_is_land[i2] == 0:
-				var depth: float = config.sea_level - last_height[i2]
-				if depth >= 0.0 and depth <= shallow_threshold:
-					var near_land: bool = false
-					for dy2 in range(-1, 2):
-						if near_land:
-							break
-						for dx2 in range(-1, 2):
-							if dx2 == 0 and dy2 == 0:
-								continue
-							var nx: int = (x + dx2 + w) % w
-							var ny: int = y + dy2
-							if ny < 0 or ny >= h:
-								continue
-							var ni: int = nx + ny * w
-							if last_is_land[ni] != 0:
-								near_land = true
-								break
-					if near_land:
-						var nval: float = _shore_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
-						if nval > 0.55:
-							last_turquoise_water[i2] = 1
-							for dy3 in range(-1, 2):
-								for dx3 in range(-1, 2):
-									if dx3 == 0 and dy3 == 0:
-										continue
-									var nx2: int = (x + dx3 + w) % w
-									var ny2: int = y + dy3
-									if ny2 < 0 or ny2 >= h:
-										continue
-									var ni2: int = nx2 + ny2 * w
-									if last_is_land[ni2] != 0:
-										last_beach[ni2] = 1
+	# Use cached shore noise field if available; else fall back to per-pixel noise
+	var shore_noise_field := PackedFloat32Array()
+	if _feature_noise_cache != null and _feature_noise_cache.shore_noise_field.size() == size:
+		shore_noise_field = _feature_noise_cache.shore_noise_field
+	else:
+		shore_noise_field.resize(size)
+		for y in range(h):
+			for x in range(w):
+				var i2: int = x + y * w
+				shore_noise_field[i2] = _shore_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
+	var shelf_out := ContinentalShelf.new().compute(w, h, last_height, last_is_land, config.sea_level, shore_noise_field, config.shallow_threshold, config.shore_band, true)
+	last_turquoise_water = shelf_out["turquoise_water"]
+	last_beach = shelf_out["beach"]
+	last_water_distance = shelf_out["water_distance"]
+	last_turquoise_strength = shelf_out["turquoise_strength"]
 
-	# Step 2b: distance to nearest land
-	var frontier: Array = []
-	var visited := PackedByteArray()
-	visited.resize(size)
-	for i3 in range(size):
-		visited[i3] = 0
-		if last_is_land[i3] != 0:
-			frontier.append(i3)
-	while frontier.size() > 0:
-		var next_frontier: Array = []
-		for idx in frontier:
-			var x0: int = int(idx) % w
-			var y0: int = floori(float(idx) / float(w))
-			for dy4 in range(-1, 2):
-				for dx4 in range(-1, 2):
-					if dx4 == 0 and dy4 == 0:
-						continue
-					var nx3: int = (x0 + dx4 + w) % w
-					var ny3: int = y0 + dy4
-					if ny3 < 0 or ny3 >= h:
-						continue
-					var ni3: int = nx3 + ny3 * w
-					if visited[ni3] != 0:
-						continue
-					visited[ni3] = 1
-					var step_cost: float = 1.0
-					if abs(dx4) + abs(dy4) != 1:
-						step_cost = 1.4142
-					var d: float = last_water_distance[idx] + step_cost
-					if last_is_land[ni3] == 0:
-						if last_water_distance[ni3] == 0.0:
-							last_water_distance[ni3] = d
-						else:
-							last_water_distance[ni3] = min(last_water_distance[ni3], d)
-						next_frontier.append(ni3)
-		frontier = next_frontier
-
-	# Step 2c: continuous turquoise strength
-	var shallow_thresh2: float = config.shallow_threshold
-	var shore_band: float = config.shore_band
-	for y2 in range(h):
-		for x2 in range(w):
-			var j: int = x2 + y2 * w
-			if last_is_land[j] != 0:
-				last_turquoise_strength[j] = 0.0
-				continue
-			var depth2: float = config.sea_level - last_height[j]
-			if depth2 < 0.0:
-				depth2 = 0.0
-			var s_depth: float = clamp(1.0 - depth2 / shallow_thresh2, 0.0, 1.0)
-			var s_dist: float = 1.0 - clamp(last_water_distance[j] / shore_band, 0.0, 1.0)
-			var nval: float = _shore_noise.get_noise_2d(float(x2), float(y2)) * 0.5 + 0.5
-			var t: float = clamp((nval - 0.45) / 0.15, 0.0, 1.0)
-			var s_noise: float = t * t * (3.0 - 2.0 * t)
-			var strength: float = clamp(s_depth * s_dist * s_noise, 0.0, 1.0)
-			last_turquoise_strength[j] = strength
-			last_turquoise_water[j] = 1 if strength > 0.5 else 0
-
-	# Step 3: climate
-	var climate: Dictionary = ClimateNoise.new().generate(params, last_height, last_is_land)
+	# Step 3: climate via ClimateAdjust using seed-stable ClimateBase and shared coast distance
+	params["distance_to_coast"] = last_water_distance
+	var climate: Dictionary = ClimateAdjust.new().evaluate(w, h, last_height, last_is_land, _climate_base, params, last_water_distance)
 	last_temperature = climate["temperature"]
 	last_moisture = climate["moisture"]
-	last_distance_to_coast = climate.get("distance_to_coast", PackedFloat32Array())
+	last_distance_to_coast = last_water_distance
 
-	# Mountain radiance: cool and moisten around mountains/alpine to disrupt bands
-	_apply_mountain_radiance(w, h)
+	# Mountain radiance: run through ClimatePost system for parity
+	var post: Dictionary = ClimatePost.new().apply_mountain_radiance(w, h, last_biomes, last_temperature, last_moisture, config.mountain_cool_amp, config.mountain_wet_amp, max(0, config.mountain_radiance_passes))
+	last_temperature = post["temperature"]
+	last_moisture = post["moisture"]
 
 	# Step 4: biomes (pass freeze threshold)
 	var params2 := params.duplicate()
 	params2["freeze_temp_threshold"] = 0.16
 	params2["height_scale_m"] = config.height_scale_m
 	params2["lapse_c_per_km"] = 5.5
+	# Provide cached noise fields if available
+	if _feature_noise_cache != null:
+		params2["desert_noise_field"] = _feature_noise_cache.desert_noise_field
+		params2["ice_wiggle_field"] = _feature_noise_cache.ice_wiggle_field
 	last_biomes = BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
+	# BiomePost: apply hot/cold overrides + lava in a single place
+	var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c)
+	last_biomes = post2["biomes"]
+	last_lava = post2["lava"]
 
 	# Step 4c: ensure every land cell has a valid biome id
 	_ensure_valid_biomes()
 
-	# Step 4c1: hot override — above ~30°C push to deserts/badlands
-	_apply_hot_temperature_override(w, h)
-
-	# Step 4c2: cold override — below ~2°C snow/ice dominates depending on humidity
-	_apply_cold_temperature_override(w, h)
+	# Hot/Cold overrides now live in BiomePost; keep generator overrides disabled
 
 	# Step 4b: ensure ocean ice sheets are present from classifier immediately
 	for yo in range(h):
@@ -338,6 +319,37 @@ func generate() -> PackedByteArray:
 					continue
 				# Otherwise keep as Ocean (already set by classifier)
 				pass
+
+	# Step 5: rivers (post-climate so we can freeze-gate; cooperate with PoolingSystem lakes)
+	if config.rivers_enabled:
+		var max_lakes_guess: int = max(4, floori(float(w * h) / 2048.0))
+		var hydro2: Dictionary = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "max_lakes": max_lakes_guess})
+		last_flow_dir = hydro2["flow_dir"]
+		last_flow_accum = hydro2["flow_accum"]
+		last_river = hydro2["river"]
+		if hydro2.has("lake"):
+			last_pooled_lake = hydro2["lake"]
+		# Freeze gating: remove rivers where glacier or freezing temps
+		var size2: int = w * h
+		if last_river.size() != size2:
+			last_river.resize(size2)
+		for gi in range(size2):
+			if last_is_land[gi] == 0:
+				continue
+			var t_norm_g: float = (last_temperature[gi] if gi < last_temperature.size() else 0.5)
+			var t_c_g: float = config.temp_min_c + t_norm_g * (config.temp_max_c - config.temp_min_c)
+			var is_glacier: bool = (gi < last_biomes.size()) and (last_biomes[gi] == BiomeClassifier.Biome.GLACIER)
+			if is_glacier or t_c_g <= 0.0:
+				last_river[gi] = 0
+	else:
+		var sz: int = w * h
+		last_flow_dir.resize(sz)
+		last_flow_accum.resize(sz)
+		last_river.resize(sz)
+		for kk in range(sz):
+			last_flow_dir[kk] = -1
+			last_flow_accum[kk] = 0.0
+			last_river[kk] = 0
 
 	return last_is_land
 
@@ -354,6 +366,10 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	# 1) Recompute land mask
 	if last_is_land.size() != size:
 		last_is_land.resize(size)
+	var prev_is_land := PackedByteArray()
+	prev_is_land.resize(size)
+	for i in range(size):
+		prev_is_land[i] = last_is_land[i] if i < last_is_land.size() else 0
 	for i in range(size):
 		last_is_land[i] = 1 if last_height[i] > config.sea_level else 0
 	# Update ocean fraction
@@ -371,105 +387,18 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_water_distance.resize(size)
 	if last_turquoise_strength.size() != size:
 		last_turquoise_strength.resize(size)
-	for i2 in range(size):
-		last_turquoise_water[i2] = 0
-		last_beach[i2] = 0
-		last_water_distance[i2] = 0.0
-		last_turquoise_strength[i2] = 0.0
-	# 2a) mark turquoise and beaches near coast within shallow threshold
-	var shallow_threshold: float = config.shallow_threshold
-	for y in range(h):
-		for x in range(w):
-			var idx: int = x + y * w
-			if last_is_land[idx] == 0:
-				var depth: float = config.sea_level - last_height[idx]
-				if depth >= 0.0 and depth <= shallow_threshold:
-					var near_land: bool = false
-					for dy in range(-1, 2):
-						if near_land:
-							break
-						for dx in range(-1, 2):
-							if dx == 0 and dy == 0:
-								continue
-							var nx: int = x + dx
-							var ny: int = y + dy
-							if nx < 0 or ny < 0 or nx >= w or ny >= h:
-								continue
-							var ni: int = nx + ny * w
-							if last_is_land[ni] != 0:
-								near_land = true
-								break
-					if near_land:
-						var nval: float = _shore_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
-						if nval > 0.55:
-							last_turquoise_water[idx] = 1
-							for dy2 in range(-1, 2):
-								for dx2 in range(-1, 2):
-									if dx2 == 0 and dy2 == 0:
-										continue
-									var nx2: int = x + dx2
-									var ny2: int = y + dy2
-									if nx2 < 0 or ny2 < 0 or nx2 >= w or ny2 >= h:
-										continue
-									var ni2: int = nx2 + ny2 * w
-									if last_is_land[ni2] != 0:
-										last_beach[ni2] = 1
-	# 2b) recompute distance to nearest land (BFS wave)
-	var frontier: Array = []
-	var visited := PackedByteArray()
-	visited.resize(size)
-	for i3 in range(size):
-		visited[i3] = 0
-		if last_is_land[i3] != 0:
-			frontier.append(i3)
-	while frontier.size() > 0:
-		var next_frontier: Array = []
-		for idx2 in frontier:
-			var x0: int = int(idx2) % w
-			var y0: int = floori(float(idx2) / float(w))
-			for dy3 in range(-1, 2):
-				for dx3 in range(-1, 2):
-					if dx3 == 0 and dy3 == 0:
-						continue
-					var nx3: int = x0 + dx3
-					var ny3: int = y0 + dy3
-					if nx3 < 0 or ny3 < 0 or nx3 >= w or ny3 >= h:
-						continue
-					var ni3: int = nx3 + ny3 * w
-					if visited[ni3] != 0:
-						continue
-					visited[ni3] = 1
-					var step_cost: float = 1.0
-					if abs(dx3) + abs(dy3) != 1:
-						step_cost = 1.4142
-					var d: float = last_water_distance[idx2] + step_cost
-					if last_is_land[ni3] == 0:
-						if last_water_distance[ni3] == 0.0:
-							last_water_distance[ni3] = d
-						else:
-							last_water_distance[ni3] = min(last_water_distance[ni3], d)
-						next_frontier.append(ni3)
-		frontier = next_frontier
-	# 2c) continuous turquoise strength
-	var shallow_thresh2: float = config.shallow_threshold
-	var shore_band: float = config.shore_band
-	for y2 in range(h):
-		for x2 in range(w):
-			var j: int = x2 + y2 * w
-			if last_is_land[j] != 0:
-				last_turquoise_strength[j] = 0.0
-				continue
-			var depth2: float = config.sea_level - last_height[j]
-			if depth2 < 0.0:
-				depth2 = 0.0
-			var s_depth: float = clamp(1.0 - depth2 / shallow_thresh2, 0.0, 1.0)
-			var s_dist: float = 1.0 - clamp(last_water_distance[j] / shore_band, 0.0, 1.0)
-			var nval: float = _shore_noise.get_noise_2d(float(x2), float(y2)) * 0.5 + 0.5
-			var t: float = clamp((nval - 0.45) / 0.15, 0.0, 1.0)
-			var s_noise: float = t * t * (3.0 - 2.0 * t)
-			var strength: float = clamp(s_depth * s_dist * s_noise, 0.0, 1.0)
-			last_turquoise_strength[j] = strength
-			last_turquoise_water[j] = 1 if strength > 0.5 else 0
+	# 2) Recompute shoreline features and distance via ContinentalShelf (wrap_x=false for parity with quick path)
+	var shore_noise_field := PackedFloat32Array()
+	shore_noise_field.resize(size)
+	for yy in range(h):
+		for xx in range(w):
+			var ii: int = xx + yy * w
+			shore_noise_field[ii] = _shore_noise.get_noise_2d(float(xx), float(yy)) * 0.5 + 0.5
+	var shelf2 := ContinentalShelf.new().compute(w, h, last_height, last_is_land, config.sea_level, shore_noise_field, config.shallow_threshold, config.shore_band, false)
+	last_turquoise_water = shelf2["turquoise_water"]
+	last_beach = shelf2["beach"]
+	last_water_distance = shelf2["water_distance"]
+	last_turquoise_strength = shelf2["turquoise_strength"]
 	# 3) Recompute climate fields to reflect new coastline and sea coverage
 	var params := {
 		"width": w,
@@ -489,33 +418,73 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		"temp_min_c": config.temp_min_c,
 		"temp_max_c": config.temp_max_c,
 	}
-	var climate: Dictionary = ClimateNoise.new().generate(params, last_height, last_is_land)
+	params["distance_to_coast"] = last_water_distance
+	var climate: Dictionary = ClimateAdjust.new().evaluate(w, h, last_height, last_is_land, _climate_base, params, last_water_distance)
 	last_temperature = climate["temperature"]
 	last_moisture = climate["moisture"]
-	last_distance_to_coast = climate.get("distance_to_coast", PackedFloat32Array())
+	last_distance_to_coast = last_water_distance
 
-	# 5) Reclassify biomes using updated climate
+	# 5) Reclassify biomes using updated climate (band-limited near coastline)
 	var params2 := params.duplicate()
 	params2["freeze_temp_threshold"] = 0.16
 	params2["height_scale_m"] = config.height_scale_m
 	params2["lapse_c_per_km"] = 5.5
-	last_biomes = BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
+	var new_biomes := BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
+	# Build band mask (near coast or toggled land/water)
+	var band := PackedByteArray(); band.resize(size)
+	var band_count: int = 0
+	var band_radius: float = config.shore_band + config.shallow_threshold
+	for bi in range(size):
+		var toggled: bool = prev_is_land[bi] != last_is_land[bi]
+		var near_coast: bool = (last_water_distance[bi] if bi < last_water_distance.size() else 0.0) <= band_radius
+		var in_band: bool = toggled or near_coast
+		band[bi] = 1 if in_band else 0
+		if in_band:
+			band_count += 1
+	var frac: float = float(band_count) / float(max(1, size))
+	var merge_partial: bool = frac < 0.25
+	if last_biomes.size() != size:
+		last_biomes.resize(size)
+	if merge_partial:
+		for mi in range(size):
+			if band[mi] != 0:
+				last_biomes[mi] = new_biomes[mi]
+	else:
+		last_biomes = new_biomes
 	_ensure_valid_biomes()
-	_apply_hot_temperature_override(w, h)
-	_apply_cold_temperature_override(w, h)
+	# Centralized hot/cold/lava application
+	var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c)
+	last_biomes = post2["biomes"]
+	last_lava = post2["lava"]
 
-	# 6) Update lava mask based on new temperatures
-	last_lava.resize(size)
-	for li in range(size):
-		last_lava[li] = 0
-	for ylv in range(h):
-		for xlv in range(w):
-			var ii: int = xlv + ylv * w
-			# Rivers disabled; lava mask only by temperature
-			var t_norm: float = (last_temperature[ii] if ii < last_temperature.size() else 0.0)
-			var t_c: float = config.temp_min_c + t_norm * (config.temp_max_c - config.temp_min_c)
-			if t_c >= config.lava_temp_threshold_c:
-				last_lava[ii] = 1
+	# 6) Lakes and rivers recompute on sea-level change (order: lakes, then rivers)
+	var pool2 := PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
+	last_lake = pool2["lake"]
+	last_lake_id = pool2["lake_id"]
+	if config.rivers_enabled:
+		var max_lakes_guess2: int = max(4, floori(float(w * h) / 2048.0))
+		var hydro3: Dictionary = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "max_lakes": max_lakes_guess2})
+		last_flow_dir = hydro3["flow_dir"]
+		last_flow_accum = hydro3["flow_accum"]
+		last_river = hydro3["river"]
+		if hydro3.has("lake"):
+			last_pooled_lake = hydro3["lake"]
+		# Freeze gating
+		for gi2 in range(size):
+			if last_is_land[gi2] == 0:
+				continue
+			var t_norm2: float = (last_temperature[gi2] if gi2 < last_temperature.size() else 0.5)
+			var t_c2: float = config.temp_min_c + t_norm2 * (config.temp_max_c - config.temp_min_c)
+			var is_gl2: bool = (gi2 < last_biomes.size()) and (last_biomes[gi2] == BiomeClassifier.Biome.GLACIER)
+			if is_gl2 or t_c2 <= 0.0:
+				last_river[gi2] = 0
+	else:
+		if last_river.size() != size:
+			last_river.resize(size)
+			for rk in range(size):
+				last_river[rk] = 0
+
+	# Lava mask computed in BiomePost
 	return last_is_land
 
 func get_width() -> int:
@@ -543,6 +512,12 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 	var is_lava: bool = false
 	if i >= 0 and i < last_lava.size():
 		is_lava = last_lava[i] != 0
+	var is_river: bool = false
+	if i >= 0 and i < last_river.size():
+		is_river = last_river[i] != 0
+	var is_lake: bool = false
+	if i >= 0 and i < last_lake.size():
+		is_lake = last_lake[i] != 0
 	var biome_id: int = -1
 	var biome_name: String = "Ocean"
 	if i >= 0 and i < last_biomes.size():
@@ -568,6 +543,8 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 		"is_beach": beach,
 		"is_turquoise_water": turq,
 		"is_lava": is_lava,
+		"is_river": is_river,
+		"is_lake": is_lake,
 		"biome": biome_id,
 		"biome_name": biome_name,
 		"temp_c": temp_c,

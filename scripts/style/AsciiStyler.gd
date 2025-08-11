@@ -4,75 +4,14 @@ extends RefCounted
 ## Turns world arrays into a colored ASCII string
 
 const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
+const BiomePalette = preload("res://scripts/style/BiomePalette.gd")
+const WaterPalette = preload("res://scripts/style/WaterPalette.gd")
 
 func color_for_water(h_val: float, sea_level: float, is_turq: bool, turq_strength: float, _dist_to_land: float, _depth_scale: float, shelf_pattern: float) -> Color:
-	var depth: float = max(0.0, sea_level - h_val)
-	# Use actual depth to drive shade: shallow → turquoise, deep → dark blue
-	var depth_norm: float = clamp(depth / 0.5, 0.0, 1.0)
-	# Gentle shelf variation only in shallow water
-	if shelf_pattern > 0.0:
-		var shelf_influence := (1.0 - depth_norm) * 0.08
-		depth_norm = clamp(depth_norm - shelf_pattern * shelf_influence, 0.0, 1.0)
-	# Non-linear response so deep water darkens quickly (steeper gradient)
-	var shade: float = pow(1.0 - depth_norm, 2.0)
-	var deep := Color(0.02, 0.10, 0.25)
-	var shallow := Color(0.05, 0.65, 0.80)
-	var c := deep.lerp(shallow, shade)
-	# Turquoise overlay fades with depth and local coastal strength
-	if is_turq or turq_strength > 0.0:
-		var overlay: float = float(clamp((1.0 - depth_norm) * turq_strength, 0.0, 0.85))
-		c = c.lerp(Color(0.10, 0.85, 0.95), overlay)
-	return c
+	return WaterPalette.new().color_for_water(h_val, sea_level, is_turq, turq_strength, _dist_to_land, _depth_scale, shelf_pattern)
 
 func color_for_land(_h_val: float, biome: int, is_beach: bool) -> Color:
-	if is_beach:
-		# Bright Maldives-like sand, less skin-toned
-		return Color(1.0, 0.98, 0.90)
-	match biome:
-		BiomeClassifier.Biome.ICE_SHEET:
-			return Color(0.95, 0.98, 1.0)
-		BiomeClassifier.Biome.GLACIER:
-			return Color(0.96, 0.99, 1.0)
-		BiomeClassifier.Biome.TUNDRA:
-			return Color(0.85, 0.90, 0.85)
-		BiomeClassifier.Biome.SAVANNA:
-			return Color(0.60, 0.70, 0.35)
-		BiomeClassifier.Biome.FROZEN_FOREST:
-			return Color(0.88, 0.94, 0.92)
-		BiomeClassifier.Biome.FROZEN_MARSH:
-			return Color(0.90, 0.95, 0.96)
-		BiomeClassifier.Biome.TROPICAL_FOREST:
-			return Color(0.12, 0.78, 0.28)
-		BiomeClassifier.Biome.DESERT_SAND:
-			return Color(0.90, 0.85, 0.55)
-		BiomeClassifier.Biome.DESERT_ROCK:
-			return Color(0.70, 0.65, 0.50)
-		BiomeClassifier.Biome.DESERT_ICE:
-			return Color(0.90, 0.95, 1.0)
-		BiomeClassifier.Biome.STEPPE:
-			return Color(0.65, 0.75, 0.50)
-		BiomeClassifier.Biome.GRASSLAND, BiomeClassifier.Biome.MEADOW, BiomeClassifier.Biome.PRAIRIE:
-			return Color(0.20, 0.80, 0.20)
-		BiomeClassifier.Biome.SWAMP:
-			return Color(0.25, 0.45, 0.25)
-		BiomeClassifier.Biome.BOREAL_FOREST:
-			return Color(0.20, 0.55, 0.25)
-		BiomeClassifier.Biome.CONIFER_FOREST:
-			return Color(0.18, 0.65, 0.28)
-		BiomeClassifier.Biome.TEMPERATE_FOREST:
-			return Color(0.15, 0.70, 0.25)
-		BiomeClassifier.Biome.RAINFOREST:
-			return Color(0.10, 0.75, 0.30)
-		BiomeClassifier.Biome.HILLS:
-			return Color(0.35, 0.55, 0.25)
-		BiomeClassifier.Biome.FOOTHILLS:
-			return Color(0.45, 0.55, 0.30)
-		BiomeClassifier.Biome.MOUNTAINS:
-			return Color(0.50, 0.50, 0.50)
-		BiomeClassifier.Biome.ALPINE:
-			return Color(0.85, 0.85, 0.90)
-		_:
-			return Color(0.30, 0.70, 0.25)
+	return BiomePalette.new().color_for_biome(biome, is_beach)
 
 func _glyph_for_biome(biome: int, is_beach: bool) -> String:
 	if is_beach:
@@ -210,9 +149,9 @@ func glyph_for(x: int, y: int, is_land: bool, biome_id: int, is_beach: bool, rng
 		var idx_w: int = _hash2(x, y, rng_seed) % max(1, set_w.size())
 		return set_w[idx_w]
 
-func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, is_turq: PackedByteArray, turq_strength: PackedFloat32Array, is_beach: PackedByteArray, water_distance: PackedFloat32Array, biomes: PackedInt32Array, sea_level: float, rng_seed: int, temperature: PackedFloat32Array = PackedFloat32Array(), temp_min_c: float = 0.0, temp_max_c: float = 1.0) -> String:
+func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, is_turq: PackedByteArray, turq_strength: PackedFloat32Array, is_beach: PackedByteArray, water_distance: PackedFloat32Array, biomes: PackedInt32Array, _sea_level: float, rng_seed: int, temperature: PackedFloat32Array = PackedFloat32Array(), temp_min_c: float = 0.0, temp_max_c: float = 1.0, shelf_value_noise_field: PackedFloat32Array = PackedFloat32Array(), lake_mask: PackedByteArray = PackedByteArray(), river_mask: PackedByteArray = PackedByteArray(), pooled_lake: PackedByteArray = PackedByteArray(), lava_mask: PackedByteArray = PackedByteArray()) -> String:
 	var sb: PackedStringArray = []
-	var depth_scale: float = max(8.0, float(min(w, h)) / 3.0)
+	var _depth_scale: float = max(8.0, float(min(w, h)) / 3.0)
 	# Smooth transition factor across extreme ocean fractions to avoid visual jump
 	var ocean_cells: int = 0
 	for i0 in range(w * h):
@@ -224,11 +163,23 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 		for x in range(w):
 			var i: int = x + y * w
 			var land := (i < is_land.size()) and is_land[i] != 0
+			var river_here: bool = river_mask.size() == w * h and river_mask[i] != 0
+			var hydrolake_on_land: bool = land and (lake_mask.size() == w * h and lake_mask[i] != 0)
+			var inland_water_lake: bool = (not land) and (pooled_lake.size() == w * h and pooled_lake[i] != 0)
+			var lake_here: bool = hydrolake_on_land or inland_water_lake
+			# Exclude ice and lava from lake highlighting
+			if biomes.size() == w * h:
+				var b: int = biomes[i]
+				if b == BiomeClassifier.Biome.ICE_SHEET or b == BiomeClassifier.Biome.DESERT_ICE or b == BiomeClassifier.Biome.GLACIER:
+					lake_here = false
+			if lava_mask.size() == w * h and lava_mask[i] != 0:
+				lake_here = false
+			var draw_as_water: bool = (not land) or river_here or lake_here
 			var biome_id: int = (biomes[i] if i < biomes.size() else 0)
 			var beach_flag: bool = (i < is_beach.size()) and is_beach[i] != 0
 			var hv: float = (height[i] if i < height.size() else 0.0)
 			var glyph := "~"
-			if land:
+			if not draw_as_water:
 				var set_l: PackedStringArray = _chars_for_biome(biome_id, beach_flag)
 				var idx_l: int = _hash2(x, y, rng_seed) % max(1, set_l.size())
 				glyph = set_l[idx_l]
@@ -244,15 +195,32 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 				# Blend shelf mask by global ocean coverage to avoid a hard cut near full-ocean
 				var local_mask: float = 1.0 - clamp(dist / 14.0, 0.0, 1.0)
 				shelf_mask = clamp(lerp(local_mask, 0.0, pow(global_shelf_mix, 1.5)), 0.0, 1.0)
-			var shelf_noise: float = 0.0
+			var _shelf_noise: float = 0.0
 			if shelf_mask > 0.0:
-				# Coarse value noise for shelf variation
-				shelf_noise = _value_noise2d(float(x), float(y), rng_seed ^ 0x5E1F, 20.0) * shelf_mask
-			var color := color_for_land(hv, biome_id, beach_flag) if land else color_for_water(hv, sea_level, (i < is_turq.size()) and is_turq[i] != 0, (turq_strength[i] if i < turq_strength.size() else 0.0), (water_distance[i] if i < water_distance.size() else 0.0), depth_scale, shelf_noise)
+				# Prefer prebuilt shelf noise if available
+				if shelf_value_noise_field.size() == w * h:
+					_shelf_noise = shelf_value_noise_field[i] * shelf_mask
+				else:
+					_shelf_noise = _value_noise2d(float(x), float(y), rng_seed ^ 0x5E1F, 20.0) * shelf_mask
+			var color := Color(1,1,1)
+			if draw_as_water:
+				var _is_turq_here: bool = (i < is_turq.size()) and is_turq[i] != 0
+				var _turq_here: float = (turq_strength[i] if i < turq_strength.size() else 0.0)
+				# Rivers on land: turquoise; lakes (land or inland water) bright pink; ocean regular water
+				if river_here:
+					color = Color(0.10, 0.85, 0.95)
+					glyph = "~"
+				elif lake_here:
+					color = Color(1.0, 0.1, 0.7)
+				else:
+					color = color_for_water(hv, _sea_level, _is_turq_here, _turq_here, (water_distance[i] if i < water_distance.size() else 0.0), _depth_scale, _shelf_noise)
+			else:
+				color = color_for_land(hv, biome_id, beach_flag)
+			# Optional lake tint already applied above for draw_as_water branch
 			if ocean_ice:
 				color = Color(1, 1, 1)
 			# Temperature-based whitening for very cold land (<= -10°C)
-			if land and temperature.size() == w * h:
+			if (not draw_as_water) and temperature.size() == w * h:
 				var t_norm: float = temperature[i]
 				var t_c: float = temp_min_c + t_norm * (temp_max_c - temp_min_c)
 				if t_c <= -10.0:

@@ -50,53 +50,58 @@ func generate(params: Dictionary, height: PackedFloat32Array, is_land: PackedByt
 	var ocean_frac: float = float(ocean_cells) / max(1.0, float(w * h))
 
 	# Precompute distance to coast (0 at ocean or immediate coast; grows inland)
-	var inf := 1e9
-	for i in range(w * h):
-		distance_to_coast[i] = inf
-	var q: Array = []
-	for y0 in range(h):
-		for x0 in range(w):
-			var i0: int = x0 + y0 * w
-			if is_land[i0] == 0:
-				distance_to_coast[i0] = 0.0
-				q.append(i0)
-			else:
-				# land cell adjacent to ocean gets distance 0 too (coastline)
-				var coast := false
-				for dy in range(-1, 2):
-					for dx in range(-1, 2):
-						if dx == 0 and dy == 0:
-							continue
-						var nx := x0 + dx
-						var ny := y0 + dy
-						if nx < 0 or ny < 0 or nx >= w or ny >= h:
-							continue
-						var ni := nx + ny * w
-						if is_land[ni] == 0:
-							coast = true
-							break
-				if coast:
+	# If caller provided a shared field, use it. Otherwise compute via BFS (legacy path).
+	var provided: PackedFloat32Array = params.get("distance_to_coast", PackedFloat32Array())
+	if provided.size() == w * h:
+		distance_to_coast = provided
+	else:
+		var inf := 1e9
+		for i in range(w * h):
+			distance_to_coast[i] = inf
+		var q: Array = []
+		for y0 in range(h):
+			for x0 in range(w):
+				var i0: int = x0 + y0 * w
+				if is_land[i0] == 0:
 					distance_to_coast[i0] = 0.0
 					q.append(i0)
-	while q.size() > 0:
-		var cur: int = q.pop_front()
-		var cx: int = cur % w
-		var cy: int = int(float(cur) / float(w))
-		var base_d: float = distance_to_coast[cur]
-		for dy2 in range(-1, 2):
-			for dx2 in range(-1, 2):
-				if dx2 == 0 and dy2 == 0:
-					continue
-				var nx2 := cx + dx2
-				var ny2 := cy + dy2
-				if nx2 < 0 or ny2 < 0 or nx2 >= w or ny2 >= h:
-					continue
-				var ni2 := nx2 + ny2 * w
-				var step: float = 1.0 if abs(dx2) + abs(dy2) == 1 else 1.4142
-				var nd := base_d + step
-				if nd < distance_to_coast[ni2]:
-					distance_to_coast[ni2] = nd
-					q.append(ni2)
+				else:
+					# land cell adjacent to ocean gets distance 0 too (coastline)
+					var coast := false
+					for dy in range(-1, 2):
+						for dx in range(-1, 2):
+							if dx == 0 and dy == 0:
+								continue
+							var nx := x0 + dx
+							var ny := y0 + dy
+							if nx < 0 or ny < 0 or nx >= w or ny >= h:
+								continue
+							var ni := nx + ny * w
+							if is_land[ni] == 0:
+								coast = true
+								break
+					if coast:
+						distance_to_coast[i0] = 0.0
+						q.append(i0)
+		while q.size() > 0:
+			var cur: int = q.pop_front()
+			var cx: int = cur % w
+			var cy: int = int(float(cur) / float(w))
+			var base_d: float = distance_to_coast[cur]
+			for dy2 in range(-1, 2):
+				for dx2 in range(-1, 2):
+					if dx2 == 0 and dy2 == 0:
+						continue
+					var nx2 := cx + dx2
+					var ny2 := cy + dy2
+					if nx2 < 0 or ny2 < 0 or nx2 >= w or ny2 >= h:
+						continue
+					var ni2 := nx2 + ny2 * w
+					var step: float = 1.0 if abs(dx2) + abs(dy2) == 1 else 1.4142
+					var nd := base_d + step
+					if nd < distance_to_coast[ni2]:
+						distance_to_coast[ni2] = nd
+						q.append(ni2)
 
 	for y in range(h):
 		# Latitude 0 at equator, 1 at poles

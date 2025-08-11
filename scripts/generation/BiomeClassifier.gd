@@ -1,6 +1,8 @@
 # File: res://scripts/generation/BiomeClassifier.gd
 extends RefCounted
 
+const BiomeRules = preload("res://scripts/systems/BiomeRules.gd")
+
 enum Biome {
 	OCEAN,
 	ICE_SHEET,
@@ -54,16 +56,25 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 	var MIN_M_GRASSLAND := 0.25
 	var MIN_M_STEPPE := 0.15
 
-	# Shared desert noise for sand vs rock choice
+	# Optional prebuilt noise fields from FeatureNoiseCache
+	var desert_field: PackedFloat32Array = params.get("desert_noise_field", PackedFloat32Array())
+	var ice_wiggle_field: PackedFloat32Array = params.get("ice_wiggle_field", PackedFloat32Array())
+	var use_desert_field: bool = desert_field.size() == w * h
+	var use_ice_field: bool = ice_wiggle_field.size() == w * h
+	# Shared desert noise for sand vs rock choice (fallback)
 	var desert_noise := FastNoiseLite.new()
 	desert_noise.seed = rng_seed ^ 0xBEEF
 	desert_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	desert_noise.frequency = 0.008
-	# Glacier wiggle noise for snowline randomness
+	# Glacier/ice wiggle noise (fallback)
 	var glacier_noise := FastNoiseLite.new()
 	glacier_noise.seed = rng_seed ^ 0x6ACE
 	glacier_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	glacier_noise.frequency = 0.01
+	var ice_noise_o := FastNoiseLite.new()
+	ice_noise_o.seed = rng_seed ^ 0x1CE
+	ice_noise_o.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	ice_noise_o.frequency = 0.01
 	var out := PackedInt32Array()
 	out.resize(w * h)
 
@@ -74,11 +85,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 				# Ocean ice sheet when very cold (below ~ -10°C ±1°C wiggle)
 				var t_norm_o: float = temperature[i]
 				var t_c: float = temp_min_c + t_norm_o * (temp_max_c - temp_min_c)
-				var ice_noise_o := FastNoiseLite.new()
-				ice_noise_o.seed = rng_seed ^ 0x1CE
-				ice_noise_o.noise_type = FastNoiseLite.TYPE_SIMPLEX
-				ice_noise_o.frequency = 0.01
-				var wiggle: float = ice_noise_o.get_noise_2d(float(x), float(y)) # -1..1
+				var wiggle: float = ice_wiggle_field[i] if use_ice_field else ice_noise_o.get_noise_2d(float(x), float(y))
 				var threshold_c: float = -10.0 + wiggle * 1.0
 				out[i] = Biome.ICE_SHEET if t_c <= threshold_c else Biome.OCEAN
 				continue
@@ -95,7 +102,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 			var t_eff: float = clamp((t_c_adj - temp_min_c) / max(0.001, (temp_max_c - temp_min_c)), 0.0, 1.0)
 
 			# Mountain/polar glacier rule before generic freeze
-			var wig: float = glacier_noise.get_noise_2d(float(x), float(y)) * 1.5 # -1.5..1.5
+			var wig: float = (ice_wiggle_field[i] if use_ice_field else glacier_noise.get_noise_2d(float(x), float(y))) * 1.5 # -1.5..1.5
 			var snowline_c: float = -2.0 + wig # -3.5 .. -0.5 °C
 			var is_glacier: bool = false
 			if elev_m >= 1800.0 and t_c_adj <= snowline_c and m >= 0.25:
@@ -117,60 +124,13 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 				out[i] = Biome.TUNDRA
 				continue
 
-			# Soft thresholds via smoothstep-like blends
-			var cold: float = clamp((0.45 - t_eff) * 3.0, 0.0, 1.0)
-			var hot: float = clamp((t_eff - 0.60) * 2.4, 0.0, 1.0)
-			var dry: float = clamp((0.40 - m) * 2.6, 0.0, 1.0)
-			var wet: float = clamp((m - 0.70) * 2.6, 0.0, 1.0)
-			var high: float = clamp((elev - 0.5) * 2.0, 0.0, 1.0)
-			var alpine: float = clamp((elev - 0.8) * 5.0, 0.0, 1.0)
-
-			var choice := Biome.GRASSLAND
-			if high > 0.5: # lower mountains threshold (elev > ~0.75)
-				if alpine > 0.4: # lower alpine threshold (elev > ~0.88)
-					choice = Biome.ALPINE
-				else:
-					choice = Biome.MOUNTAINS
-			elif dry > 0.6 and cold < 0.6:
-				# Hot-dry desert rule. Cool dry areas become rock desert; warm/hot dry become sand vs rock by smooth noise.
-				if t < 0.60:
-					choice = Biome.DESERT_ROCK
-				else:
-					var noise_val: float = desert_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
-					# Bias sand probability by heat; hotter → more sand
-					var sand_prob: float = clamp(0.25 + 0.6 * hot, 0.0, 0.98)
-					choice = Biome.DESERT_SAND if noise_val < sand_prob else Biome.DESERT_ROCK
-			elif cold > 0.6 and dry > 0.4:
-				choice = Biome.DESERT_ICE
-			elif wet > 0.6 and hot > 0.4:
-				choice = Biome.RAINFOREST
-			elif m > 0.55 and t_eff > 0.5:
-				choice = Biome.TROPICAL_FOREST
-			# Warm band savanna (18..30 °C approx) before grassland/steppe
-			elif t_c_adj > 18.0 and t_c_adj <= 30.0 and m >= 0.40:
-				choice = Biome.SAVANNA
-			elif wet > 0.55 and cold > 0.45:
-				choice = Biome.SWAMP
-			elif cold > 0.65:
-				choice = Biome.BOREAL_FOREST
-			elif cold > 0.55 and m >= 0.35:
-				choice = Biome.FROZEN_FOREST
-			elif m > 0.6 and t > 0.5:
-				choice = Biome.TEMPERATE_FOREST
-			elif m > 0.4 and t > 0.4:
-				choice = Biome.CONIFER_FOREST
-			elif m > 0.3 and t > 0.3:
-				choice = Biome.MEADOW
-			elif m > 0.25 and t > 0.35:
-				choice = Biome.PRAIRIE
-			elif m > 0.2 and t > 0.25:
-				choice = Biome.STEPPE
-			elif high > 0.25:
-				choice = Biome.FOOTHILLS
-			elif high > 0.15:
-				choice = Biome.HILLS
-			else:
-				choice = Biome.GRASSLAND
+			# Base choice via centralized rules
+			var choice := BiomeRules.new().classify_cell(t_c_adj, m, elev, true)
+			# If rules yield a desert base at high heat/dryness, apply sand vs rock via noise
+			if choice == Biome.DESERT_ROCK and t > 0.60 and m < 0.40:
+				var noise_val: float = (desert_field[i] if use_desert_field else (desert_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5))
+				var sand_prob: float = clamp(0.25 + 0.6 * clamp((t - 0.60) * 2.4, 0.0, 1.0), 0.0, 0.98)
+				choice = Biome.DESERT_SAND if noise_val < sand_prob else Biome.DESERT_ROCK
 
 			# Prevent lush tropical/rainforest at very high elevations (e.g., Tibetan Plateau)
 			if (choice == Biome.RAINFOREST or choice == Biome.TROPICAL_FOREST):
@@ -189,8 +149,9 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 				if t_c0 <= -2.0:
 					choice = Biome.DESERT_ICE
 				else:
-					var noise_val2: float = desert_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
-					var sand_prob2: float = clamp(0.25 + 0.6 * hot, 0.0, 0.98)
+					var noise_val2: float = (desert_field[i] if use_desert_field else (desert_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5))
+					var heat_bias: float = clamp((t - 0.60) * 2.4, 0.0, 1.0)
+					var sand_prob2: float = clamp(0.25 + 0.6 * heat_bias, 0.0, 0.98)
 					choice = Biome.DESERT_SAND if noise_val2 < sand_prob2 else Biome.DESERT_ROCK
 			elif m < MIN_M_GRASSLAND:
 				choice = Biome.STEPPE
@@ -242,24 +203,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 				elif choice == Biome.GRASSLAND and m < MIN_M_GRASSLAND:
 					choice = Biome.STEPPE
 
-			# Heat-driven overrides
-			var t_c_adj2: float = t_c_adj
-			if t_c_adj2 >= 55.0:
-				if choice == Biome.MOUNTAINS or choice == Biome.ALPINE or choice == Biome.HILLS or choice == Biome.FOOTHILLS:
-					choice = Biome.VOLCANIC_BADLANDS
-				elif choice == Biome.RAINFOREST or choice == Biome.TROPICAL_FOREST or choice == Biome.TEMPERATE_FOREST or choice == Biome.CONIFER_FOREST or choice == Biome.BOREAL_FOREST or choice == Biome.SWAMP:
-					choice = Biome.SCORCHED_FOREST
-				else:
-					choice = Biome.LAVA_FIELD
-			elif t_c_adj2 >= 30.0:
-				if m < 0.40:
-					var noise_val3: float = desert_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
-					var sand_prob3: float = clamp(0.25 + 0.6 * (t_eff - 0.60) * 2.4, 0.0, 0.98)
-					choice = Biome.DESERT_SAND if noise_val3 < sand_prob3 else Biome.DESERT_ROCK
-				elif m < 0.55:
-					choice = Biome.SAVANNA
-				elif m < 0.65:
-					choice = Biome.PRAIRIE
+			# Heat-driven overrides moved to BiomePost (centralized)
 
 			out[i] = choice
 
@@ -299,7 +243,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 				continue
 			var t_norm := temperature[io]
 			var t_c := temp_min_c + t_norm * (temp_max_c - temp_min_c)
-			var wiggle := ice_noise_b.get_noise_2d(float(xo), float(yo)) # -1..1
+			var wiggle := ice_wiggle_field[io] if use_ice_field else ice_noise_b.get_noise_2d(float(xo), float(yo)) # -1..1
 			var threshold_c := -10.0 + wiggle * 1.0
 			if t_c <= threshold_c:
 				blended[io] = Biome.ICE_SHEET
@@ -319,7 +263,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 			var t_norm_l := temperature[il]
 			var t_c0_l := temp_min_c + t_norm_l * (temp_max_c - temp_min_c)
 			var t_c_adj_l := t_c0_l - lapse_c_per_km * (elev_m_l / 1000.0)
-			var wig2 := glacier_noise_b.get_noise_2d(float(xl), float(yl)) * 1.5
+			var wig2 := (ice_wiggle_field[il] if use_ice_field else glacier_noise_b.get_noise_2d(float(xl), float(yl))) * 1.5
 			var snowline_c2 := -2.0 + wig2
 			if elev_m_l >= 1800.0 and t_c_adj_l <= snowline_c2 and moisture[il] >= 0.25:
 				blended[il] = Biome.GLACIER

@@ -278,51 +278,54 @@ Smoothing: 3×3 mode filter; reapply ICE_SHEET tag afterwards.
 
 Phase 0 – Scaffolding
 
-- [ ] Add `core/WorldState.gd` and `systems/FeatureNoiseCache.gd` (wired but initially unused)
-- [ ] Add `systems/BiomeRules.gd` (wrap current rules extracted from classifier)
-- [ ] Add `core/FieldMath.gd` with 2‑pass chamfer distance transform and 3×3 mode filter
-- [ ] Add `systems/DistanceTransform.gd` that applies FieldMath DT to `WorldState`
-- [ ] Add `core/JobSystem.gd` (row striping helper over WorkerThreadPool)
-- [ ] Rename plan modules: Coastline → `ContinentalShelf.gd`; Hydro → `FlowErosionSystem.gd`; add `PoolingSystem.gd`
+- [x] Add `core/WorldState.gd` and `systems/FeatureNoiseCache.gd` (wired but initially unused)
+- [x] Add `systems/BiomeRules.gd` (wrap current rules extracted from classifier)
+- [x] Add `core/FieldMath.gd` with 2‑pass chamfer distance transform and 3×3 mode filter
+- [x] Add `systems/DistanceTransform.gd` that applies FieldMath DT to `WorldState`
+- [x] Add `core/JobSystem.gd` (row striping helper over WorkerThreadPool)
+- [x] Rename plan modules: Coastline → `ContinentalShelf.gd`; Hydro → `FlowErosionSystem.gd`; add `PoolingSystem.gd`
 
 Phase 1 – Extract systems (no behavior change)
 
-- [ ] Move coastline logic to `ContinentalShelf.gd` (turquoise, beaches) and replace BFS with distance transform
-- [ ] Move rivers/erosion to `FlowErosionSystem.gd` (full + fast variants)
-- [ ] Introduce `PoolingSystem.gd` for depression fill and lake masks
-- [ ] Move mountain radiance to `ClimatePost.gd`
+- [x] Move coastline logic to `ContinentalShelf.gd` (turquoise, beaches) and replace BFS with distance transform
+- [x] Introduce `PoolingSystem.gd` for depression fill and lake masks (inland lake tagging)
+- [x] Move mountain radiance to `ClimatePost.gd`
 
 Phase 2 – Noise caching & classifier cleanup
 
-- [ ] Prebuild `desert_noise`, `ice_wiggle` in `FeatureNoiseCache` and consume from classifier
-- [ ] Add `shore_noise_field` and `shelf_value_noise_field` to `FeatureNoiseCache`; consume in coastline/rendering
-- [ ] Refactor `BiomeClassifier.gd` to call `BiomeRules` and remove inlined noise instantiations
+- [x] Prebuild `desert_noise`, `ice_wiggle` in `FeatureNoiseCache` and consume from classifier
+- [x] Add `shore_noise_field` and `shelf_value_noise_field` to `FeatureNoiseCache`; consume in rendering (shelf), coastline uses cached shore field when available
+- [x] Refactor `BiomeClassifier.gd` to call `BiomeRules` for base choice; keep sand/rock split via cached desert noise
 
 Phase 3 – Unified rule table + extreme tags
 
-- [ ] Implement explicit °C/moist/elev bands in `BiomeRules` that match current behavior
-- [ ] Keep `BiomePost` for hot/cold/lava overrides; remove redundant overrides from generator/classifier
-- [ ] Add `SAVANNA` and `TUNDRA` enums; map palettes/glyphs minimally
+- [x] Implement explicit °C/moist/elev bands in `BiomeRules` that match current behavior (consumed by classifier)
+- [x] Keep `BiomePost` for hot/cold/lava overrides; remove redundant overrides from generator/classifier (migrated to `systems/BiomePost.gd` and wired)
+- [x] Add `SAVANNA` and `TUNDRA` enums; map palettes/glyphs minimally
 
 Phase 3.5 – Fast sea‑level pipeline
 
-- [ ] Split climate into `ClimateBase` (seed‑stable) and `ClimateAdjust` (fast pass)
-- [ ] Implement sea‑level quick path using: is_land pass → DT → ClimateAdjust → Band‑limited Biome + Lava
-- [ ] Share `coast_distance` with climate; remove duplicate distance logic from climate
+- [x] Split climate into `ClimateBase` (seed‑stable) and `ClimateAdjust` (fast pass) and wired into generator
+- [x] Implement sea‑level quick path using: is_land pass → DT → ClimateAdjust → Band‑limited Biome + Lava
+- [x] Share `coast_distance` with climate; remove duplicate distance logic from climate (accepts shared field)
 
 Phase 4 – Water bodies & lakes (optional)
 
-- [ ] Implement `PoolingSystem.gd` lake_id tagging; update biomes/rendering
+- [x] Implement `PoolingSystem.gd` lake_id tagging; optional lake tint added in rendering
+- [x] Implement initial `FlowErosionSystem.gd` (D8 flow, accumulation, river mask); erosion kept off by default
+- [x] Render rivers as bright shallow water on land tiles (turquoise overlay like near-shore ocean)
 
 Phase 5 – UI expansion
 
-- [ ] Add climate thresholds and radiance controls; implement `SettingsAdapter` + `RandomizeService`
+- [ ] Add climate thresholds and radiance controls; implement `SettingsAdapter`
+- [x] Implement `RandomizeService.gd` and use centrally from UI
 - [ ] Hide or implement `polar_cap_frac` (non‑beach polar caps)
 
 Phase 6 – Rendering isolation
 
-- [ ] Extract `BiomePalette.gd` and water palette from `AsciiStyler.gd`
-- [ ] Keep temperature‑white override only in rendering layer
+- [x] Extract `BiomePalette.gd` and use it from `AsciiStyler.gd`
+- [x] Extract `WaterPalette.gd` and use it from `AsciiStyler.gd`
+- [x] Keep temperature‑white override only in rendering layer (enforced in `AsciiStyler.gd`)
 
 Phase 7 – Cleanup
 
@@ -331,17 +334,17 @@ Phase 7 – Cleanup
 
 ## Execution checklist
 
-- [ ] WorldState introduced and generator orchestrator slimmed
-- [ ] ContinentalShelf, FlowErosionSystem, ClimatePost extracted and tested
-- [ ] Distance transform replaces BFS; `coast_distance` shared by climate
-- [ ] FeatureNoiseCache wired; no per‑cell noise allocations
-- [ ] BiomeClassifier uses centralized BiomeRules; smoothing intact; ICE_SHEET reapply preserved
-- [ ] BiomePost contains only hot/cold/lava clamps; generator/classifier overrides removed
+- [x] WorldState introduced (orchestrator partially slimmed)
+- [x] ContinentalShelf and ClimatePost extracted and wired (FlowErosionSystem pending)
+- [x] Distance transform replaces BFS for shoreline; `coast_distance` shared with climate
+- [x] FeatureNoiseCache wired; heavy per‑cell noise instantiations removed from hot loops
+- [x] BiomeClassifier uses centralized BiomeRules; smoothing intact; ICE_SHEET reapply preserved
+- [x] BiomePost contains only hot/cold/lava clamps; generator/classifier overrides removed
 - [ ] Settings dialog exposes climate thresholds and radiance controls; polar caps resolved
-- [ ] BiomePalette extracted; AsciiStyler simplified; water palette tunable
-- [ ] Added SAVANNA and TUNDRA enums + minimal styling
+- [x] BiomePalette and WaterPalette extracted; AsciiStyler simplified
+- [x] Added SAVANNA and TUNDRA enums + minimal styling
 - [ ] Sea‑level quick path under target budget at target resolutions; golden seeds verified; performance budgets met
-- [ ] PoolingSystem in place; lakes validated in coast distance and rendering
+- [x] PoolingSystem in place; lakes validated in coast distance and rendering
 - [ ] Atmospheric overlay renders and moves with winds
 - [ ] Time slider controls cadence; systems scheduled without hitches
 - [ ] POIs/resources/civs/mobs basic pipelines stubbed behind toggles

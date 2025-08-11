@@ -2,7 +2,7 @@
 extends RefCounted
 class_name WorldConfig
 
-var seed: int = 0
+var rng_seed: int = 0
 var width: int = 275
 var height: int = 62
 var sea_level: float = 0.0
