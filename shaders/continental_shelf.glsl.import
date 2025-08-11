@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://brjheemltix7h"
+path="res://.godot/imported/continental_shelf.glsl-bd9a3e83b29c475c42e8b45daf6e8b35.res"
+
+[deps]
+
+source_file="res://shaders/continental_shelf.glsl"
+dest_files=["res://.godot/imported/continental_shelf.glsl-bd9a3e83b29c475c42e8b45daf6e8b35.res"]
+
+[params]
+

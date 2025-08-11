@@ -8,6 +8,7 @@ extends RefCounted
 var width: int = 0
 var height: int = 0
 var rng_seed: int = 0
+var noise_x_scale: float = 1.0
 
 var desert_noise_field: PackedFloat32Array = PackedFloat32Array()     # 0..1
 var ice_wiggle_field: PackedFloat32Array = PackedFloat32Array()       # -1..1
@@ -19,6 +20,7 @@ func build(params: Dictionary) -> void:
     height = int(params.get("height", 128))
     rng_seed = int(params.get("seed", 0))
     var base_freq: float = float(params.get("frequency", 0.02))
+    noise_x_scale = float(params.get("noise_x_scale", 1.0))
     var shelf_seed: int = int(params.get("shelf_seed", rng_seed ^ 0x5E1F))
     _allocate()
     _fill_desert_noise(rng_seed)
@@ -38,20 +40,22 @@ func _fill_desert_noise(s: int) -> void:
     n.seed = s ^ 0x00BEEF
     n.noise_type = FastNoiseLite.TYPE_SIMPLEX
     n.frequency = 0.008
+    var xscale: float = max(0.0001, noise_x_scale)
     for y in range(height):
         for x in range(width):
             var i: int = x + y * width
-            desert_noise_field[i] = n.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
+            desert_noise_field[i] = n.get_noise_2d(float(x) * xscale, float(y)) * 0.5 + 0.5
 
 func _fill_ice_wiggle(s: int) -> void:
     var n := FastNoiseLite.new()
     n.seed = s ^ 0x0001CE
     n.noise_type = FastNoiseLite.TYPE_SIMPLEX
     n.frequency = 0.01
+    var xscale2: float = max(0.0001, noise_x_scale)
     for y in range(height):
         for x in range(width):
             var i: int = x + y * width
-            ice_wiggle_field[i] = n.get_noise_2d(float(x), float(y)) # -1..1
+            ice_wiggle_field[i] = n.get_noise_2d(float(x) * xscale2, float(y)) # -1..1
 
 func _fill_shore_noise(s: int, freq: float) -> void:
     var n := FastNoiseLite.new()
@@ -62,10 +66,11 @@ func _fill_shore_noise(s: int, freq: float) -> void:
     n.fractal_octaves = 3
     n.fractal_lacunarity = 2.0
     n.fractal_gain = 0.5
+    var xscale3: float = max(0.0001, noise_x_scale)
     for y in range(height):
         for x in range(width):
             var i: int = x + y * width
-            shore_noise_field[i] = n.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
+            shore_noise_field[i] = n.get_noise_2d(float(x) * xscale3, float(y)) * 0.5 + 0.5
 
 func _fill_shelf_value_noise(s: int) -> void:
     # Coarse value-like noise as used by AsciiStyler for shelf variation.

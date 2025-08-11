@@ -13,6 +13,7 @@ func generate(params: Dictionary, height: PackedFloat32Array, is_land: PackedByt
 	var continentality_scale: float = float(params.get("continentality_scale", 1.0))
 	var _sea_level: float = float(params.get("sea_level", 0.0))
 
+	var xscale: float = float(params.get("noise_x_scale", 1.0))
 	var temp_noise := FastNoiseLite.new()
 	temp_noise.seed = rng_seed ^ 0x5151
 	temp_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
@@ -113,7 +114,7 @@ func generate(params: Dictionary, height: PackedFloat32Array, is_land: PackedByt
 			# Temperature latitudinal profile: quick warm-up from poles, slower approach to equator
 			var u: float = 1.0 - lat
 			var t_lat: float = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6)
-			var t: float = t_lat * 0.82 + zonal * 0.15 - elev_cool * 0.9 + 0.18 * temp_noise.get_noise_2d(x, y)
+			var t: float = t_lat * 0.82 + zonal * 0.15 - elev_cool * 0.9 + 0.18 * temp_noise.get_noise_2d(x * xscale, y)
 			# Continentality: farther from coast → stronger extremes
 			var dc: float = clamp(distance_to_coast[i] / float(max(1, w)), 0.0, 1.0) * continentality_scale
 			var t_anom := (t - 0.5) * (1.0 + 0.8 * dc)
@@ -121,13 +122,13 @@ func generate(params: Dictionary, height: PackedFloat32Array, is_land: PackedByt
 			t = clamp((t + temp_base_offset - 0.5) * temp_scale + 0.5, 0.0, 1.0)
 			# Base humidity from zonal bands and noise
 			var m_base: float = 0.5 + 0.3 * sin(6.28318 * float(y) / float(h) * 3.0)
-			var m_noise: float = 0.3 * moist_noise.get_noise_2d(x + 100.0, y - 50.0)
+			var m_noise: float = 0.3 * moist_noise.get_noise_2d(x * xscale + 100.0, y - 50.0)
 			# Turbulent advection
-			var adv_u: float = flow_u.get_noise_2d(x * 0.5, y * 0.5)
-			var adv_v: float = flow_v.get_noise_2d((x + 1000.0) * 0.5, (y - 777.0) * 0.5)
+			var adv_u: float = flow_u.get_noise_2d(x * 0.5 * xscale, y * 0.5)
+			var adv_v: float = flow_v.get_noise_2d((x * xscale + 1000.0) * 0.5, (y - 777.0) * 0.5)
 			var sx: float = clamp(float(x) + adv_u * 6.0, 0.0, float(w - 1))
 			var sy: float = clamp(float(y) + adv_v * 6.0, 0.0, float(h - 1))
-			var m_adv: float = 0.2 * moist_noise.get_noise_2d(sx, sy)
+			var m_adv: float = 0.2 * moist_noise.get_noise_2d(sx * xscale, sy)
 			# Polar dryness bias
 			var polar_dry: float = 0.20 * lat
 			var m: float = m_base + m_noise + m_adv - polar_dry

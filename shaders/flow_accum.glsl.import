@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bofahprmtikj1"
+path="res://.godot/imported/flow_accum.glsl-d3f30d55ac549ab645f1ba326be9ec07.res"
+
+[deps]
+
+source_file="res://shaders/flow_accum.glsl"
+dest_files=["res://.godot/imported/flow_accum.glsl-d3f30d55ac549ab645f1ba326be9ec07.res"]
+
+[params]
+

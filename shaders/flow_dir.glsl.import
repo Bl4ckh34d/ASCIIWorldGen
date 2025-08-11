@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://s5c0ms80s7ym"
+path="res://.godot/imported/flow_dir.glsl-66a6de2cf09909d51c8fbd080accb800.res"
+
+[deps]
+
+source_file="res://shaders/flow_dir.glsl"
+dest_files=["res://.godot/imported/flow_dir.glsl-66a6de2cf09909d51c8fbd080accb800.res"]
+
+[params]
+

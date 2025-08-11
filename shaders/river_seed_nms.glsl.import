@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://drp50jxv8tabf"
+path="res://.godot/imported/river_seed_nms.glsl-55024dd7540100555bc18dcac7e046ab.res"
+
+[deps]
+
+source_file="res://shaders/river_seed_nms.glsl"
+dest_files=["res://.godot/imported/river_seed_nms.glsl-55024dd7540100555bc18dcac7e046ab.res"]
+
+[params]
+

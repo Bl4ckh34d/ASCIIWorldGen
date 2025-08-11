@@ -14,6 +14,7 @@ func generate(params: Dictionary) -> Dictionary:
 	var gain: float = float(params.get("gain", 0.5))
 	var warp: float = float(params.get("warp", 24.0))
 	var wrap_x: bool = bool(params.get("wrap_x", true))
+	var noise_x_scale: float = float(params.get("noise_x_scale", 1.0))
 
 	var noise := FastNoiseLite.new()
 	noise.seed = rng_seed
@@ -57,32 +58,32 @@ func generate(params: Dictionary) -> Dictionary:
 			var wy: float
 			if wrap_x:
 				# Wrap domain-warp along X by blending samples at x and x+w
-				var w0 := warp_noise.get_noise_2d(x * 0.8, y * 0.8)
-				var w1 := warp_noise.get_noise_2d((x + float(w)) * 0.8, y * 0.8)
+				var w0 := warp_noise.get_noise_2d(x * 0.8 * noise_x_scale, y * 0.8)
+				var w1 := warp_noise.get_noise_2d((x + float(w)) * 0.8 * noise_x_scale, y * 0.8)
 				var t := float(x) / float(max(1, w))
 				wx = lerp(w0, w1, t) * warp
-				var v0 := warp_noise.get_noise_2d((x + 1000.0) * 0.8, (y - 777.0) * 0.8)
-				var v1 := warp_noise.get_noise_2d((x + 1000.0 + float(w)) * 0.8, (y - 777.0) * 0.8)
+				var v0 := warp_noise.get_noise_2d((x + 1000.0) * 0.8 * noise_x_scale, (y - 777.0) * 0.8)
+				var v1 := warp_noise.get_noise_2d((x + 1000.0 + float(w)) * 0.8 * noise_x_scale, (y - 777.0) * 0.8)
 				wy = lerp(v0, v1, t) * warp
 			else:
-				wx = warp_noise.get_noise_2d(x * 0.8, y * 0.8) * warp
-				wy = warp_noise.get_noise_2d((x + 1000.0) * 0.8, (y - 777.0) * 0.8) * warp
+				wx = warp_noise.get_noise_2d(x * 0.8 * noise_x_scale, y * 0.8) * warp
+				wy = warp_noise.get_noise_2d((x + 1000.0) * 0.8 * noise_x_scale, (y - 777.0) * 0.8) * warp
 			var sx: float = x + wx
 			var sy: float = y + wy
 			var n: float
 			var c: float
 			if wrap_x:
 				# Tileable sampling for base terrain and continental mask
-				var n0 := noise.get_noise_2d(sx, sy)
-				var n1 := noise.get_noise_2d(sx + float(w), sy)
+				var n0 := noise.get_noise_2d(sx * noise_x_scale, sy)
+				var n1 := noise.get_noise_2d((sx + float(w)) * noise_x_scale, sy)
 				var t2 := float(x) / float(max(1, w))
 				n = lerp(n0, n1, t2)
-				var c0 := base_noise.get_noise_2d(x * 0.5, y * 0.5)
-				var c1 := base_noise.get_noise_2d((x + float(w)) * 0.5, y * 0.5)
+				var c0 := base_noise.get_noise_2d(x * 0.5 * noise_x_scale, y * 0.5)
+				var c1 := base_noise.get_noise_2d((x + float(w)) * 0.5 * noise_x_scale, y * 0.5)
 				c = lerp(c0, c1, t2)
 			else:
-				n = noise.get_noise_2d(sx, sy)
-				c = base_noise.get_noise_2d(x * 0.5, y * 0.5)
+				n = noise.get_noise_2d(sx * noise_x_scale, sy)
+				c = base_noise.get_noise_2d(x * 0.5 * noise_x_scale, y * 0.5)
 			var hval: float = 0.65 * n + 0.45 * c
 
 			if not wrap_x:

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dwhtmbj8ex1yo"
+path="res://.godot/imported/distance_transform.glsl-72ddf85e57c53389de995745dcb15530.res"
+
+[deps]
+
+source_file="res://shaders/distance_transform.glsl"
+dest_files=["res://.godot/imported/distance_transform.glsl-72ddf85e57c53389de995745dcb15530.res"]
+
+[params]
+

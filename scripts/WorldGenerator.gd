@@ -7,13 +7,18 @@ const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 const WorldState = preload("res://scripts/core/WorldState.gd")
 const FeatureNoiseCache = preload("res://scripts/systems/FeatureNoiseCache.gd")
 const DistanceTransform = preload("res://scripts/systems/DistanceTransform.gd")
+const DistanceTransformCompute = preload("res://scripts/systems/DistanceTransformCompute.gd")
 const ContinentalShelf = preload("res://scripts/systems/ContinentalShelf.gd")
+const ContinentalShelfCompute = preload("res://scripts/systems/ContinentalShelfCompute.gd")
 var ClimatePost = load("res://scripts/systems/ClimatePost.gd")
 const PoolingSystem = preload("res://scripts/systems/PoolingSystem.gd")
 const ClimateBase = preload("res://scripts/systems/ClimateBase.gd")
 const ClimateAdjust = preload("res://scripts/systems/ClimateAdjust.gd")
+const ClimateAdjustCompute = preload("res://scripts/systems/ClimateAdjustCompute.gd")
 var BiomePost = load("res://scripts/systems/BiomePost.gd")
 var FlowErosionSystem = load("res://scripts/systems/FlowErosionSystem.gd")
+const FlowCompute = preload("res://scripts/systems/FlowCompute.gd")
+const RiverCompute = preload("res://scripts/systems/RiverCompute.gd")
 
 class Config:
 	var rng_seed: int = 0
@@ -49,6 +54,10 @@ class Config:
 	var mountain_cool_amp: float = 0.15
 	var mountain_wet_amp: float = 0.10
 	var mountain_radiance_passes: int = 3
+	# Compute toggles
+	var use_gpu_climate: bool = false
+	# Horizontal noise stretch for ASCII aspect compensation (x multiplier applied to noise samples)
+	var noise_x_scale: float = 0.5
 
 var config := Config.new()
 
@@ -148,6 +157,8 @@ func apply_config(dict: Dictionary) -> void:
 		config.mountain_wet_amp = float(dict["mountain_wet_amp"]) 
 	if dict.has("mountain_radiance_passes"):
 		config.mountain_radiance_passes = int(dict["mountain_radiance_passes"]) 
+	if dict.has("use_gpu_climate"):
+		config.use_gpu_climate = bool(dict["use_gpu_climate"]) 
 	_setup_noises()
 	# Only randomize temperature extremes if caller didn't override both
 	var override_extremes: bool = dict.has("temp_min_c") and dict.has("temp_max_c")
@@ -213,6 +224,7 @@ func generate() -> PackedByteArray:
 		"warp": config.warp,
 		"sea_level": config.sea_level,
 		"wrap_x": true,
+		"noise_x_scale": config.noise_x_scale,
 		"temp_base_offset": config.temp_base_offset,
 		"temp_scale": config.temp_scale,
 		"moist_base_offset": config.moist_base_offset,
@@ -251,6 +263,7 @@ func generate() -> PackedByteArray:
 			"height": h,
 			"seed": config.rng_seed,
 			"frequency": config.frequency,
+			"noise_x_scale": config.noise_x_scale,
 		}
 		_feature_noise_cache.build(cache_params)
 		last_shelf_value_noise_field = _feature_noise_cache.shelf_value_noise_field
@@ -267,19 +280,43 @@ func generate() -> PackedByteArray:
 		shore_noise_field = _feature_noise_cache.shore_noise_field
 	else:
 		shore_noise_field.resize(size)
+		var sx_mul: float = max(0.0001, config.noise_x_scale)
 		for y in range(h):
 			for x in range(w):
 				var i2: int = x + y * w
-				shore_noise_field[i2] = _shore_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
+				shore_noise_field[i2] = _shore_noise.get_noise_2d(float(x) * sx_mul, float(y)) * 0.5 + 0.5
 	var shelf_out := ContinentalShelf.new().compute(w, h, last_height, last_is_land, config.sea_level, shore_noise_field, config.shallow_threshold, config.shore_band, true)
+	if config.use_gpu_climate:
+		# Use compute version for turquoise/beach/strength when GPU is enabled and we have the distance field
+		var shelf_gpu := ContinentalShelfCompute.new()
+		var out_gpu := shelf_gpu.compute(w, h, last_height, last_is_land, config.sea_level, last_water_distance, shore_noise_field, config.shallow_threshold, config.shore_band, true, config.noise_x_scale)
+		if out_gpu.size() > 0:
+			# Preserve CPU DT for water_distance; use GPU for other outputs
+			shelf_out["turquoise_water"] = out_gpu.get("turquoise_water", shelf_out["turquoise_water"]) 
+			shelf_out["beach"] = out_gpu.get("beach", shelf_out["beach"]) 
+			shelf_out["turquoise_strength"] = out_gpu.get("turquoise_strength", shelf_out["turquoise_strength"]) 
 	last_turquoise_water = shelf_out["turquoise_water"]
 	last_beach = shelf_out["beach"]
 	last_water_distance = shelf_out["water_distance"]
+	if config.use_gpu_climate:
+		# Compute DT on GPU to replace CPU distance when available
+		var dtc := DistanceTransformCompute.new()
+		var d_gpu: PackedFloat32Array = dtc.ocean_distance_to_land(w, h, last_is_land, true)
+		if d_gpu.size() == w * h:
+			last_water_distance = d_gpu
 	last_turquoise_strength = shelf_out["turquoise_strength"]
 
-	# Step 3: climate via ClimateAdjust using seed-stable ClimateBase and shared coast distance
+	# Step 3: climate via CPU or GPU
 	params["distance_to_coast"] = last_water_distance
-	var climate: Dictionary = ClimateAdjust.new().evaluate(w, h, last_height, last_is_land, _climate_base, params, last_water_distance)
+	var climate: Dictionary
+	if config.use_gpu_climate:
+		var gpu := ClimateAdjustCompute.new()
+		climate = gpu.evaluate(w, h, last_height, last_is_land, _climate_base, params, last_water_distance, last_ocean_fraction)
+		# Fallback to CPU if GPU path failed to initialize
+		if climate.is_empty() or not climate.has("temperature"):
+			climate = ClimateAdjust.new().evaluate(w, h, last_height, last_is_land, _climate_base, params, last_water_distance)
+	else:
+		climate = ClimateAdjust.new().evaluate(w, h, last_height, last_is_land, _climate_base, params, last_water_distance)
 	last_temperature = climate["temperature"]
 	last_moisture = climate["moisture"]
 	last_distance_to_coast = last_water_distance
@@ -298,6 +335,7 @@ func generate() -> PackedByteArray:
 	if _feature_noise_cache != null:
 		params2["desert_noise_field"] = _feature_noise_cache.desert_noise_field
 		params2["ice_wiggle_field"] = _feature_noise_cache.ice_wiggle_field
+	params2["noise_x_scale"] = config.noise_x_scale
 	last_biomes = BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
 	# BiomePost: apply hot/cold overrides + lava in a single place
 	var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c)
@@ -323,10 +361,28 @@ func generate() -> PackedByteArray:
 	# Step 5: rivers (post-climate so we can freeze-gate; cooperate with PoolingSystem lakes)
 	if config.rivers_enabled:
 		var max_lakes_guess: int = max(4, floori(float(w * h) / 2048.0))
-		var hydro2: Dictionary = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "max_lakes": max_lakes_guess})
+		var hydro2: Dictionary
+		if config.use_gpu_climate:
+			var fc := FlowCompute.new()
+			var fc_out := fc.compute_flow(w, h, last_height, last_is_land, true)
+			if fc_out.size() > 0:
+				hydro2 = fc_out
+			else:
+				hydro2 = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "max_lakes": max_lakes_guess})
+		else:
+			hydro2 = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "max_lakes": max_lakes_guess})
 		last_flow_dir = hydro2["flow_dir"]
 		last_flow_accum = hydro2["flow_accum"]
-		last_river = hydro2["river"]
+		# Trace and prune rivers on GPU if available, else use CPU result
+		if config.use_gpu_climate:
+			var rc := RiverCompute.new()
+			var river_gpu := rc.trace_rivers(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5)
+			if river_gpu.size() == w * h:
+				last_river = river_gpu
+			else:
+				last_river = hydro2.get("river", last_river)
+		else:
+			last_river = hydro2.get("river", last_river)
 		if hydro2.has("lake"):
 			last_pooled_lake = hydro2["lake"]
 		# Freeze gating: remove rivers where glacier or freezing temps

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://7r68uyjxdgvj"
+path="res://.godot/imported/river_trace.glsl-36555be5955b151c8d9b49d108d62ec3.res"
+
+[deps]
+
+source_file="res://shaders/river_trace.glsl"
+dest_files=["res://.godot/imported/river_trace.glsl-36555be5955b151c8d9b49d108d62ec3.res"]
+
+[params]
+

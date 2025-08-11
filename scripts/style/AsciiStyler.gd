@@ -206,14 +206,11 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 			if draw_as_water:
 				var _is_turq_here: bool = (i < is_turq.size()) and is_turq[i] != 0
 				var _turq_here: float = (turq_strength[i] if i < turq_strength.size() else 0.0)
-				# Rivers on land: turquoise; lakes (land or inland water) bright pink; ocean regular water
+				# Color all water (sea, ocean, lakes, rivers) using the same ocean water palette
+				color = color_for_water(hv, _sea_level, _is_turq_here, _turq_here, (water_distance[i] if i < water_distance.size() else 0.0), _depth_scale, _shelf_noise)
+				# Rivers use the same glyph as ocean for consistency
 				if river_here:
-					color = Color(0.10, 0.85, 0.95)
 					glyph = "~"
-				elif lake_here:
-					color = Color(1.0, 0.1, 0.7)
-				else:
-					color = color_for_water(hv, _sea_level, _is_turq_here, _turq_here, (water_distance[i] if i < water_distance.size() else 0.0), _depth_scale, _shelf_noise)
 			else:
 				color = color_for_land(hv, biome_id, beach_flag)
 			# Optional lake tint already applied above for draw_as_water branch

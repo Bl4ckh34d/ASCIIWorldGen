@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bidokjtqvtp45"
+path="res://.godot/imported/climate_adjust.glsl-b87c3a0dc4af15c87698dbf2a62cbde7.res"
+
+[deps]
+
+source_file="res://shaders/climate_adjust.glsl"
+dest_files=["res://.godot/imported/climate_adjust.glsl-b87c3a0dc4af15c87698dbf2a62cbde7.res"]
+
+[params]
+
