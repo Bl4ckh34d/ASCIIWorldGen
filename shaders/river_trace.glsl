@@ -1,4 +1,4 @@
-// File: res://shaders/river_trace.glsl
+#[compute]
 #version 450
 
 // Traces rivers by iteratively pushing along flow_dir from seeds; stops at ocean or lakes.
@@ -6,12 +6,12 @@
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, std430) readonly buffer FlowDirBuf { int flow_dir[]; } Flow;
-layout(set = 0, binding = 1, std430) readonly buffer IsLandBuf { uint is_land[]; } Land;
-layout(set = 0, binding = 2, std430) readonly buffer LakeBuf { uint lake[]; } Lake;
-layout(set = 0, binding = 3, std430) readonly buffer FrontierInBuf { uint frontier_in[]; } Fin;
-layout(set = 0, binding = 4, std430) buffer FrontierOutBuf { uint frontier_out[]; } Fout;
-layout(set = 0, binding = 5, std430) buffer RiverBuf { uint river[]; } River; // write 1 where river present
+layout(std430, set = 0, binding = 0) buffer FlowDirBuf { int flow_dir[]; } Flow;
+layout(std430, set = 0, binding = 1) buffer IsLandBuf { uint is_land[]; } Land;
+layout(std430, set = 0, binding = 2) buffer LakeBuf { uint lake[]; } Lake;
+layout(std430, set = 0, binding = 3) buffer FrontierInBuf { uint frontier_in[]; } Fin;
+layout(std430, set = 0, binding = 4) buffer FrontierOutBuf { uint frontier_out[]; } Fout;
+layout(std430, set = 0, binding = 5) buffer RiverBuf { uint river[]; } River; // write 1 where river present
 
 layout(push_constant) uniform Params { int total_cells; } PC;
 

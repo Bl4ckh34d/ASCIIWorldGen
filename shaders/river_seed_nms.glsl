@@ -1,12 +1,12 @@
-// File: res://shaders/river_seed_nms.glsl
+#[compute]
 #version 450
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, std430) readonly buffer AccumBuf { float accum[]; } Acc;
-layout(set = 0, binding = 1, std430) readonly buffer IsLandBuf { uint is_land[]; } Land;
-layout(set = 0, binding = 2, std430) readonly buffer FlowDirBuf { int flow_dir[]; } Flow;
-layout(set = 0, binding = 3, std430) writeonly buffer SeedsBuf { uint seeds[]; } Seeds;
+layout(std430, set = 0, binding = 0) buffer AccumBuf { float accum[]; } Acc;
+layout(std430, set = 0, binding = 1) buffer IsLandBuf { uint is_land[]; } Land;
+layout(std430, set = 0, binding = 2) buffer FlowDirBuf { int flow_dir[]; } Flow;
+layout(std430, set = 0, binding = 3) buffer SeedsBuf { uint seeds[]; } Seeds;
 
 layout(push_constant) uniform Params { int width; int height; float threshold; } PC;
 

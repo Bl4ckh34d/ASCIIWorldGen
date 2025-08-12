@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c1wqdb8pxc5al"
+path="res://.godot/imported/river_delta.glsl-30416f35276b2facf429e331289f0ce9.res"
+
+[deps]
+
+source_file="res://shaders/river_delta.glsl"
+dest_files=["res://.godot/imported/river_delta.glsl-30416f35276b2facf429e331289f0ce9.res"]
+
+[params]
+

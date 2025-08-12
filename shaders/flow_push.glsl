@@ -1,12 +1,12 @@
-// File: res://shaders/flow_push.glsl
+#[compute]
 #version 450
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, std430) readonly buffer FlowDirBuf { int flow_dir[]; } Flow;
-layout(set = 0, binding = 1, std430) readonly buffer FrontierInBuf { uint frontier_in[]; } Fin;
-layout(set = 0, binding = 2, std430) buffer TotalBuf { uint total[]; } Total; // read/write
-layout(set = 0, binding = 3, std430) buffer FrontierOutBuf { uint frontier_out[]; } Fout; // write accum
+layout(std430, set = 0, binding = 0) buffer FlowDirBuf { int flow_dir[]; } Flow;
+layout(std430, set = 0, binding = 1) buffer FrontierInBuf { uint frontier_in[]; } Fin;
+layout(std430, set = 0, binding = 2) buffer TotalBuf { uint total[]; } Total; // read/write
+layout(std430, set = 0, binding = 3) buffer FrontierOutBuf { uint frontier_out[]; } Fout; // write accum
 
 layout(push_constant) uniform Params { int total_cells; } PC;
 

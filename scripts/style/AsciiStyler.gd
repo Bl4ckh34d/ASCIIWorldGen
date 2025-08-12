@@ -149,7 +149,7 @@ func glyph_for(x: int, y: int, is_land: bool, biome_id: int, is_beach: bool, rng
 		var idx_w: int = _hash2(x, y, rng_seed) % max(1, set_w.size())
 		return set_w[idx_w]
 
-func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, is_turq: PackedByteArray, turq_strength: PackedFloat32Array, is_beach: PackedByteArray, water_distance: PackedFloat32Array, biomes: PackedInt32Array, _sea_level: float, rng_seed: int, temperature: PackedFloat32Array = PackedFloat32Array(), temp_min_c: float = 0.0, temp_max_c: float = 1.0, shelf_value_noise_field: PackedFloat32Array = PackedFloat32Array(), lake_mask: PackedByteArray = PackedByteArray(), river_mask: PackedByteArray = PackedByteArray(), pooled_lake: PackedByteArray = PackedByteArray(), lava_mask: PackedByteArray = PackedByteArray()) -> String:
+func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, is_turq: PackedByteArray, turq_strength: PackedFloat32Array, is_beach: PackedByteArray, water_distance: PackedFloat32Array, biomes: PackedInt32Array, _sea_level: float, rng_seed: int, temperature: PackedFloat32Array = PackedFloat32Array(), temp_min_c: float = 0.0, temp_max_c: float = 1.0, shelf_value_noise_field: PackedFloat32Array = PackedFloat32Array(), lake_mask: PackedByteArray = PackedByteArray(), river_mask: PackedByteArray = PackedByteArray(), pooled_lake: PackedByteArray = PackedByteArray(), lava_mask: PackedByteArray = PackedByteArray(), cloud_shadow: PackedFloat32Array = PackedFloat32Array()) -> String:
 	var sb: PackedStringArray = []
 	var _depth_scale: float = max(8.0, float(min(w, h)) / 3.0)
 	# Smooth transition factor across extreme ocean fractions to avoid visual jump
@@ -222,6 +222,35 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 				var t_c: float = temp_min_c + t_norm * (temp_max_c - temp_min_c)
 				if t_c <= -10.0:
 					color = Color(1, 1, 1)
+			# Apply cloud shadow as a multiplicative darkening of the base color
+			if cloud_shadow.size() == w * h:
+				var sh: float = clamp(cloud_shadow[i], 0.0, 1.0)
+				var shade_factor: float = clamp(1.0 - 0.35 * sh, 0.0, 1.0)
+				color = Color(color.r * shade_factor, color.g * shade_factor, color.b * shade_factor, color.a)
 			sb.append("[color=" + color.to_html(false) + "]" + glyph + "[/color]")
+		sb.append("\n")
+	return "".join(sb)
+
+func build_cloud_overlay(w: int, h: int, clouds: PackedFloat32Array) -> String:
+	var sb: PackedStringArray = []
+	if clouds.size() != w * h:
+		# Empty overlay
+		for _y in range(h):
+			sb.append("\n")
+		return "".join(sb)
+	for y in range(h):
+		for x in range(w):
+			var i: int = x + y * w
+			var c: float = clamp(clouds[i], 0.0, 1.0)
+			var alpha: float = clamp(0.4 + 0.6 * c, 0.0, 1.0)
+			# Choose high-contrast block glyphs by intensity
+			var glyph: String = "▒"
+			if c > 0.66:
+				glyph = "█"
+			elif c > 0.33:
+				glyph = "▓"
+			# Make clouds pink/magenta for visibility
+			var col := Color(1.0, 0.3, 0.8, alpha)
+			sb.append("[color=" + col.to_html(true) + "]" + glyph + "[/color]")
 		sb.append("\n")
 	return "".join(sb)

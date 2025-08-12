@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://qw78b0w5gyt1"
+path="res://.godot/imported/climate_noise.glsl-e447e631160b3264dbc2a29fc79b5fcf.res"
+
+[deps]
+
+source_file="res://shaders/climate_noise.glsl"
+dest_files=["res://.godot/imported/climate_noise.glsl-e447e631160b3264dbc2a29fc79b5fcf.res"]
+
+[params]
+

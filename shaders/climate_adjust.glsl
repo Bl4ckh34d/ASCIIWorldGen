@@ -1,23 +1,23 @@
+#[compute]
+#version 450
 // File: res://shaders/climate_adjust.glsl
 // Raw GLSL compute shader for ClimateAdjust (Godot RenderingDevice)
 // Inputs: height, is_land (u32 0/1), distance_to_coast, temp_noise, moist_noise_base, flow_u, flow_v
 // Outputs: temperature, moisture, precip
 
-#version 450
-
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 // Storage buffers (set=0)
-layout(set = 0, binding = 0, std430) readonly buffer HeightBuf { float height_data[]; } Height;
-layout(set = 0, binding = 1, std430) readonly buffer IsLandBuf { uint is_land_data[]; } IsLand;
-layout(set = 0, binding = 2, std430) readonly buffer DistBuf { float dist_data[]; } Dist;
-layout(set = 0, binding = 3, std430) readonly buffer TempNoiseBuf { float temp_noise_data[]; } TempNoise;
-layout(set = 0, binding = 4, std430) readonly buffer MoistNoiseBaseBuf { float moist_noise_base_data[]; } MoistBase;
-layout(set = 0, binding = 5, std430) readonly buffer FlowUBuf { float flow_u_data[]; } FlowU;
-layout(set = 0, binding = 6, std430) readonly buffer FlowVBuf { float flow_v_data[]; } FlowV;
-layout(set = 0, binding = 7, std430) writeonly buffer OutTempBuf { float out_temp[]; } OutTemp;
-layout(set = 0, binding = 8, std430) writeonly buffer OutMoistBuf { float out_moist[]; } OutMoist;
-layout(set = 0, binding = 9, std430) writeonly buffer OutPrecipBuf { float out_precip[]; } OutPrecip;
+layout(std430, set = 0, binding = 0) buffer HeightBuf { float height_data[]; } Height;
+layout(std430, set = 0, binding = 1) buffer IsLandBuf { uint is_land_data[]; } IsLand;
+layout(std430, set = 0, binding = 2) buffer DistBuf { float dist_data[]; } Dist;
+layout(std430, set = 0, binding = 3) buffer TempNoiseBuf { float temp_noise_data[]; } TempNoise;
+layout(std430, set = 0, binding = 4) buffer MoistNoiseBaseBuf { float moist_noise_base_data[]; } MoistBase;
+layout(std430, set = 0, binding = 5) buffer FlowUBuf { float flow_u_data[]; } FlowU;
+layout(std430, set = 0, binding = 6) buffer FlowVBuf { float flow_v_data[]; } FlowV;
+layout(std430, set = 0, binding = 7) buffer OutTempBuf { float out_temp[]; } OutTemp;
+layout(std430, set = 0, binding = 8) buffer OutMoistBuf { float out_moist[]; } OutMoist;
+layout(std430, set = 0, binding = 9) buffer OutPrecipBuf { float out_precip[]; } OutPrecip;
 
 layout(push_constant) uniform Params {
     int width;
@@ -35,8 +35,8 @@ layout(push_constant) uniform Params {
 // Helpers
 float clamp01(float v) { return clamp(v, 0.0, 1.0); }
 
-// Bilinear sample of a 1D-packed WxH field
-float sample_bilinear(const float data[], int W, int H, float fx, float fy) {
+// Bilinear sample helpers specialized for MoistBase buffer (Vulkan GLSL does not allow passing SSBO arrays as function params)
+float sample_bilinear_moist(int W, int H, float fx, float fy) {
     float x = clamp(fx, 0.0, float(W - 1));
     float y = clamp(fy, 0.0, float(H - 1));
     int x0 = int(floor(x));
@@ -49,10 +49,10 @@ float sample_bilinear(const float data[], int W, int H, float fx, float fy) {
     int i10 = x1 + y0 * W;
     int i01 = x0 + y1 * W;
     int i11 = x1 + y1 * W;
-    float v00 = data[i00];
-    float v10 = data[i10];
-    float v01 = data[i01];
-    float v11 = data[i11];
+    float v00 = MoistBase.moist_noise_base_data[i00];
+    float v10 = MoistBase.moist_noise_base_data[i10];
+    float v01 = MoistBase.moist_noise_base_data[i01];
+    float v11 = MoistBase.moist_noise_base_data[i11];
     float vx0 = mix(v00, v10, tx);
     float vx1 = mix(v01, v11, tx);
     return mix(vx0, vx1, ty);
@@ -82,13 +82,13 @@ void main() {
 
     float m_base = 0.5 + 0.3 * sin(6.28318 * float(y) / float(H) * 3.0);
     // Moisture base noise sampled with offset (x+100, y-50)
-    float m_noise = 0.3 * sample_bilinear(MoistBase.moist_noise_base_data, W, H, float(x) * PC.noise_x_scale + 100.0, float(y) - 50.0);
+    float m_noise = 0.3 * sample_bilinear_moist(W, H, float(x) * PC.noise_x_scale + 100.0, float(y) - 50.0);
     // Flow advection fields (already evaluated at scaled coords on CPU when built)
     float adv_u = FlowU.flow_u_data[i];
     float adv_v = FlowV.flow_v_data[i];
     float sx = clamp(float(x) + adv_u * 6.0, 0.0, float(W - 1));
     float sy = clamp(float(y) + adv_v * 6.0, 0.0, float(H - 1));
-    float m_adv = 0.2 * sample_bilinear(MoistBase.moist_noise_base_data, W, H, sx * PC.noise_x_scale, sy);
+    float m_adv = 0.2 * sample_bilinear_moist(W, H, sx * PC.noise_x_scale, sy);
     float polar_dry = 0.20 * lat;
     float m = m_base + m_noise + m_adv - polar_dry;
 
@@ -115,5 +115,3 @@ void main() {
     OutMoist.out_moist[i] = m;
     OutPrecip.out_precip[i] = p;
 }
-
-

@@ -1,0 +1,220 @@
+# File: res://scripts/systems/BiomeCompute.gd
+extends RefCounted
+
+var BIOME_SHADER_FILE: RDShaderFile = load("res://shaders/biome_classify.glsl")
+
+var _rd: RenderingDevice
+var _shader: RID
+var _pipeline: RID
+var _smooth_shader_file: RDShaderFile = load("res://shaders/biome_smooth.glsl")
+var _smooth_shader: RID
+var _smooth_pipeline: RID
+var _reapply_shader_file: RDShaderFile = load("res://shaders/biome_reapply.glsl")
+var _reapply_shader: RID
+var _reapply_pipeline: RID
+
+func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
+	if file == null:
+		return null
+	var versions: Array = file.get_version_list()
+	if versions.is_empty():
+		return null
+	var chosen_version = versions[0]
+	for v in versions:
+		if String(v) == "vulkan":
+			chosen_version = v
+			break
+	return file.get_spirv(chosen_version)
+
+func _ensure() -> void:
+	if _rd == null:
+		_rd = RenderingServer.get_rendering_device()
+	if not _shader.is_valid():
+		var s: RDShaderSPIRV = _get_spirv(BIOME_SHADER_FILE)
+		if s == null:
+			return
+		_shader = _rd.shader_create_from_spirv(s)
+	if not _pipeline.is_valid() and _shader.is_valid():
+		_pipeline = _rd.compute_pipeline_create(_shader)
+	if not _smooth_shader.is_valid():
+		var s2: RDShaderSPIRV = _get_spirv(_smooth_shader_file)
+		if s2 != null:
+			_smooth_shader = _rd.shader_create_from_spirv(s2)
+	if not _smooth_pipeline.is_valid() and _smooth_shader.is_valid():
+		_smooth_pipeline = _rd.compute_pipeline_create(_smooth_shader)
+	if not _reapply_shader.is_valid():
+		var s3: RDShaderSPIRV = _get_spirv(_reapply_shader_file)
+		if s3 != null:
+			_reapply_shader = _rd.shader_create_from_spirv(s3)
+	if not _reapply_pipeline.is_valid() and _reapply_shader.is_valid():
+		_reapply_pipeline = _rd.compute_pipeline_create(_reapply_shader)
+
+func classify(w: int, h: int,
+		height: PackedFloat32Array,
+		is_land: PackedByteArray,
+		temperature: PackedFloat32Array,
+		moisture: PackedFloat32Array,
+		beach_mask: PackedByteArray,
+		desert_field: PackedFloat32Array,
+		params: Dictionary) -> PackedInt32Array:
+	_ensure()
+	if not _pipeline.is_valid():
+		return PackedInt32Array()
+	var size: int = max(0, w * h)
+	if size == 0:
+		return PackedInt32Array()
+	# Inputs
+	var buf_h := _rd.storage_buffer_create(height.to_byte_array().size(), height.to_byte_array())
+	var is_land_u32 := PackedInt32Array(); is_land_u32.resize(size)
+	for i in range(size): is_land_u32[i] = 1 if (i < is_land.size() and is_land[i] != 0) else 0
+	var buf_land := _rd.storage_buffer_create(is_land_u32.to_byte_array().size(), is_land_u32.to_byte_array())
+	var buf_t := _rd.storage_buffer_create(temperature.to_byte_array().size(), temperature.to_byte_array())
+	var buf_m := _rd.storage_buffer_create(moisture.to_byte_array().size(), moisture.to_byte_array())
+	var beach_u32 := PackedInt32Array(); beach_u32.resize(size)
+	for j in range(size): beach_u32[j] = 1 if (j < beach_mask.size() and beach_mask[j] != 0) else 0
+	var buf_beach := _rd.storage_buffer_create(beach_u32.to_byte_array().size(), beach_u32.to_byte_array())
+	var use_desert: bool = desert_field.size() == size
+	var buf_desert: RID
+	if use_desert:
+		buf_desert = _rd.storage_buffer_create(desert_field.to_byte_array().size(), desert_field.to_byte_array())
+	else:
+		# create minimal buffer when not used to satisfy binding
+		var dummy := PackedFloat32Array(); dummy.resize(1)
+		buf_desert = _rd.storage_buffer_create(dummy.to_byte_array().size(), dummy.to_byte_array())
+	# Output
+	var out_biomes := PackedInt32Array(); out_biomes.resize(size)
+	var buf_out := _rd.storage_buffer_create(out_biomes.to_byte_array().size(), out_biomes.to_byte_array())
+
+	# Uniform set
+	var uniforms: Array = []
+	var u: RDUniform
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(buf_h); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(buf_land); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(buf_t); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_m); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_beach); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(buf_desert); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(buf_out); uniforms.append(u)
+	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+
+	# Push constants
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h])
+	var freeze_norm: float = float(params.get("freeze_temp_threshold", 0.16))
+	# freeze provided as normalized threshold in GPU to match effective temperature space
+	var floats := PackedFloat32Array([
+		float(params.get("temp_min_c", -40.0)),
+		float(params.get("temp_max_c", 70.0)),
+		float(params.get("height_scale_m", 6000.0)),
+		float(params.get("lapse_c_per_km", 5.5)),
+		freeze_norm,
+	])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	var tail := PackedInt32Array([ (1 if use_desert else 0) ])
+	pc.append_array(tail.to_byte_array())
+	# Align to 16-byte multiple
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+
+	# Dispatch
+	var gx: int = int(ceil(float(w) / 16.0))
+	var gy: int = int(ceil(float(h) / 16.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, gx, gy, 1)
+	_rd.compute_list_end()
+
+	# Optional smoothing pass into a new buffer
+	var biomes: PackedInt32Array
+	if _smooth_pipeline.is_valid():
+		var buf_smoothed := _rd.storage_buffer_create(out_biomes.to_byte_array().size(), out_biomes.to_byte_array())
+		var uniforms_s: Array = []
+		var us: RDUniform
+		us = RDUniform.new(); us.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; us.binding = 0; us.add_id(buf_out); uniforms_s.append(us)
+		us = RDUniform.new(); us.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; us.binding = 1; us.add_id(buf_smoothed); uniforms_s.append(us)
+		var u_set_s := _rd.uniform_set_create(uniforms_s, _smooth_shader, 0)
+		var pc_s := PackedByteArray(); var ints_s := PackedInt32Array([w, h]); pc_s.append_array(ints_s.to_byte_array())
+		# Align push constants
+		var pad_s := (16 - (pc_s.size() % 16)) % 16
+		if pad_s > 0:
+			var zeros_s := PackedByteArray(); zeros_s.resize(pad_s)
+			pc_s.append_array(zeros_s)
+		var gx2 := int(ceil(float(w) / 16.0))
+		var gy2 := int(ceil(float(h) / 16.0))
+		var cl2 := _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(cl2, _smooth_pipeline)
+		_rd.compute_list_bind_uniform_set(cl2, u_set_s, 0)
+		_rd.compute_list_set_push_constant(cl2, pc_s, pc_s.size())
+		_rd.compute_list_dispatch(cl2, gx2, gy2, 1)
+		_rd.compute_list_end()
+		# Optional re-apply pass for ocean ice sheets and land glaciers
+		if _reapply_pipeline.is_valid():
+			# Inputs for re-apply: smoothed as input, copy result to same size out
+			var buf_reapply_out := _rd.storage_buffer_create(out_biomes.to_byte_array().size(), out_biomes.to_byte_array())
+			var uniforms_r: Array = []
+			var ur: RDUniform
+			ur = RDUniform.new(); ur.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ur.binding = 0; ur.add_id(buf_smoothed); uniforms_r.append(ur)
+			ur = RDUniform.new(); ur.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ur.binding = 1; ur.add_id(buf_reapply_out); uniforms_r.append(ur)
+			ur = RDUniform.new(); ur.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ur.binding = 2; ur.add_id(buf_land); uniforms_r.append(ur)
+			ur = RDUniform.new(); ur.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ur.binding = 3; ur.add_id(buf_h); uniforms_r.append(ur)
+			ur = RDUniform.new(); ur.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ur.binding = 4; ur.add_id(buf_t); uniforms_r.append(ur)
+			ur = RDUniform.new(); ur.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ur.binding = 5; ur.add_id(buf_m); uniforms_r.append(ur)
+			# ice wiggle field: if available provide, else provide dummy zero buffer
+			var ice_field := PackedFloat32Array()
+			ice_field.resize(size)
+			for ii in range(size): ice_field[ii] = 0.0
+			var buf_ice := _rd.storage_buffer_create(ice_field.to_byte_array().size(), ice_field.to_byte_array())
+			ur = RDUniform.new(); ur.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ur.binding = 6; ur.add_id(buf_ice); uniforms_r.append(ur)
+			var u_set_r := _rd.uniform_set_create(uniforms_r, _reapply_shader, 0)
+			var pc_r := PackedByteArray()
+			var ints_r := PackedInt32Array([w, h])
+			var floats_r := PackedFloat32Array([
+				float(params.get("temp_min_c", -40.0)),
+				float(params.get("temp_max_c", 70.0)),
+				float(params.get("height_scale_m", 6000.0)),
+				float(params.get("lapse_c_per_km", 5.5)),
+				-10.0, 1.0, # ocean ice threshold and wiggle amplitude
+			])
+			pc_r.append_array(ints_r.to_byte_array()); pc_r.append_array(floats_r.to_byte_array())
+			var pad_r := (16 - (pc_r.size() % 16)) % 16
+			if pad_r > 0:
+				var zeros_r := PackedByteArray(); zeros_r.resize(pad_r)
+				pc_r.append_array(zeros_r)
+			var cl3 := _rd.compute_list_begin()
+			_rd.compute_list_bind_compute_pipeline(cl3, _reapply_pipeline)
+			_rd.compute_list_bind_uniform_set(cl3, u_set_r, 0)
+			_rd.compute_list_set_push_constant(cl3, pc_r, pc_r.size())
+			_rd.compute_list_dispatch(cl3, gx2, gy2, 1)
+			_rd.compute_list_end()
+			var bytes3 := _rd.buffer_get_data(buf_reapply_out)
+			biomes = bytes3.to_int32_array()
+			_rd.free_rid(u_set_r)
+			_rd.free_rid(buf_reapply_out)
+			_rd.free_rid(buf_ice)
+		else:
+			var bytes2 := _rd.buffer_get_data(buf_smoothed)
+			biomes = bytes2.to_int32_array()
+		_rd.free_rid(u_set_s)
+		_rd.free_rid(buf_smoothed)
+	else:
+		var bytes := _rd.buffer_get_data(buf_out)
+		biomes = bytes.to_int32_array()
+
+	# Cleanup
+	_rd.free_rid(u_set)
+	_rd.free_rid(buf_h)
+	_rd.free_rid(buf_land)
+	_rd.free_rid(buf_t)
+	_rd.free_rid(buf_m)
+	_rd.free_rid(buf_beach)
+	_rd.free_rid(buf_desert)
+	_rd.free_rid(buf_out)
+
+	return biomes
+
+

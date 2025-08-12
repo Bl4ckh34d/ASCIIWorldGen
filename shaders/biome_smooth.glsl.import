@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cv7dpmdun8p7i"
+path="res://.godot/imported/biome_smooth.glsl-c3137f30aeef728c224a078ac522c054.res"
+
+[deps]
+
+source_file="res://shaders/biome_smooth.glsl"
+dest_files=["res://.godot/imported/biome_smooth.glsl-c3137f30aeef728c224a078ac522c054.res"]
+
+[params]
+

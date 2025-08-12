@@ -5,18 +5,32 @@ extends RefCounted
 ## CPU fallback kept by caller.
 
 const CLIMATE_SHADER_FILE := preload("res://shaders/climate_adjust.glsl")
+var CLIMATE_NOISE_SHADER_FILE: RDShaderFile = load("res://shaders/climate_noise.glsl")
 
 var _rd: RenderingDevice
 var _shader: RID
 var _pipeline: RID
 
+func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
+	if file == null:
+		return null
+	var versions: Array = file.get_version_list()
+	if versions.is_empty():
+		return null
+	var chosen_version = versions[0]
+	for v in versions:
+		if String(v) == "vulkan":
+			chosen_version = v
+			break
+	return file.get_spirv(chosen_version)
+
 func _ensure_device_and_pipeline() -> void:
 	if _rd == null:
-		# Create isolated compute device; avoids interfering with main renderer
-		_rd = RenderingServer.create_local_rendering_device()
+		# Use main rendering device to avoid version mismatch with imported SPIR-V
+		_rd = RenderingServer.get_rendering_device()
 	if not _shader.is_valid():
 		# Ensure shader import resource exists and has compute entry
-		var spirv: RDShaderSPIRV = CLIMATE_SHADER_FILE.get_spirv("vulkan")
+		var spirv: RDShaderSPIRV = _get_spirv(CLIMATE_SHADER_FILE)
 		if spirv == null:
 			return
 		_shader = _rd.shader_create_from_spirv(spirv)
@@ -51,6 +65,77 @@ func _pack_push_constants(width: int, height: int, params: Dictionary, ocean_fra
 	arr.append_array(ints.to_byte_array())
 	arr.append_array(floats.to_byte_array())
 	return arr
+
+func _compute_noise_fields_gpu(w: int, h: int, params: Dictionary, xscale: float) -> Dictionary:
+	# Build climate base noise fields on GPU if shader is available
+	if CLIMATE_NOISE_SHADER_FILE == null:
+		return {}
+	var spirv: RDShaderSPIRV = _get_spirv(CLIMATE_NOISE_SHADER_FILE)
+	if spirv == null:
+		return {}
+	var shader: RID = _rd.shader_create_from_spirv(spirv)
+	var pipeline: RID = _rd.compute_pipeline_create(shader)
+	var size: int = max(0, w * h)
+	var out_t := PackedFloat32Array(); out_t.resize(size)
+	var out_mb := PackedFloat32Array(); out_mb.resize(size)
+	var out_mr := PackedFloat32Array(); out_mr.resize(size)
+	var out_u := PackedFloat32Array(); out_u.resize(size)
+	var out_v := PackedFloat32Array(); out_v.resize(size)
+	var buf_t := _rd.storage_buffer_create(out_t.to_byte_array().size(), out_t.to_byte_array())
+	var buf_mb := _rd.storage_buffer_create(out_mb.to_byte_array().size(), out_mb.to_byte_array())
+	var buf_mr := _rd.storage_buffer_create(out_mr.to_byte_array().size(), out_mr.to_byte_array())
+	var buf_u := _rd.storage_buffer_create(out_u.to_byte_array().size(), out_u.to_byte_array())
+	var buf_v := _rd.storage_buffer_create(out_v.to_byte_array().size(), out_v.to_byte_array())
+	var uniforms: Array = []
+	var u: RDUniform
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(buf_t); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(buf_mb); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(buf_mr); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_u); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_v); uniforms.append(u)
+	var u_set := _rd.uniform_set_create(uniforms, shader, 0)
+	var pc := PackedByteArray()
+	var wrap_x_int: int = 1
+	var seed_val: int = int(params.get("seed", 0))
+	var ints := PackedInt32Array([w, h, wrap_x_int, seed_val])
+	var floats := PackedFloat32Array([xscale])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	# Align to 16-byte multiple; shader expects 32 bytes due to padding
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	var gx: int = int(ceil(float(w) / 16.0))
+	var gy: int = int(ceil(float(h) / 16.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, gx, gy, 1)
+	_rd.compute_list_end()
+	# Read back
+	var t_bytes := _rd.buffer_get_data(buf_t)
+	var mb_bytes := _rd.buffer_get_data(buf_mb)
+	var mr_bytes := _rd.buffer_get_data(buf_mr)
+	var u_bytes := _rd.buffer_get_data(buf_u)
+	var v_bytes := _rd.buffer_get_data(buf_v)
+	var out := {
+		"temp_noise": t_bytes.to_float32_array(),
+		"moist_noise_base_offset": mb_bytes.to_float32_array(),
+		"moist_noise_raw": mr_bytes.to_float32_array(),
+		"flow_u": u_bytes.to_float32_array(),
+		"flow_v": v_bytes.to_float32_array(),
+	}
+	_rd.free_rid(u_set)
+	_rd.free_rid(buf_t)
+	_rd.free_rid(buf_mb)
+	_rd.free_rid(buf_mr)
+	_rd.free_rid(buf_u)
+	_rd.free_rid(buf_v)
+	_rd.free_rid(pipeline)
+	_rd.free_rid(shader)
+	return out
 
 func _compute_noise_fields(w: int, h: int, base: Dictionary, xscale: float) -> Dictionary:
 	var size := w * h
@@ -94,14 +179,20 @@ func evaluate(w: int, h: int,
 
 	# Build noise fields once on CPU; upload as buffers
 	var xscale: float = float(params.get("noise_x_scale", 1.0))
-	var nf: Dictionary = _compute_noise_fields(w, h, base, xscale)
+	var nf: Dictionary = _compute_noise_fields_gpu(w, h, params, xscale)
+	if nf.is_empty():
+		nf = _compute_noise_fields(w, h, base, xscale)
 
 	if not _shader.is_valid() or not _pipeline.is_valid():
 		return {}
 
 	# Create buffers
 	var buf_height: RID = _create_storage_buffer_from_f32(height)
-	var buf_is_land: RID = _create_storage_buffer_from_u8(is_land)
+	# Convert land mask to u32 for GLSL uint[]
+	var is_land_u32 := PackedInt32Array(); is_land_u32.resize(size)
+	for i_mask in range(size):
+		is_land_u32[i_mask] = 1 if (i_mask < is_land.size() and is_land[i_mask] != 0) else 0
+	var buf_is_land: RID = _rd.storage_buffer_create(is_land_u32.to_byte_array().size(), is_land_u32.to_byte_array())
 	var buf_dist: RID = _create_storage_buffer_from_f32(distance_to_coast)
 	var buf_temp_noise: RID = _create_storage_buffer_from_f32(nf["temp_noise"])
 	var buf_moist_base_offset: RID = _create_storage_buffer_from_f32(nf["moist_noise_base_offset"])
@@ -133,6 +224,11 @@ func evaluate(w: int, h: int,
 	var uniform_set: RID = _rd.uniform_set_create(uniforms, _shader, 0)
 
 	var pc := _pack_push_constants(w, h, params, ocean_frac)
+	# Align to 16 bytes to satisfy Vulkan push constant alignment
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
 
 	var groups_x: int = int(ceil(float(w) / 16.0))
 	var groups_y: int = int(ceil(float(h) / 16.0))
@@ -143,8 +239,6 @@ func evaluate(w: int, h: int,
 	_rd.compute_list_set_push_constant(cl_id, pc, pc.size())
 	_rd.compute_list_dispatch(cl_id, groups_x, groups_y, 1)
 	_rd.compute_list_end()
-	_rd.submit()
-	_rd.sync()
 
 	# Read back outputs
 	var temp_bytes: PackedByteArray = _rd.buffer_get_data(buf_out_temp)

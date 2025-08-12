@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cf25ms17bg6e4"
+path="res://.godot/imported/feature_noise.glsl-183bdd4ba58e211f4a88a6ac65b937d7.res"
+
+[deps]
+
+source_file="res://shaders/feature_noise.glsl"
+dest_files=["res://.godot/imported/feature_noise.glsl-183bdd4ba58e211f4a88a6ac65b937d7.res"]
+
+[params]
+

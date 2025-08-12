@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cnv4u02vmh5q"
+path="res://.godot/imported/biome_classify.glsl-a90cd61c9d32b1cd97b080622ff81604.res"
+
+[deps]
+
+source_file="res://shaders/biome_classify.glsl"
+dest_files=["res://.godot/imported/biome_classify.glsl-a90cd61c9d32b1cd97b080622ff81604.res"]
+
+[params]
+

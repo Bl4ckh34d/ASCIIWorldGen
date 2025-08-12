@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dgnxs3502ax0u"
+path="res://.godot/imported/biome_reapply.glsl-39f681c6a539359921c56736060fa58a.res"
+
+[deps]
+
+source_file="res://shaders/biome_reapply.glsl"
+dest_files=["res://.godot/imported/biome_reapply.glsl-39f681c6a539359921c56736060fa58a.res"]
+
+[params]
+

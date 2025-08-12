@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://lakemark456"
+path="res://.godot/imported/lake_mark_boundary.glsl-0a67cc0c3a920352594eb8e96e6c7f37.res"
+
+[deps]
+
+source_file="res://shaders/lake_mark_boundary.glsl"
+dest_files=["res://.godot/imported/lake_mark_boundary.glsl-0a67cc0c3a920352594eb8e96e6c7f37.res"]
+
+[params]
+

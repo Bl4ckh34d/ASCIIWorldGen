@@ -19,6 +19,7 @@ var AsciiStyler = load("res://scripts/style/AsciiStyler.gd")
 const RandomizeService = preload("res://scripts/ui/RandomizeService.gd")
 var highlight_rect: ColorRect
 var highlight_label: Label
+var cloud_map: RichTextLabel
 var last_ascii_text: String = ""
 var styler_single: Object
 var char_w_cached: float = 0.0
@@ -26,7 +27,7 @@ var char_h_cached: float = 0.0
 var sea_debounce_timer: Timer
 var sea_update_pending: bool = false
 var sea_signal_blocked: bool = false
-var map_scale: int = 2
+var map_scale: int = 1
 var base_width: int = 0
 var base_height: int = 0
 
@@ -40,6 +41,18 @@ func _ready() -> void:
 	ascii_map.mouse_entered.connect(_on_map_enter)
 	ascii_map.mouse_exited.connect(_on_map_exit)
 	_create_highlight_overlay()
+	# Create cloud overlay label above the ASCII map
+	cloud_map = RichTextLabel.new()
+	cloud_map.bbcode_enabled = true
+	cloud_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cloud_map.z_index = 2000
+	cloud_map.fit_content = false
+	cloud_map.scroll_active = false
+	cloud_map.clip_contents = false
+	cloud_map.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cloud_map.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	cloud_map.anchors_preset = Control.PRESET_FULL_RECT
+	ascii_map.add_child(cloud_map)
 	styler_single = AsciiStyler.new()
 	ascii_map.resized.connect(_on_map_resized)
 	sea_slider.value_changed.connect(_on_sea_changed)
@@ -52,6 +65,10 @@ func _ready() -> void:
 	if settings_dialog.has_signal("settings_applied"):
 		settings_dialog.connect("settings_applied", Callable(self, "_on_settings_applied"))
 	_reset_view()
+	# Auto-generate first world on startup at base resolution
+	base_width = generator.config.width
+	base_height = generator.config.height
+	_generate_and_draw()
 	# capture base dimensions for scaling
 	base_width = generator.config.width
 	base_height = generator.config.height
@@ -95,15 +112,22 @@ func _generate_and_draw() -> void:
 	var w: int = generator.config.width
 	var h: int = generator.config.height
 	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava)
+	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds)
+	# Optional: draw cloud overlay layer on top with translucent glyphs
+	var clouds_text: String = styler.build_cloud_overlay(w, h, generator.last_clouds)
 	ascii_map.clear()
 	ascii_map.append_text(ascii_str)
+	cloud_map.clear()
+	cloud_map.append_text(clouds_text)
+	cloud_map.visible = true
 	last_ascii_text = ascii_str
 	_update_char_size_cache()
 
 func _reset_view() -> void:
 	ascii_map.clear()
 	ascii_map.append_text("")
+	if cloud_map:
+		cloud_map.clear()
 	info_label.text = "Hover: -"
 	seed_used_label.text = "Used: -"
 	last_ascii_text = ""
@@ -171,7 +195,9 @@ func _generate_and_draw_preserve_seed() -> void:
 		"height": max(1, base_height * map_scale),
 	}
 	generator.apply_config(scaled_cfg)
-	var grid: PackedByteArray = generator.last_is_land if generator.last_is_land.size() == generator.get_width() * generator.get_height() else generator.generate()
+	# Force a fast recompute of sea-dependent fields (lakes, beaches, water distance)
+	generator.quick_update_sea_level(float(sea_slider.value))
+	var grid: PackedByteArray = generator.last_is_land
 	var w: int = generator.config.width
 	var h: int = generator.config.height
 	var styler: Object = AsciiStyler.new()
@@ -194,6 +220,8 @@ func _apply_monospace_font() -> void:
 	# Some platforms may fail to resolve; guard against null override
 	if sys != null:
 		ascii_map.add_theme_font_override("normal_font", sys)
+		if cloud_map:
+			cloud_map.add_theme_font_override("normal_font", sys)
 		if highlight_label:
 			highlight_label.add_theme_font_override("font", sys)
 			highlight_label.add_theme_color_override("font_color", Color(0, 0, 0, 1))

@@ -27,7 +27,7 @@ signal settings_applied(config: Dictionary)
 @onready var shore_band: SpinBox = $VBox/Tabs/Ocean/Grid/ShoreBand
 @onready var shore_noise_mult: SpinBox = $VBox/Tabs/Ocean/Grid/ShoreNoiseMult
 @onready var polar_cap_frac: SpinBox = $VBox/Tabs/Climate/Grid/PolarCapFrac
-@onready var gpu_climate: CheckBox = $VBox/Tabs/Climate/Grid/GPUClimate
+@onready var gpu_all: CheckBox = $VBox/Tabs/General/Grid/GPUAll
 
 func _ready() -> void:
     apply_button.pressed.connect(_on_apply)
@@ -51,7 +51,7 @@ func _on_apply() -> void:
         "shore_noise_mult": float(shore_noise_mult.value),
         "polar_cap_frac": float(polar_cap_frac.value),
         # compute toggles
-        "use_gpu_climate": bool(gpu_climate.button_pressed),
+        "use_gpu_all": bool(gpu_all.button_pressed),
         # rivers
         "river_enabled": bool(river_enabled.button_pressed),
         "river_droplets_factor": float(river_droplets.value),

@@ -150,11 +150,11 @@ max_value = 0.5
 step = 0.01
 value = 0.12
 
-[node name="GPUClimateLabel" type="Label" parent="VBox/Tabs/Climate/Grid"]
-text = "GPU Climate (Compute)"
+[node name="GPUAllLabel" type="Label" parent="VBox/Tabs/General/Grid"]
+text = "GPU Compute (All)"
 
-[node name="GPUClimate" type="CheckBox" parent="VBox/Tabs/Climate/Grid"]
-button_pressed = false
+[node name="GPUAll" type="CheckBox" parent="VBox/Tabs/General/Grid"]
+button_pressed = true
 text = "Enable"
 
 

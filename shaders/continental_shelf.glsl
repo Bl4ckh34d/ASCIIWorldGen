@@ -1,18 +1,18 @@
-// File: res://shaders/continental_shelf.glsl
+#[compute]
 #version 450
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 // Inputs set=0
-layout(set = 0, binding = 0, std430) readonly buffer HeightBuf { float height_data[]; } Height;
-layout(set = 0, binding = 1, std430) readonly buffer IsLandBuf { uint is_land_data[]; } IsLand;
-layout(set = 0, binding = 2, std430) readonly buffer DistBuf { float dist_to_land[]; } Dist;
-layout(set = 0, binding = 3, std430) readonly buffer ShoreNoiseBuf { float shore_noise[]; } ShoreNoise;
+layout(std430, set = 0, binding = 0) buffer HeightBuf { float height_data[]; } Height;
+layout(std430, set = 0, binding = 1) buffer IsLandBuf { uint is_land_data[]; } IsLand;
+layout(std430, set = 0, binding = 2) buffer DistBuf { float dist_to_land[]; } Dist;
+layout(std430, set = 0, binding = 3) buffer ShoreNoiseBuf { float shore_noise[]; } ShoreNoise;
 
 // Outputs set=0
-layout(set = 0, binding = 4, std430) writeonly buffer OutTurqBuf { uint out_turquoise[]; } OutTurq;
-layout(set = 0, binding = 5, std430) writeonly buffer OutBeachBuf { uint out_beach[]; } OutBeach;
-layout(set = 0, binding = 6, std430) writeonly buffer OutTurqStrengthBuf { float out_turq_strength[]; } OutStrength;
+layout(std430, set = 0, binding = 4) buffer OutTurqBuf { uint out_turquoise[]; } OutTurq;
+layout(std430, set = 0, binding = 5) buffer OutBeachBuf { uint out_beach[]; } OutBeach;
+layout(std430, set = 0, binding = 6) buffer OutTurqStrengthBuf { float out_turq_strength[]; } OutStrength;
 
 layout(push_constant) uniform Params {
     int width;
@@ -91,5 +91,3 @@ void main() {
         OutTurq.out_turquoise[i] = 1u;
     }
 }
-
-

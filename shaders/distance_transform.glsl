@@ -1,17 +1,18 @@
-// File: res://shaders/distance_transform.glsl
+#[compute]
 #version 450
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, std430) readonly buffer LandBuf { uint is_land[]; } Land;
-layout(set = 0, binding = 1, std430) readonly buffer DistInBuf { float dist_in[]; } DistIn;
-layout(set = 0, binding = 2, std430) writeonly buffer DistOutBuf { float dist_out[]; } DistOut;
+layout(std430, set = 0, binding = 0) buffer LandBuf { uint is_land[]; } Land;
+layout(std430, set = 0, binding = 1) buffer DistInBuf { float dist_in[]; } DistIn;
+layout(std430, set = 0, binding = 2) buffer DistOutBuf { float dist_out[]; } DistOut;
 
 layout(push_constant) uniform Params { int width; int height; int wrap_x; int mode; } PC; // mode: 0 fwd, 1 bwd
 
 int idx(int x, int y) { return x + y * PC.width; }
 
-float min3(float a, float b, float c) { return min(min(a,b), c); }
+// Avoid built-in min precision overload issues by using explicit helpers
+float minf(float a, float b) { return a < b ? a : b; }
 
 void main() {
     uint x = gl_GlobalInvocationID.x;
@@ -38,29 +39,27 @@ void main() {
         int xr = int(x) + 1; if (PC.wrap_x == 1) xr = (xr % W + W) % W;
         int yt = int(y) - 1;
         // left
-        if (xl >= 0 && xl < W) best = min(best, DistIn.dist_in[idx(xl, int(y))] + C1);
+        if (xl >= 0 && xl < W) best = minf(best, DistIn.dist_in[idx(xl, int(y))] + C1);
         // top
-        if (yt >= 0) best = min(best, DistIn.dist_in[idx(int(x), yt)] + C1);
+        if (yt >= 0) best = minf(best, DistIn.dist_in[idx(int(x), yt)] + C1);
         // top-left
-        if (yt >= 0 && xl >= 0 && xl < W) best = min(best, DistIn.dist_in[idx(xl, yt)] + C2);
+        if (yt >= 0 && xl >= 0 && xl < W) best = minf(best, DistIn.dist_in[idx(xl, yt)] + C2);
         // top-right
-        if (yt >= 0) best = min(best, DistIn.dist_in[idx(xr < W ? xr : (PC.wrap_x == 1 ? (xr % W) : W - 1), yt)] + C2);
+        if (yt >= 0) best = minf(best, DistIn.dist_in[idx(xr < W ? xr : (PC.wrap_x == 1 ? (xr % W) : W - 1), yt)] + C2);
     } else {
         // backward: neighbors below and right
         int xl = int(x) - 1; if (PC.wrap_x == 1) xl = (xl % W + W) % W;
         int xr = int(x) + 1; if (PC.wrap_x == 1) xr = (xr % W + W) % W;
         int yb = int(y) + 1;
         // right
-        if (xr < W || PC.wrap_x == 1) best = min(best, DistIn.dist_in[idx(xr < W ? xr : (xr % W), int(y))] + C1);
+        if (xr < W || PC.wrap_x == 1) best = minf(best, DistIn.dist_in[idx(xr < W ? xr : (xr % W), int(y))] + C1);
         // bottom
-        if (yb < H) best = min(best, DistIn.dist_in[idx(int(x), yb)] + C1);
+        if (yb < H) best = minf(best, DistIn.dist_in[idx(int(x), yb)] + C1);
         // bottom-left
-        if (yb < H) best = min(best, DistIn.dist_in[idx(xl, yb)] + C2);
+        if (yb < H) best = minf(best, DistIn.dist_in[idx(xl, yb)] + C2);
         // bottom-right
-        if (yb < H) best = min(best, DistIn.dist_in[idx(xr < W ? xr : (xr % W), yb)] + C2);
+        if (yb < H) best = minf(best, DistIn.dist_in[idx(xr < W ? xr : (xr % W), yb)] + C2);
     }
 
     DistOut.dist_out[i] = best;
 }
-
-
