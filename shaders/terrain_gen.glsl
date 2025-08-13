@@ -143,7 +143,8 @@ void main(){
     }
 
     // Height shaping similar to CPU path
-    float hval = 0.65 * fbm + 0.45 * cont;
+    // Slightly boost detail by weighting base FBM more; continental stays as low-frequency scaffold
+    float hval = 0.72 * fbm + 0.38 * cont;
     // Basic circular falloff when not wrapping X
     if (PC.wrap_x == 0) {
         float cx = float(W) * 0.5;
@@ -155,7 +156,8 @@ void main(){
         float falloff = clamp(1.0 - r * 0.85, 0.0, 1.0);
         hval = hval * 0.85 + falloff * 0.15;
     }
-    float gamma = 0.65;
+    // Reduce gamma a touch so small-scale detail survives shaping
+    float gamma = 0.60;
     float a = abs(hval);
     hval = (hval >= 0.0 ? 1.0 : -1.0) * pow(a, gamma);
     hval *= 1.10;

@@ -219,7 +219,30 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 				var _is_turq_here: bool = (i < is_turq.size()) and is_turq[i] != 0
 				var _turq_here: float = (turq_strength[i] if i < turq_strength.size() else 0.0)
 				# Color all water (sea, ocean, lakes, rivers) using the same ocean water palette
-				color = color_for_water(hv, _sea_level, _is_turq_here, _turq_here, (water_distance[i] if i < water_distance.size() else 0.0), _depth_scale, _shelf_noise)
+				# Lakes: reuse ocean shelf coloring by synthesizing a local shelf mask near lake shores
+				var shelf_val: float = _shelf_noise
+				if lake_here:
+					# Approximate distance to lake shore using height offset from sea level as proxy
+					# near edges (land neighbors). Simple 8-neighbor check for land adjacency
+					var near_shore: bool = false
+					if land: # hydrolake_on_land
+						near_shore = true
+					else:
+						var cx: int = x
+						var cy: int = y
+						for ddy in range(-1, 2):
+							for ddx in range(-1, 2):
+								if ddx == 0 and ddy == 0: continue
+								var nx: int = cx + ddx
+								var ny: int = cy + ddy
+								if nx < 0 or ny < 0 or nx >= w or ny >= h: continue
+								var ni: int = nx + ny * w
+								if i < is_land.size() and is_land[ni] != 0: near_shore = true
+								if near_shore: break
+							if near_shore: break
+					var local_shelf: float = (1.0 if near_shore else 0.0)
+					shelf_val = max(shelf_val, local_shelf)
+				color = color_for_water(hv, _sea_level, _is_turq_here, _turq_here, (water_distance[i] if i < water_distance.size() else 0.0), _depth_scale, shelf_val)
 				# Rivers use the same glyph as ocean for consistency
 				if river_here:
 					glyph = "~"

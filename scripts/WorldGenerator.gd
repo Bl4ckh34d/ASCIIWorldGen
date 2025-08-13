@@ -887,7 +887,7 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_biomes = new_biomes
 	_ensure_valid_biomes()
 	# Centralized hot/cold/lava application
-	var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c, last_lake)
+	var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c, last_lake, last_pooled_lake)
 	last_biomes = post2["biomes"]
 	last_lava = post2["lava"]
 

@@ -109,11 +109,15 @@ void main(){
     float sx = float(x) + wx;
     float sy = float(y) + wy;
     float fbm_val = fbm2(vec2(sx * PC.noise_x_scale, sy), PC.base_freq, PC.octaves, PC.lacunarity, PC.gain);
+    // Add a higher-frequency detail FBM band (finer "frizzy" structure)
+    int det_oct = min(PC.octaves, 3);
+    float detail_val = fbm2(vec2(sx * PC.noise_x_scale * 3.0, sy * 3.0), PC.base_freq * 2.5, det_oct, PC.lacunarity * 1.35, PC.gain * 0.85);
+    float fbm_combined = mix(fbm_val, detail_val, 0.28);
     // Continental base (unwarped, lower freq)
     float cont_val = fbm2(vec2(float(x) * 0.5 * PC.noise_x_scale, float(y) * 0.5), PC.cont_freq, PC.octaves, PC.lacunarity, PC.gain);
 
     // Clamp to [-1,1] for safety
-    OutFBM.out_fbm[i] = clamp(fbm_val, -1.0, 1.0);
+    OutFBM.out_fbm[i] = clamp(fbm_combined, -1.0, 1.0);
     OutCont.out_cont[i] = clamp(cont_val, -1.0, 1.0);
 }
 

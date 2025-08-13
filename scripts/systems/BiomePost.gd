@@ -3,7 +3,7 @@ extends RefCounted
 
 const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 
-func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperature: PackedFloat32Array, moisture: PackedFloat32Array, biomes: PackedInt32Array, temp_min_c: float, temp_max_c: float, lava_temp_threshold_c: float, lake_mask: PackedByteArray = PackedByteArray()) -> Dictionary:
+func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperature: PackedFloat32Array, moisture: PackedFloat32Array, biomes: PackedInt32Array, temp_min_c: float, temp_max_c: float, lava_temp_threshold_c: float, lake_mask: PackedByteArray = PackedByteArray(), pooled_lake: PackedByteArray = PackedByteArray()) -> Dictionary:
 	var out_biomes := biomes
 	var lava := PackedByteArray()
 	lava.resize(w * h)
@@ -74,7 +74,8 @@ func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperat
 			if t_c >= lava_temp_threshold_c:
 				lava[i] = 1
 			# Salt desert: where lakes existed and dried under heat on land (but not lava)
-			if lava[i] == 0 and lake_mask.size() == w * h and lake_mask[i] != 0 and t_c >= 53.0 and t_c < lava_temp_threshold_c:
+			var was_lake: bool = (lake_mask.size() == w * h and lake_mask[i] != 0) or (pooled_lake.size() == w * h and pooled_lake[i] != 0)
+			if lava[i] == 0 and was_lake and t_c >= 53.0 and t_c < lava_temp_threshold_c:
 				out_biomes[i] = BiomeClassifier.Biome.SALT_DESERT
 	return {
 		"biomes": out_biomes,

@@ -64,7 +64,7 @@
   - DONE: Step 2b basin assignment via following `flow_dir` to sinks.
   - DONE: Step 2c strict fill to `SpillElevation` for each basin; compute `LakeMask = (H < SpillElevation) ∧ L` per basin; collect and sort pour candidates `(i, o, c)`.
   - DONE: Seeding — select 0–3 outflows per lake with weighted bias towards 0–1; OR with percentile+NMS seeds.
-  - DONE: Tracing — keep “stop at ocean or lakes”; prune by min length.
+- DONE: Tracing — keep "stop at ocean or lakes"; prune by min length.
   - DONE: Outputs extended:
     - `flow_dir`, `flow_accum`, `river`, `lake`, `lake_id`, `lake_level`, `outflow_seeds`, `pour_points`.
   - TODO: Honor `wrap_x` in neighbor checks during pooling/labeling for perfect parity with GPU.
@@ -84,7 +84,7 @@ Phase 2 — All-GPU fill (optional optimization)
   - Outputs: `DrainElev` (R32F). Compute `LakeMask = (DrainElev > Height) ∧ (IsLand == 1)`.
   - Convergence: iterate a fixed number or until no-change flag remains unset (atomic counter). For first version, bound iterations (e.g., O(map diameter)) and accept slight over-iteration for simplicity.
 - DONE: Label lakes from `LakeMask` via `shaders/lake_label_from_mask.glsl` and `scripts/systems/LakeLabelFromMaskCompute.gd`.
-  - Reuse the existing label-propagation concept with a small change: treat `LakeMask` as “water” instead of `is_land == 0`.
+- Reuse the existing label-propagation concept with a small change: treat `LakeMask` as "water" instead of `is_land == 0`.
   - New shader (or parameterize existing) to propagate labels only where `LakeMask == 1`.
 - Pour points:
   - DONE: Read back `LakeMask` + labels and compute pour candidates on CPU (`FlowErosionSystem.compute_pour_from_labels`).
@@ -142,7 +142,7 @@ Phase 2 — All-GPU fill (optional optimization)
 
 ```glsl
 // File: shaders/lake_label_from_mask.glsl (sketch)
-// Same as lake_label_propagate but treat LakeMask==1 as “water”.
+// Same as lake_label_propagate but treat LakeMask==1 as "water".
 ```
 
 ### Parameters (add to config/UI)
