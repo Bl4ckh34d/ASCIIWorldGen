@@ -288,13 +288,21 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 						spill = c
 		if spill <= sea_level:
 			continue
-		# Strict fill: mark all member cells below spill as lake and set lake_level
+		# Tie lake water level to ocean level: as sea level lowers, lakes dry up.
+		# Blend spill elevation toward sea level using a dryness factor d in [0,1]
+		# where d increases as sea_level goes below 0. This yields a progressive
+		# shrink band between sea_level and effective_level.
+		var d: float = clamp(-sea_level, 0.0, 1.0)
+		var effective_level: float = spill
+		if d > 0.0 and sea_level < spill:
+			effective_level = spill - d * (spill - sea_level)
+		# Fill: mark member cells below the effective lake level
 		var any_filled: bool = false
 		for m2 in members:
 			var i2: int = int(m2)
-			if height[i2] < spill:
+			if height[i2] < effective_level:
 				lake_mask[i2] = 1
-				lake_level[i2] = spill
+				lake_level[i2] = effective_level
 				any_filled = true
 		if not any_filled:
 			continue

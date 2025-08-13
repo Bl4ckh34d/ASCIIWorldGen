@@ -409,19 +409,36 @@ func generate() -> PackedByteArray:
 			if use_gpu_pool:
 				var E_out: Dictionary = DepressionFillCompute.new().compute_E(w, h, last_height, last_is_land, true, 96)
 				var lake_mask_gpu: PackedByteArray = E_out.get("lake", PackedByteArray())
+				# Drying coupling: shrink GPU lake mask toward sea level when sea level is low
+				var lake_mask_for_label: PackedByteArray = lake_mask_gpu
+				var E_gpu: PackedFloat32Array = E_out.get("E", PackedFloat32Array())
+				var size_gpu: int = w * h
+				if E_gpu.size() == size_gpu and lake_mask_gpu.size() == size_gpu:
+					var d: float = clamp(-config.sea_level, 0.0, 1.0)
+					if d > 0.0:
+						lake_mask_for_label = lake_mask_gpu.duplicate()
+						for ii_d in range(size_gpu):
+							if last_is_land[ii_d] == 0:
+								lake_mask_for_label[ii_d] = 0
+								continue
+							var spill: float = E_gpu[ii_d]
+							var eff: float = spill
+							if config.sea_level < spill:
+								eff = spill - d * (spill - config.sea_level)
+							lake_mask_for_label[ii_d] = (1 if last_height[ii_d] < eff else 0)
 				var pool_gpu := {}
-				if lake_mask_gpu.size() == w * h:
-					var lab: Dictionary = LakeLabelFromMaskCompute.new().label_from_mask(w, h, lake_mask_gpu, true)
+				if lake_mask_for_label.size() == w * h:
+					var lab: Dictionary = LakeLabelFromMaskCompute.new().label_from_mask(w, h, lake_mask_for_label, true)
 					if not lab.is_empty() and lab.has("lake") and lab.has("lake_id"):
 						# Performance: mark boundary candidates on GPU, then reduce on CPU to minimal cost per lake
-						var boundary_marked: PackedInt32Array = PourPointReduceCompute.new().mark_candidates(w, h, lake_mask_gpu, last_is_land, true)
+						var boundary_marked: PackedInt32Array = PourPointReduceCompute.new().mark_candidates(w, h, lake_mask_for_label, last_is_land, true)
 						# Build a masked lake_id map with only candidate cells retained
 						var cand_lake_id: PackedInt32Array = lab["lake_id"]
 						if boundary_marked.size() == w * h:
 							for ii in range(w * h):
 								if boundary_marked[ii] == 0: cand_lake_id[ii] = 0
 						# Derive pour points and forced seeds on CPU from GPU-labeled lakes (candidates masked)
-						var pour: Dictionary = FlowErosionSystem.new().compute_pour_from_labels(w, h, last_height, last_is_land, lake_mask_gpu, cand_lake_id, {
+						var pour: Dictionary = FlowErosionSystem.new().compute_pour_from_labels(w, h, last_height, last_is_land, lake_mask_for_label, cand_lake_id, {
 							"wrap_x": true,
 							"shore_band": config.shore_band,
 							"dist_to_ocean": last_water_distance,
@@ -885,11 +902,28 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 			# Sea-level quick path: prefer GPU fill+label, fallback to CPU strict pooling
 			var E2: Dictionary = DepressionFillCompute.new().compute_E(w, h, last_height, last_is_land, true, 64)
 			var lake_mask2: PackedByteArray = E2.get("lake", PackedByteArray())
+			# Drying coupling during quick sea-level updates (GPU)
+			var lake_mask2_adj: PackedByteArray = lake_mask2
+			var E2f: PackedFloat32Array = E2.get("E", PackedFloat32Array())
+			var size_q: int = w * h
+			if E2f.size() == size_q and lake_mask2.size() == size_q:
+				var d2: float = clamp(-config.sea_level, 0.0, 1.0)
+				if d2 > 0.0:
+					lake_mask2_adj = lake_mask2.duplicate()
+					for qi in range(size_q):
+						if last_is_land[qi] == 0:
+							lake_mask2_adj[qi] = 0
+							continue
+						var spill_q: float = E2f[qi]
+						var eff_q: float = spill_q
+						if config.sea_level < spill_q:
+							eff_q = spill_q - d2 * (spill_q - config.sea_level)
+						lake_mask2_adj[qi] = (1 if last_height[qi] < eff_q else 0)
 			var pool2_gpu := {}
-			if lake_mask2.size() == w * h:
-				var lab2: Dictionary = LakeLabelFromMaskCompute.new().label_from_mask(w, h, lake_mask2, true)
+			if lake_mask2_adj.size() == w * h:
+				var lab2: Dictionary = LakeLabelFromMaskCompute.new().label_from_mask(w, h, lake_mask2_adj, true)
 				if not lab2.is_empty() and lab2.has("lake") and lab2.has("lake_id"):
-					var pour2: Dictionary = FlowErosionSystem.new().compute_pour_from_labels(w, h, last_height, last_is_land, lake_mask2, lab2["lake_id"], {
+					var pour2: Dictionary = FlowErosionSystem.new().compute_pour_from_labels(w, h, last_height, last_is_land, lake_mask2_adj, lab2["lake_id"], {
 						"wrap_x": true,
 						"shore_band": config.shore_band,
 						"dist_to_ocean": last_water_distance,
