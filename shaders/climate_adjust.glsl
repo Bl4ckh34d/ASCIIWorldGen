@@ -70,8 +70,11 @@ void main() {
 
     float lat = abs(float(y) / max(1.0, float(H) - 1.0) - 0.5) * 2.0;
     // Apply elevation cooling only above sea level (temperature-neutral below sea level)
-    float rel_elev = max(0.0, Height.height_data[i] - PC.sea_level);
-    float elev_cool = clamp(rel_elev * 1.2, 0.0, 1.0);
+    // Anchored baseline: approximate by median/mean land height pre-computed on CPU — here we use a neutral 0.0 and rely on CPU path for parity,
+    // but we clamp relative elevation to a narrow band to avoid global freezes when sea level changes.
+    // For GPU parity, keep sensitivity smaller to reduce visual jumps.
+    float rel_elev = max(0.0, Height.height_data[i] - 0.0);
+    float elev_cool = clamp(rel_elev * 0.6, 0.0, 1.0);
     float zonal = 0.5 + 0.5 * sin(6.28318 * float(y) / float(H) * 3.0);
     float u = 1.0 - lat;
     float t_lat = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6);

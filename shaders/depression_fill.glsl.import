@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://up0q22cbttal"
+path="res://.godot/imported/depression_fill.glsl-c312cc05709521671363348aa8c10479.res"
+
+[deps]
+
+source_file="res://shaders/depression_fill.glsl"
+dest_files=["res://.godot/imported/depression_fill.glsl-c312cc05709521671363348aa8c10479.res"]
+
+[params]
+

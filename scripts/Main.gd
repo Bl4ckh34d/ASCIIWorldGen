@@ -121,16 +121,34 @@ func _on_play_pressed() -> void:
 	if not is_running:
 		is_running = true
 		play_button.text = "Pause"
+		# New simulation: if no manual seed entered, randomize seed each time
+		if seed_input.text.strip_edges().length() == 0:
+			generator.apply_config({"seed": ""})
 		_generate_and_draw()
 	else:
 		is_running = false
 		play_button.text = "Play"
+		# Also start a new simulation on pause toggle
+		if seed_input.text.strip_edges().length() == 0:
+			generator.apply_config({"seed": ""})
+		_generate_and_draw()
 
 func _on_reset_pressed() -> void:
 	is_running = false
 	play_button.text = "Play"
 	generator.clear()
 	_reset_view()
+	# Reset terrain noise to standard defaults and regenerate
+	var defaults := {
+		"octaves": 5,
+		"frequency": 0.02,
+		"lacunarity": 2.0,
+		"gain": 0.5,
+		"warp": 24.0,
+		"wrap_x": true,
+	}
+	generator.apply_config(defaults)
+	_generate_and_draw()
 
 func _on_settings_pressed() -> void:
 	if settings_dialog:

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://lwanvbsutbp7"
+path="res://.godot/imported/lake_mark_boundary_candidates.glsl-d77ebb6c0076264445741635d8f975e2.res"
+
+[deps]
+
+source_file="res://shaders/lake_mark_boundary_candidates.glsl"
+dest_files=["res://.godot/imported/lake_mark_boundary_candidates.glsl-d77ebb6c0076264445741635d8f975e2.res"]
+
+[params]
+

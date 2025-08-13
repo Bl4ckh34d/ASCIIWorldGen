@@ -3,7 +3,7 @@ extends RefCounted
 
 func color_for_water(h_val: float, sea_level: float, is_turq: bool, turq_strength: float, _dist_to_land: float, _depth_scale: float, shelf_pattern: float) -> Color:
 	var depth: float = max(0.0, sea_level - h_val)
-	# Use actual depth to drive shade: shallow → turquoise, deep → dark blue
+	# Use actual depth to drive shade: shallow -> turquoise, deep -> dark blue
 	var depth_norm: float = clamp(depth / 0.5, 0.0, 1.0)
 	# Gentle shelf variation only in shallow water
 	if shelf_pattern > 0.0:

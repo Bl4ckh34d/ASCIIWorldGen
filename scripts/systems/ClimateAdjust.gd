@@ -28,12 +28,20 @@ func evaluate(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArr
 	var ocean_frac: float = float(ocean_cells) / max(1.0, float(w * h))
 
 	var xscale: float = float(params.get("noise_x_scale", 1.0))
+	# Anchored baseline: mean land height, so lapse doesn’t shift when sea level slider moves
+	var land_sum: float = 0.0
+	var land_count: int = 0
+	for i_bl in range(w * h):
+		if is_land[i_bl] != 0:
+			land_sum += height[i_bl]
+			land_count += 1
+	var _anchored_baseline: float = (land_sum / float(max(1, land_count)))
 	for y in range(h):
 		var lat: float = abs(float(y) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
 		for x in range(w):
 			var i: int = x + y * w
-			# Apply elevation cooling only above sea level
-			var rel_elev: float = max(0.0, height[i] - sea_level)
+			# Apply elevation cooling above an anchored baseline (mean land height) to avoid global shifts with sea slider
+			var rel_elev: float = max(0.0, height[i] - _anchored_baseline)
 			var elev_cool: float = clamp(rel_elev * 1.2, 0.0, 1.0)
 			var zonal: float = 0.5 + 0.5 * sin(6.28318 * float(y) / float(h) * 3.0)
 			var u: float = 1.0 - lat

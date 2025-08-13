@@ -1,6 +1,6 @@
-# World Generator (Godot 4.4) — TODO & Architecture
+# World Generator (Godot 4.4) - TODO & Architecture
 
-This document is a step-by-step “engineering playbook” to build a **Dwarf Fortress–style world generator** with plate tectonics, orogenesis, erosion, climate, hydrology, biomes, resources, settlements, and time evolution. It is paired with working scripts and a scene so you can run a small but complete simulation **today** and iterate from there.
+This document is a step-by-step "engineering playbook" to build a **Dwarf Fortress-style world generator** with plate tectonics, orogenesis, erosion, climate, hydrology, biomes, resources, settlements, and time evolution. It is paired with working scripts and a scene so you can run a small but complete simulation **today** and iterate from there.
 
 > TL;DR: Open the project in Godot 4.4, run `Main.tscn`, hit **Play**. Hover the map to inspect a tile; tweak **Settings** and click **Apply** to regenerate; **Pause/Play/Reset** control the simulation. Toggle **ASCII** or **Color** view with the button in the header.
 

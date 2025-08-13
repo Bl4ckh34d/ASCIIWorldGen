@@ -170,6 +170,13 @@ text = "Enable Rivers"
 button_pressed = true
 text = "Enabled"
 
+[node name="LakesEnabledLabel" type="Label" parent="VBox/Tabs/Rivers/Grid"]
+text = "Enable Lakes"
+
+[node name="LakesEnabled" type="CheckBox" parent="VBox/Tabs/Rivers/Grid"]
+button_pressed = true
+text = "Enabled"
+
 [node name="LabelRiverDrops" type="Label" parent="VBox/Tabs/Rivers/Grid"]
 text = "Droplets Factor"
 

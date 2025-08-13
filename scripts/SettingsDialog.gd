@@ -17,6 +17,7 @@ signal settings_applied(config: Dictionary)
 
 # Advanced groups (created in scene): rivers and visuals
 @onready var river_enabled: CheckBox = $VBox/Tabs/Rivers/Grid/RiverEnabled
+@onready var lakes_enabled: CheckBox = $VBox/Tabs/Rivers/Grid/LakesEnabled
 @onready var river_droplets: SpinBox = $VBox/Tabs/Rivers/Grid/RiverDropletsFactor
 @onready var river_thresh: SpinBox = $VBox/Tabs/Rivers/Grid/RiverThresholdFactor
 @onready var river_erosion: SpinBox = $VBox/Tabs/Rivers/Grid/RiverErosion
@@ -65,6 +66,7 @@ func _on_apply() -> void:
 	cfg["use_gpu_all"] = bool(gpu_all.button_pressed)
 	# rivers
 	cfg["river_enabled"] = bool(river_enabled.button_pressed)
+	cfg["lakes_enabled"] = bool(lakes_enabled.button_pressed)
 	cfg["river_droplets_factor"] = float(river_droplets.value)
 	cfg["river_threshold_factor"] = float(river_thresh.value)
 	cfg["river_erosion_strength"] = float(river_erosion.value)

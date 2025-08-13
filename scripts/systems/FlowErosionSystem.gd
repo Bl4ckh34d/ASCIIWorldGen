@@ -16,8 +16,101 @@ func _compare_height(a, b) -> bool:
 		return false
 	return _height_ref[ia] < _height_ref[ib]
 
+func compute_pour_from_labels(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, lake_mask: PackedByteArray, lake_id: PackedInt32Array, settings: Dictionary = {}) -> Dictionary:
+	var size: int = max(0, w * h)
+	var wrap_x: bool = bool(settings.get("wrap_x", true))
+	# Collect boundary candidates per lake_id
+	var per_lake: Dictionary = {}
+	for i in range(size):
+		if i >= lake_mask.size() or lake_mask[i] == 0:
+			continue
+		var lid: int = (lake_id[i] if i < lake_id.size() else 0)
+		if lid <= 0:
+			continue
+		var x: int = i % w
+		var y: int = floori(float(i) / float(w))
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				if dx == 0 and dy == 0:
+					continue
+				var nx: int = x + dx
+				var ny: int = y + dy
+				if wrap_x:
+					nx = (nx + w) % w
+				if nx < 0 or ny < 0 or nx >= w or ny >= h:
+					continue
+				var j: int = nx + ny * w
+				if is_land[j] == 0:
+					continue
+				if j < lake_mask.size() and lake_mask[j] != 0:
+					continue
+				# edge from inside i to outside j
+				var c: float = max(height[i], height[j])
+				if not per_lake.has(lid): per_lake[lid] = []
+				(per_lake[lid] as Array).append([i, j, c])
+	# Sort and select seeds with ocean bias
+	var pour_points := {}
+	var forced_seeds := PackedInt32Array()
+	var forced_tmp: Array = []
+	var max_forced_outflows: int = clamp(int(settings.get("max_forced_outflows", 3)), 0, 8)
+	var p0: float = float(settings.get("prob_outflow_0", 0.50))
+	var p1: float = float(settings.get("prob_outflow_1", 0.35))
+	var p2: float = float(settings.get("prob_outflow_2", 0.10))
+	var p3: float = float(settings.get("prob_outflow_3", 0.05))
+	var probs: Array = []
+	probs.resize(max_forced_outflows + 1)
+	for ii in range(probs.size()): probs[ii] = 0.0
+	if max_forced_outflows >= 0: probs[0] = p0
+	if max_forced_outflows >= 1: probs[1] = p1
+	if max_forced_outflows >= 2: probs[2] = p2
+	if max_forced_outflows >= 3: probs[3] = p3
+	var sum_p: float = 0.0
+	for ii2 in range(probs.size()): sum_p += float(probs[ii2])
+	if sum_p <= 0.0: probs[0] = 1.0; sum_p = 1.0
+	for ii3 in range(probs.size()): probs[ii3] = float(probs[ii3]) / sum_p
+	var cdf: Array = []
+	cdf.resize(probs.size())
+	var accp: float = 0.0
+	for ii4 in range(probs.size()): accp += float(probs[ii4]); cdf[ii4] = accp
+	var shore_band: float = float(settings.get("shore_band", 6.0))
+	var dist_to_ocean: PackedFloat32Array = settings.get("dist_to_ocean", PackedFloat32Array())
+	for lid_key in per_lake.keys():
+		var arr: Array = per_lake[lid_key]
+		arr.sort_custom(func(a, b): return float(a[2]) < float(b[2]))
+		pour_points[lid_key] = arr
+		if arr.size() == 0:
+			continue
+		# deterministic RNG per lake
+		var local_rng := RandomNumberGenerator.new(); local_rng.seed = int(settings.get("rng_seed", 1337)) ^ int(lid_key)
+		# primary
+		forced_tmp.append(int(arr[0][0]))
+		# extras
+		var picks_extra: int = 0
+		var r: float = local_rng.randf()
+		for kx in range(cdf.size()):
+			if r <= float(cdf[kx]): picks_extra = kx; break
+		var opened: int = 0
+		for ci in range(1, arr.size()):
+			if opened >= picks_extra or opened >= max_forced_outflows: break
+			var edge: Array = arr[ci]
+			var seed_i2: int = int(edge[0])
+			var p_ocean: float = 0.0
+			if dist_to_ocean.size() == size and seed_i2 >= 0 and seed_i2 < size and shore_band > 0.0:
+				p_ocean = clamp((shore_band - dist_to_ocean[seed_i2]) / shore_band, 0.0, 1.0)
+			if local_rng.randf() <= p_ocean:
+				forced_tmp.append(seed_i2)
+				opened += 1
+	# unique and pack
+	var seen := {}
+	for v in forced_tmp: seen[int(v)] = true
+	var keys := seen.keys(); keys.sort()
+	forced_seeds.resize(keys.size())
+	for idx in range(keys.size()): forced_seeds[idx] = int(keys[idx])
+	return {"outflow_seeds": forced_seeds, "pour_points": pour_points}
+
 func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, settings: Dictionary = {}) -> Dictionary:
 	var size: int = max(0, w * h)
+	var wrap_x: bool = bool(settings.get("wrap_x", true))
 	var flow_dir := PackedInt32Array()
 	var flow_accum := PackedFloat32Array()
 	var river := PackedByteArray()
@@ -67,6 +160,8 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 					continue
 				var nx: int = x + dx
 				var ny: int = y + dy
+				if wrap_x:
+					nx = (nx + w) % w
 				if nx < 0 or ny < 0 or nx >= w or ny >= h:
 					continue
 				var j: int = nx + ny * w
@@ -133,6 +228,33 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 	var pour_points := {} # lake_label/id -> Array of [inside_i, outside_i, cost]
 	var forced_seeds_arr: Array = []
 	var next_lake_label: int = 1
+	# Outflow selection settings (0..max_forced_outflows). Default: 0:50%,1:35%,2:10%,3:5%
+	var max_forced_outflows: int = clamp(int(settings.get("max_forced_outflows", 3)), 0, 8)
+	var p0: float = float(settings.get("prob_outflow_0", 0.50))
+	var p1: float = float(settings.get("prob_outflow_1", 0.35))
+	var p2: float = float(settings.get("prob_outflow_2", 0.10))
+	var p3: float = float(settings.get("prob_outflow_3", 0.05))
+	# Build cumulative distribution up to max_forced_outflows
+	var probs: Array = []
+	probs.resize(max_forced_outflows + 1)
+	for ii_p in range(probs.size()): probs[ii_p] = 0.0
+	if max_forced_outflows >= 0: probs[0] = p0
+	if max_forced_outflows >= 1: probs[1] = p1
+	if max_forced_outflows >= 2: probs[2] = p2
+	if max_forced_outflows >= 3: probs[3] = p3
+	var sum_p: float = 0.0
+	for ii_s in range(probs.size()): sum_p += float(probs[ii_s])
+	if sum_p <= 0.0:
+		probs.clear(); probs.resize(max(1, max_forced_outflows + 1)); probs[0] = 1.0; sum_p = 1.0
+	# Normalize to 1
+	for ii_n in range(probs.size()): probs[ii_n] = float(probs[ii_n]) / sum_p
+	# Build cumulative
+	var cdf: Array = []
+	cdf.resize(probs.size())
+	var accp: float = 0.0
+	for ii_c in range(probs.size()):
+		accp += float(probs[ii_c])
+		cdf[ii_c] = accp
 	for sid in sink_members.keys():
 		var members: Array = sink_members[sid]
 		if members.size() == 0:
@@ -153,6 +275,8 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 						continue
 					var nx: int = mx + dx
 					var ny: int = my + dy
+					if wrap_x:
+						nx = (nx + w) % w
 					if nx < 0 or ny < 0 or nx >= w or ny >= h:
 						continue
 					var ni: int = nx + ny * w
@@ -199,6 +323,8 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 							continue
 						var nx2: int = cx + ddx
 						var ny2: int = cy + ddy
+						if wrap_x:
+							nx2 = (nx2 + w) % w
 						if nx2 < 0 or ny2 < 0 or nx2 >= w or ny2 >= h:
 							continue
 						var ni2: int = nx2 + ny2 * w
@@ -223,24 +349,52 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 			(tmp_map[lid] as Array).append(c3)
 		for lid_key in tmp_map.keys():
 			pour_points[lid_key] = tmp_map[lid_key]
-			# Select 0..3 outflows with weighted probabilities (bias towards 0-1)
-			var picks: int = 0
-			var r: float = rng.randf()
-			# Probabilities: 0:0.5, 1:0.35, 2:0.10, 3:0.05
-			if r < 0.50:
-				picks = 0
-			elif r < 0.85:
-				picks = 1
-			elif r < 0.95:
-				picks = 2
-			else:
-				picks = 3
+			# Deterministic per-lake RNG
+			var local_rng := RandomNumberGenerator.new()
+			local_rng.seed = int(settings.get("rng_seed", 1337)) ^ int(lid_key)
+			# Always include the primary (lowest-cost) pour point
 			var cand_list: Array = pour_points[lid_key]
-			var take: int = min(picks, cand_list.size())
-			for ci in range(take):
-				var edge: Array = cand_list[ci]
-				var seed_i: int = int(edge[0])
-				forced_seeds_arr.append(seed_i)
+			if cand_list.size() == 0:
+				continue
+			var first_edge: Array = cand_list[0]
+			var primary_seed_i: int = int(first_edge[0])
+			forced_seeds_arr.append(primary_seed_i)
+			# Additional outflows (probabilistic, ocean-biased)
+			var shore_band: float = float(settings.get("shore_band", 6.0))
+			var dist_to_ocean: PackedFloat32Array = settings.get("dist_to_ocean", PackedFloat32Array())
+			var alpha_ob: float = float(settings.get("alpha_outflow_ocean_bias", 0.7))
+			var beta_chain: float = float(settings.get("beta_outflow_chain_bias", 0.3))
+			var chain_depth_max: float = float(settings.get("chain_depth_max", 5.0))
+			# Chain-depth proxy: normalized distance to ocean at primary pour point
+			var p_depth: float = 0.0
+			if dist_to_ocean.size() == size and primary_seed_i >= 0 and primary_seed_i < size and shore_band > 0.0 and chain_depth_max > 0.0:
+				var scale: float = max(shore_band * chain_depth_max, 1.0)
+				p_depth = clamp(dist_to_ocean[primary_seed_i] / scale, 0.0, 1.0)
+			var max_extra: int = max(0, min(max_forced_outflows, cand_list.size()) - 1)
+			# Determine desired extras count using CDF
+			var picks_extra: int = 0
+			var r: float = local_rng.randf()
+			for kx in range(cdf.size()):
+				if r <= float(cdf[kx]):
+					picks_extra = kx
+					break
+			# Iterate next-lowest candidates and open with ocean bias until reached picks_extra or max_extra
+			var opened: int = 0
+			for ci in range(1, cand_list.size()):
+				if opened >= picks_extra or opened >= max_extra:
+					break
+				var edge2: Array = cand_list[ci]
+				var seed_i2: int = int(edge2[0])
+				# Ocean bias probability
+				var p_ocean: float = 0.0
+				if dist_to_ocean.size() == size and seed_i2 >= 0 and seed_i2 < size and shore_band > 0.0:
+					p_ocean = clamp((shore_band - dist_to_ocean[seed_i2]) / shore_band, 0.0, 1.0)
+				# Combined probability with chain-depth proxy
+				var p_combined: float = clamp(alpha_ob * p_ocean + beta_chain * p_depth, 0.0, 1.0)
+				var open_r: float = local_rng.randf()
+				if open_r <= p_combined:
+					forced_seeds_arr.append(seed_i2)
+					opened += 1
 
 	# 3) River seeds by percentile + non-maximum suppression (thin centerlines)
 	var acc_vals: Array = []

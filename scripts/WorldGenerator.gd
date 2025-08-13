@@ -22,6 +22,9 @@ const BiomePostCompute = preload("res://scripts/systems/BiomePostCompute.gd")
 var FlowErosionSystem = load("res://scripts/systems/FlowErosionSystem.gd")
 const FlowCompute = preload("res://scripts/systems/FlowCompute.gd")
 const RiverCompute = preload("res://scripts/systems/RiverCompute.gd")
+const DepressionFillCompute = preload("res://scripts/systems/DepressionFillCompute.gd")
+const LakeLabelFromMaskCompute = preload("res://scripts/systems/LakeLabelFromMaskCompute.gd")
+const PourPointReduceCompute = preload("res://scripts/systems/PourPointReduceCompute.gd")
 var _terrain_compute: Object = null
 var _dt_compute: Object = null
 var _shelf_compute: Object = null
@@ -54,6 +57,8 @@ class Config:
 	var lava_temp_threshold_c: float = 75.0
 	# Rivers toggle
 	var rivers_enabled: bool = true
+	# Lakes toggle
+	var lakes_enabled: bool = true
 	# Climate jitter and continentality
 	var temp_base_offset: float = 0.25
 	var temp_scale: float = 1.0
@@ -66,6 +71,16 @@ class Config:
 	var mountain_radiance_passes: int = 3
 	# Compute toggles (global)
 	var use_gpu_all: bool = true
+	# Feature flags
+	var realistic_pooling_enabled: bool = true
+	# Use GPU pooling (Phase 2: GPU E + GPU label) when enabled
+	var use_gpu_pooling: bool = true
+	# Pooling/outflow params
+	var max_forced_outflows: int = 3
+	var prob_outflow_0: float = 0.50
+	var prob_outflow_1: float = 0.35
+	var prob_outflow_2: float = 0.10
+	var prob_outflow_3: float = 0.05
 	# Horizontal noise stretch for ASCII aspect compensation (x multiplier applied to noise samples)
 	var noise_x_scale: float = 0.5
 
@@ -77,6 +92,7 @@ var _warp_noise := FastNoiseLite.new()
 var _shore_noise := FastNoiseLite.new()
 
 var last_height: PackedFloat32Array = PackedFloat32Array()
+var last_height_final: PackedFloat32Array = PackedFloat32Array()
 var last_is_land: PackedByteArray = PackedByteArray()
 var last_turquoise_water: PackedByteArray = PackedByteArray()
 var last_beach: PackedByteArray = PackedByteArray()
@@ -154,6 +170,11 @@ func apply_config(dict: Dictionary) -> void:
 		config.temp_min_c = float(dict["temp_min_c"]) 
 	if dict.has("temp_max_c"):
 		config.temp_max_c = float(dict["temp_max_c"]) 
+	# Map min/max temperature sliders to normalized climate knobs if provided
+	if dict.has("temp_base_offset"):
+		config.temp_base_offset = float(dict["temp_base_offset"])
+	if dict.has("temp_scale"):
+		config.temp_scale = float(dict["temp_scale"])
 	if dict.has("lava_temp_threshold_c"):
 		config.lava_temp_threshold_c = float(dict["lava_temp_threshold_c"]) 
 	if dict.has("temp_base_offset"):
@@ -174,6 +195,22 @@ func apply_config(dict: Dictionary) -> void:
 		config.mountain_radiance_passes = int(dict["mountain_radiance_passes"]) 
 	if dict.has("use_gpu_all"):
 		config.use_gpu_all = bool(dict["use_gpu_all"]) 
+	if dict.has("lakes_enabled"):
+		config.lakes_enabled = bool(dict["lakes_enabled"])
+	if dict.has("realistic_pooling_enabled"):
+		config.realistic_pooling_enabled = bool(dict["realistic_pooling_enabled"])
+	if dict.has("use_gpu_pooling"):
+		config.use_gpu_pooling = bool(dict["use_gpu_pooling"])
+	if dict.has("max_forced_outflows"):
+		config.max_forced_outflows = int(dict["max_forced_outflows"])
+	if dict.has("prob_outflow_0"):
+		config.prob_outflow_0 = float(dict["prob_outflow_0"])
+	if dict.has("prob_outflow_1"):
+		config.prob_outflow_1 = float(dict["prob_outflow_1"])
+	if dict.has("prob_outflow_2"):
+		config.prob_outflow_2 = float(dict["prob_outflow_2"])
+	if dict.has("prob_outflow_3"):
+		config.prob_outflow_3 = float(dict["prob_outflow_3"])
 	_setup_noises()
 	# Only randomize temperature extremes if caller didn't override both
 	var override_extremes: bool = dict.has("temp_min_c") and dict.has("temp_max_c")
@@ -334,6 +371,8 @@ func generate() -> PackedByteArray:
 	else:
 		terrain = TerrainNoise.new().generate(params)
 	last_height = terrain["height"]
+	# Final surface height used for sea-level classification (after erosion). Initialized to base height.
+	last_height_final = last_height
 	last_is_land = terrain["is_land"]
 
 	# Parity: compare GPU terrain vs CPU when enabled
@@ -356,20 +395,104 @@ func generate() -> PackedByteArray:
 		for iy in range(h):
 			for ix in range(w):
 				var ii: int = ix + iy * w
-				last_is_land[ii] = 1 if last_height[ii] > config.sea_level else 0
+				last_is_land[ii] = 1 if last_height_final[ii] > config.sea_level else 0
 
 	# PoolingSystem: tag inland lakes (use GPU when available)
 	var pool: Dictionary
 	if config.use_gpu_all:
 		if _lake_label_compute == null:
 			_lake_label_compute = load("res://scripts/systems/LakeLabelCompute.gd").new()
-		pool = _lake_label_compute.label_lakes(w, h, last_is_land, true)
-		if pool.is_empty() or not pool.has("lake"):
-			pool = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
+		# Prefer strict CPU pooling when enabled; otherwise legacy connectivity
+		if config.realistic_pooling_enabled:
+			# Phase 2 GPU path: E on GPU -> LakeMask -> labels; pour points on CPU
+			var use_gpu_pool: bool = config.use_gpu_all and config.use_gpu_pooling
+			if use_gpu_pool:
+				var E_out: Dictionary = DepressionFillCompute.new().compute_E(w, h, last_height, last_is_land, true, 96)
+				var lake_mask_gpu: PackedByteArray = E_out.get("lake", PackedByteArray())
+				var pool_gpu := {}
+				if lake_mask_gpu.size() == w * h:
+					var lab: Dictionary = LakeLabelFromMaskCompute.new().label_from_mask(w, h, lake_mask_gpu, true)
+					if not lab.is_empty() and lab.has("lake") and lab.has("lake_id"):
+						# Performance: mark boundary candidates on GPU, then reduce on CPU to minimal cost per lake
+						var boundary_marked: PackedInt32Array = PourPointReduceCompute.new().mark_candidates(w, h, lake_mask_gpu, last_is_land, true)
+						# Build a masked lake_id map with only candidate cells retained
+						var cand_lake_id: PackedInt32Array = lab["lake_id"]
+						if boundary_marked.size() == w * h:
+							for ii in range(w * h):
+								if boundary_marked[ii] == 0: cand_lake_id[ii] = 0
+						# Derive pour points and forced seeds on CPU from GPU-labeled lakes (candidates masked)
+						var pour: Dictionary = FlowErosionSystem.new().compute_pour_from_labels(w, h, last_height, last_is_land, lake_mask_gpu, cand_lake_id, {
+							"wrap_x": true,
+							"shore_band": config.shore_band,
+							"dist_to_ocean": last_water_distance,
+							"rng_seed": config.rng_seed,
+							"max_forced_outflows": config.max_forced_outflows,
+							"prob_outflow_0": config.prob_outflow_0,
+							"prob_outflow_1": config.prob_outflow_1,
+							"prob_outflow_2": config.prob_outflow_2,
+							"prob_outflow_3": config.prob_outflow_3,
+						})
+						pool_gpu = {"lake": lab["lake"], "lake_id": lab["lake_id"], "outflow_seeds": pour.get("outflow_seeds", PackedInt32Array())}
+				if pool_gpu.has("lake") and pool_gpu.has("lake_id"):
+					pool = pool_gpu
+				else:
+					pool = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {
+						"sea_level": config.sea_level,
+						"rng_seed": config.rng_seed,
+						"wrap_x": true,
+						"shore_band": config.shore_band,
+						"dist_to_ocean": last_water_distance,
+						"max_forced_outflows": config.max_forced_outflows,
+						"prob_outflow_0": config.prob_outflow_0,
+						"prob_outflow_1": config.prob_outflow_1,
+						"prob_outflow_2": config.prob_outflow_2,
+						"prob_outflow_3": config.prob_outflow_3,
+					})
+			else:
+				pool = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {
+				"sea_level": config.sea_level,
+				"rng_seed": config.rng_seed,
+				"wrap_x": true,
+				"shore_band": config.shore_band,
+				"dist_to_ocean": last_water_distance,
+				"max_forced_outflows": config.max_forced_outflows,
+				"prob_outflow_0": config.prob_outflow_0,
+				"prob_outflow_1": config.prob_outflow_1,
+				"prob_outflow_2": config.prob_outflow_2,
+				"prob_outflow_3": config.prob_outflow_3,
+			})
+			if not (pool.has("lake") and pool.has("lake_id")):
+				var pool_fallback: Dictionary = _lake_label_compute.label_lakes(w, h, last_is_land, true)
+				if pool_fallback.is_empty() or not pool_fallback.has("lake"):
+					pool_fallback = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
+				pool = {"lake": pool_fallback.get("lake", last_lake), "lake_id": pool_fallback.get("lake_id", last_lake_id)}
+		else:
+			pool = _lake_label_compute.label_lakes(w, h, last_is_land, true)
+			if pool.is_empty() or not pool.has("lake"):
+				pool = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
 	else:
 		pool = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
-	last_lake = pool["lake"]
-	last_lake_id = pool["lake_id"]
+		last_lake = pool["lake"]
+		last_lake_id = pool["lake_id"]
+		# Parity checks for lakes (GPU vs CPU) when enabled
+		if debug_parity and config.use_gpu_all and config.realistic_pooling_enabled:
+			var cpu_pool: Dictionary = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {
+				"sea_level": config.sea_level,
+				"rng_seed": config.rng_seed,
+				"wrap_x": true,
+				"shore_band": config.shore_band,
+				"dist_to_ocean": last_water_distance,
+				"max_forced_outflows": config.max_forced_outflows,
+				"prob_outflow_0": config.prob_outflow_0,
+				"prob_outflow_1": config.prob_outflow_1,
+				"prob_outflow_2": config.prob_outflow_2,
+				"prob_outflow_3": config.prob_outflow_3,
+			})
+			if cpu_pool.has("lake") and cpu_pool.has("lake_id"):
+				var lake_eq := _equality_rate_u8(last_lake, cpu_pool["lake"])
+				var lid_eq := _equality_rate_i32(last_lake_id, cpu_pool["lake_id"], last_lake)
+				debug_last_metrics["lakes"] = {"lake_eq": lake_eq, "lake_id_eq": lid_eq}
+				print("[Parity][Lakes] lake_eq=", lake_eq, " lake_id_eq=", lid_eq)
 
 	# Build shared feature noise cache (shore/shelf/desert/ice fields)
 	if _feature_noise_cache != null:
@@ -579,7 +702,7 @@ func generate() -> PackedByteArray:
 				last_river = widened
 		else:
 			last_river = hydro2.get("river", last_river)
-		if hydro2.has("lake"):
+		if hydro2.has("lake") and config.lakes_enabled:
 			last_pooled_lake = hydro2["lake"]
 		# Freeze gating: remove rivers where glacier or freezing temps
 		var size2: int = w * h
@@ -623,7 +746,7 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	for i in range(size):
 		prev_is_land[i] = last_is_land[i] if i < last_is_land.size() else 0
 	for i in range(size):
-		last_is_land[i] = 1 if last_height[i] > config.sea_level else 0
+		last_is_land[i] = 1 if last_height_final[i] > config.sea_level else 0
 	# Update ocean fraction
 	var ocean_ct: int = 0
 	for ii in range(size):
@@ -756,11 +879,60 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		# Lakes (GPU preferred)
 		if _lake_label_compute == null:
 			_lake_label_compute = load("res://scripts/systems/LakeLabelCompute.gd").new()
-		var pool2: Dictionary = _lake_label_compute.label_lakes(w, h, last_is_land, true)
-		if pool2.is_empty() or not pool2.has("lake"):
-			pool2 = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
-		last_lake = pool2["lake"]
-		last_lake_id = pool2["lake_id"]
+		# Prefer strict CPU pooling for quick sea-level updates too (if enabled)
+		var pool2: Dictionary
+		if config.realistic_pooling_enabled and config.lakes_enabled:
+			# Sea-level quick path: prefer GPU fill+label, fallback to CPU strict pooling
+			var E2: Dictionary = DepressionFillCompute.new().compute_E(w, h, last_height, last_is_land, true, 64)
+			var lake_mask2: PackedByteArray = E2.get("lake", PackedByteArray())
+			var pool2_gpu := {}
+			if lake_mask2.size() == w * h:
+				var lab2: Dictionary = LakeLabelFromMaskCompute.new().label_from_mask(w, h, lake_mask2, true)
+				if not lab2.is_empty() and lab2.has("lake") and lab2.has("lake_id"):
+					var pour2: Dictionary = FlowErosionSystem.new().compute_pour_from_labels(w, h, last_height, last_is_land, lake_mask2, lab2["lake_id"], {
+						"wrap_x": true,
+						"shore_band": config.shore_band,
+						"dist_to_ocean": last_water_distance,
+						"rng_seed": config.rng_seed,
+						"max_forced_outflows": config.max_forced_outflows,
+						"prob_outflow_0": config.prob_outflow_0,
+						"prob_outflow_1": config.prob_outflow_1,
+						"prob_outflow_2": config.prob_outflow_2,
+						"prob_outflow_3": config.prob_outflow_3,
+					})
+					pool2_gpu = {"lake": lab2["lake"], "lake_id": lab2["lake_id"], "outflow_seeds": pour2.get("outflow_seeds", PackedInt32Array())}
+			if pool2_gpu.has("lake") and pool2_gpu.has("lake_id"):
+				pool2 = pool2_gpu
+			else:
+				pool2 = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {
+					"sea_level": config.sea_level,
+					"rng_seed": config.rng_seed,
+					"wrap_x": true,
+					"shore_band": config.shore_band,
+					"dist_to_ocean": last_water_distance,
+					"max_forced_outflows": config.max_forced_outflows,
+					"prob_outflow_0": config.prob_outflow_0,
+					"prob_outflow_1": config.prob_outflow_1,
+					"prob_outflow_2": config.prob_outflow_2,
+					"prob_outflow_3": config.prob_outflow_3,
+				})
+			if pool2.is_empty() or not pool2.has("lake"):
+				pool2 = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
+		else:
+			pool2 = _lake_label_compute.label_lakes(w, h, last_is_land, true)
+			if pool2.is_empty() or not pool2.has("lake"):
+				pool2 = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
+		if config.lakes_enabled:
+			last_lake = pool2["lake"]
+			last_lake_id = pool2["lake_id"]
+		else:
+			# If lakes disabled, clear lake masks
+			var sz2 := w * h
+			last_lake.resize(sz2)
+			last_lake_id.resize(sz2)
+			for i2 in range(sz2):
+				last_lake[i2] = 0
+				last_lake_id[i2] = 0
 		# Flow & rivers (GPU preferred)
 		if _flow_compute == null:
 			_flow_compute = FlowCompute.new()
@@ -771,7 +943,8 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_flow_accum = hydro3.get("flow_accum", last_flow_accum)
 		if _river_compute == null:
 			_river_compute = RiverCompute.new()
-		var river_gpu: PackedByteArray = _river_compute.trace_rivers(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5)
+		var forced2: PackedInt32Array = pool2.get("outflow_seeds", PackedInt32Array())
+		var river_gpu: PackedByteArray = _river_compute.trace_rivers(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, forced2)
 		if river_gpu.size() == w * h:
 			last_river = river_gpu
 		else:
