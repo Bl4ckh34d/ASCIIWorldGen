@@ -21,6 +21,14 @@ layout(push_constant) uniform Params {
     float height_scale_m;
     float lapse_c_per_km;
     float freeze_temp_threshold_norm; // 0..1 in temperature normalized space
+    float biome_noise_strength_c;     // degrees C jitter amplitude
+    float moist_noise_strength;       // 0..1 jitter for moisture (primary)
+    float biome_phase;                // animation phase
+    float moist_noise_strength2;      // secondary moisture jitter (different frequency)
+    float moist_island_factor;        // how strongly to pull towards neighbor avg to form islands
+    float moist_elev_dry_factor;      // reduce moisture by elevation
+    float min_h;                      // global min height for normalization
+    float max_h;                      // global max height for normalization
     int has_desert_field; // 1 if buffer filled
 } PC;
 
@@ -29,12 +37,10 @@ const int BIOME_OCEAN = 0;
 const int BIOME_ICE_SHEET = 1;
 const int BIOME_BEACH = 2;
 const int BIOME_DESERT_SAND = 3;
-const int BIOME_DESERT_ROCK = 4;
+const int BIOME_WASTELAND = 4;
 const int BIOME_DESERT_ICE = 5;
 const int BIOME_STEPPE = 6;
 const int BIOME_GRASSLAND = 7;
-const int BIOME_MEADOW = 8;
-const int BIOME_PRAIRIE = 9;
 const int BIOME_SWAMP = 10;
 const int BIOME_TROPICAL_FOREST = 11;
 const int BIOME_BOREAL_FOREST = 12;
@@ -48,8 +54,18 @@ const int BIOME_ALPINE = 19;
 const int BIOME_TUNDRA = 20;
 const int BIOME_SAVANNA = 21;
 const int BIOME_GLACIER = 24;
+const int BIOME_SALT_DESERT = 28; // aligns with BiomeClassifier.gd
 
 float clamp01(float v) { return clamp(v, 0.0, 1.0); }
+
+// Cheap animated noise using trigonometric mixing; fast and good enough to break bands
+float tri_noise(uint x, uint y, float phase) {
+    float fx = float(x);
+    float fy = float(y);
+    float n1 = sin((fx * 0.043 + fy * 0.037) + phase * 2.1);
+    float n2 = sin((fx * 0.019 - fy * 0.051) - phase * 1.3);
+    return clamp((0.66 * n1 + 0.34 * n2) * 0.5 + 0.5, 0.0, 1.0);
+}
 
 void main() {
     uint x = gl_GlobalInvocationID.x;
@@ -67,6 +83,32 @@ void main() {
     bool is_beach = (Beach.beach_mask[i] != 0u);
 
     float t_c0 = PC.temp_min_c + t_norm * (PC.temp_max_c - PC.temp_min_c);
+    // Apply small animated jitter to reduce horizontal banding (temperature)
+    float n1 = tri_noise(x, y, PC.biome_phase);
+    t_c0 += (PC.biome_noise_strength_c) * (n1 - 0.5) * 2.0;
+    // Moisture variability: multi-frequency jitter + neighbor-driven islanding + topo dryness
+    float raw_m = Moist.moist_norm[i];
+    // secondary noise (different frequency blend)
+    float n2 = sin((float(x) * 0.087 + float(y) * 0.023) - PC.biome_phase * 1.7);
+    float n2u = clamp(n2 * 0.5 + 0.5, 0.0, 1.0);
+    float m_j = clamp01(raw_m + PC.moist_noise_strength * (n1 - 0.5) + PC.moist_noise_strength2 * (n2u - 0.5));
+    // neighbor average to introduce split/merge islands
+    float sum_nb = 0.0; int cnt = 0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int nx = int(x) + dx; int ny = int(y) + dy;
+            if (nx < 0 || ny < 0 || nx >= W || ny >= PC.height) continue;
+            int j = nx + ny * W;
+            sum_nb += clamp01(Moist.moist_norm[j]);
+            cnt++;
+        }
+    }
+    float m_nb = (cnt > 0) ? (sum_nb / float(cnt)) : raw_m;
+    float island_mix = clamp(PC.moist_island_factor * n2u, 0.0, 1.0);
+    float m_eff = clamp01(mix(m_j, m_nb, island_mix));
+    // reduce moisture at higher elevations to reflect orographic dryness
+    m_eff = clamp01(m_eff * (1.0 - PC.moist_elev_dry_factor * clamp01(elev)));
+    m = m_eff;
     float elev_m = elev * PC.height_scale_m;
     float t_c_adj = t_c0 - PC.lapse_c_per_km * (elev_m / 1000.0);
 
@@ -90,19 +132,21 @@ void main() {
         return;
     }
 
-    // Global freeze based on normalized effective temperature
-    float t_eff_norm = clamp01((t_c_adj - PC.temp_min_c) / max(0.001, (PC.temp_max_c - PC.temp_min_c)));
-    if (t_eff_norm <= PC.freeze_temp_threshold_norm) {
-        Out.out_biome[i] = BIOME_DESERT_ICE;
-        return;
-    }
+    // Remove hard freeze-to-ice-desert. Let base classifier run and apply
+    // frozen variants later in post-processing based on temperature.
 
-    // Relief first bands
-    float elev_norm = clamp01(elev);
-    if (elev_norm > 0.80) { Out.out_biome[i] = BIOME_ALPINE; return; }
-    if (elev_norm > 0.60) { Out.out_biome[i] = BIOME_MOUNTAINS; return; }
-    if (elev_norm > 0.40) { Out.out_biome[i] = BIOME_FOOTHILLS; return; }
-    if (elev_norm > 0.30) { Out.out_biome[i] = BIOME_HILLS; return; }
+    // Relief-first bands using global min/max to approximate top percentiles
+    float elev_norm = clamp01((elev - PC.min_h) / max(0.0001, (PC.max_h - PC.min_h)));
+    // Keep alpine/mountains strict to preserve top 1%/5%
+    if (elev_norm >= 0.99) { Out.out_biome[i] = BIOME_ALPINE; return; }       // top 1%
+    if (elev_norm >= 0.94) { Out.out_biome[i] = BIOME_MOUNTAINS; return; }    // next 5%
+    // Apply temperature/noise-driven jitter to break up homogenous hills/foothills
+    float hnoise = tri_noise(x * 2u, y * 2u, PC.biome_phase * 0.7 + 1.234);
+    float t_mid = clamp(1.0 - abs((t_c0 - 15.0) / 25.0), 0.0, 1.0); // strongest near ~15C
+    float jitter = 0.03 * t_mid * ((hnoise - 0.5) * 2.0);
+    float elev_j = clamp01(elev_norm + jitter);
+    if (elev_j >= 0.87) { Out.out_biome[i] = BIOME_FOOTHILLS; return; }       // next ~7% with jittered edges
+    if (elev_j >= 0.78) { Out.out_biome[i] = BIOME_HILLS; return; }           // next ~9% with jittered edges
 
     // Temperature/moisture bands
     if (t_c0 <= -10.0) {
@@ -110,7 +154,7 @@ void main() {
         return;
     }
     if (t_c0 <= 2.0) {
-        Out.out_biome[i] = (m >= 0.30) ? BIOME_TUNDRA : BIOME_DESERT_ROCK;
+        Out.out_biome[i] = (m >= 0.30) ? BIOME_TUNDRA : BIOME_WASTELAND;
         return;
     }
     if (t_c0 <= 8.0) {
@@ -120,10 +164,9 @@ void main() {
     if (t_c0 <= 18.0) {
         if (m >= 0.60) { Out.out_biome[i] = BIOME_TEMPERATE_FOREST; return; }
         if (m >= 0.45) { Out.out_biome[i] = BIOME_CONIFER_FOREST; return; }
-        if (m >= 0.35) { Out.out_biome[i] = BIOME_MEADOW; return; }
-        if (m >= 0.25) { Out.out_biome[i] = BIOME_PRAIRIE; return; }
+        if (m >= 0.25) { Out.out_biome[i] = BIOME_GRASSLAND; return; }
         if (m >= 0.20) { Out.out_biome[i] = BIOME_STEPPE; return; }
-        Out.out_biome[i] = BIOME_DESERT_ROCK;
+        Out.out_biome[i] = BIOME_WASTELAND;
         return;
     }
     if (t_c0 <= 30.0) {
@@ -131,20 +174,20 @@ void main() {
         if (m >= 0.55) { Out.out_biome[i] = BIOME_TROPICAL_FOREST; return; }
         if (m >= 0.40) { Out.out_biome[i] = BIOME_SAVANNA; return; }
         if (m >= 0.30) { Out.out_biome[i] = BIOME_GRASSLAND; return; }
-        Out.out_biome[i] = BIOME_DESERT_ROCK;
+        Out.out_biome[i] = BIOME_WASTELAND;
         return;
     }
 
-    // t_c0 > 30 °C
+    // t_c0 > 30 C
     if (m < 0.40) {
         // Desert split: sand vs rock using optional desert_field
         if (PC.has_desert_field == 1) {
             float heat_bias = clamp((t_norm - 0.60) * 2.4, 0.0, 1.0);
             float sand_prob = clamp(0.25 + 0.6 * heat_bias, 0.0, 0.98);
             float n = clamp01(DesertField.desert_field[i]);
-            Out.out_biome[i] = (n < sand_prob) ? BIOME_DESERT_SAND : BIOME_DESERT_ROCK;
+            Out.out_biome[i] = (n < sand_prob) ? BIOME_DESERT_SAND : BIOME_WASTELAND;
         } else {
-            Out.out_biome[i] = BIOME_DESERT_ROCK;
+            Out.out_biome[i] = BIOME_WASTELAND;
         }
         return;
     }

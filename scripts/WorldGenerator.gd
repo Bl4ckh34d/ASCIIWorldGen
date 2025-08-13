@@ -12,11 +12,13 @@ const DistanceTransformCompute = preload("res://scripts/systems/DistanceTransfor
 const ContinentalShelf = preload("res://scripts/systems/ContinentalShelf.gd")
 const ContinentalShelfCompute = preload("res://scripts/systems/ContinentalShelfCompute.gd")
 var ClimatePost = load("res://scripts/systems/ClimatePost.gd")
+const ClimatePostCompute = preload("res://scripts/systems/ClimatePostCompute.gd")
 const PoolingSystem = preload("res://scripts/systems/PoolingSystem.gd")
 const ClimateBase = preload("res://scripts/systems/ClimateBase.gd")
 const ClimateAdjust = preload("res://scripts/systems/ClimateAdjust.gd")
 const ClimateAdjustCompute = preload("res://scripts/systems/ClimateAdjustCompute.gd")
 var BiomePost = load("res://scripts/systems/BiomePost.gd")
+const BiomePostCompute = preload("res://scripts/systems/BiomePostCompute.gd")
 var FlowErosionSystem = load("res://scripts/systems/FlowErosionSystem.gd")
 const FlowCompute = preload("res://scripts/systems/FlowCompute.gd")
 const RiverCompute = preload("res://scripts/systems/RiverCompute.gd")
@@ -49,7 +51,7 @@ class Config:
 	# Temperature extremes per seed (for Celsius scaling and lava)
 	var temp_min_c: float = -40.0
 	var temp_max_c: float = 70.0
-	var lava_temp_threshold_c: float = 55.0
+	var lava_temp_threshold_c: float = 75.0
 	# Rivers toggle
 	var rivers_enabled: bool = true
 	# Climate jitter and continentality
@@ -218,7 +220,8 @@ func _setup_temperature_extremes() -> void:
 	rng.seed = int(config.rng_seed) ^ 0x1234ABCD
 	config.temp_min_c = lerp(-50.0, -15.0, rng.randf())
 	config.temp_max_c = lerp(35.0, 85.0, rng.randf())
-	config.lava_temp_threshold_c = clamp(config.lava_temp_threshold_c, config.temp_min_c, config.temp_max_c)
+	# Keep lava threshold independent of current extremes; enforce a hard minimum of 75°C
+	config.lava_temp_threshold_c = max(75.0, config.lava_temp_threshold_c)
 
 # -------------------------
 # Parity/validation helpers
@@ -348,11 +351,12 @@ func generate() -> PackedByteArray:
 			ocean_count += 1
 	last_ocean_fraction = float(ocean_count) / float(max(1, w * h))
 
-	# Rivers disabled for now; refresh land mask only
-	for iy in range(h):
-		for ix in range(w):
-			var ii: int = ix + iy * w
-			last_is_land[ii] = 1 if last_height[ii] > config.sea_level else 0
+	# Refresh land mask only when not trusting GPU terrain output
+	if not config.use_gpu_all:
+		for iy in range(h):
+			for ix in range(w):
+				var ii: int = ix + iy * w
+				last_is_land[ii] = 1 if last_height[ii] > config.sea_level else 0
 
 	# PoolingSystem: tag inland lakes (use GPU when available)
 	var pool: Dictionary
@@ -379,7 +383,7 @@ func generate() -> PackedByteArray:
 		_feature_noise_cache.build(cache_params)
 		last_shelf_value_noise_field = _feature_noise_cache.shelf_value_noise_field
 
-	# Step 2: shoreline features via ContinentalShelf system (keeps behavior)
+	# Step 2: shoreline features
 	var size: int = w * h
 	last_turquoise_water.resize(size)
 	last_beach.resize(size)
@@ -396,26 +400,17 @@ func generate() -> PackedByteArray:
 			for x in range(w):
 				var i2: int = x + y * w
 				shore_noise_field[i2] = _shore_noise.get_noise_2d(float(x) * sx_mul, float(y)) * 0.5 + 0.5
-	var shelf_out := ContinentalShelf.new().compute(w, h, last_height, last_is_land, config.sea_level, shore_noise_field, config.shallow_threshold, config.shore_band, true)
-	# Apply CPU shelf outputs first (includes distance field)
-	last_turquoise_water = shelf_out["turquoise_water"]
-	last_beach = shelf_out["beach"]
-	last_water_distance = shelf_out["water_distance"]
-	last_turquoise_strength = shelf_out["turquoise_strength"]
 	if config.use_gpu_all:
-		# Compute DT on GPU to replace CPU distance when available (reuse wrapper)
+		# GPU distance-to-coast
 		if _dt_compute == null:
 			_dt_compute = DistanceTransformCompute.new()
 		var d_gpu: PackedFloat32Array = _dt_compute.ocean_distance_to_land(w, h, last_is_land, true)
 		if d_gpu.size() == w * h:
 			last_water_distance = d_gpu
-			# Parity: DT vs CPU
-			if debug_parity and shelf_out.has("water_distance"):
-				var d_cpu: PackedFloat32Array = shelf_out["water_distance"]
-				var dt_max := _max_abs_diff_f32(d_gpu, d_cpu)
-				debug_last_metrics["distance_transform"] = {"max_abs": dt_max}
-				print("[Parity][DT] max_abs_diff=", dt_max)
-		# Use compute version for turquoise/beach/strength with the finalized distance field (reuse wrapper)
+		else:
+			# Fallback CPU DT if GPU failed
+			last_water_distance = DistanceTransform.new().ocean_distance_to_land(w, h, last_is_land, true)
+		# GPU shelf features
 		if _shelf_compute == null:
 			_shelf_compute = ContinentalShelfCompute.new()
 		var out_gpu: Dictionary = _shelf_compute.compute(w, h, last_height, last_is_land, config.sea_level, last_water_distance, shore_noise_field, config.shallow_threshold, config.shore_band, true, config.noise_x_scale)
@@ -423,18 +418,26 @@ func generate() -> PackedByteArray:
 			last_turquoise_water = out_gpu.get("turquoise_water", last_turquoise_water)
 			last_beach = out_gpu.get("beach", last_beach)
 			last_turquoise_strength = out_gpu.get("turquoise_strength", last_turquoise_strength)
-			# Parity: shelf flags/strength in near-shore band
-			if debug_parity:
-				var band := PackedByteArray(); band.resize(size)
-				var band_radius: float = config.shore_band + config.shallow_threshold
-				for bi in range(size):
-					var near_coast: bool = (shelf_out["water_distance"][bi] if bi < shelf_out["water_distance"].size() else 0.0) <= band_radius
-					band[bi] = 1 if near_coast else 0
-				var turq_eq := _equality_rate_u8(out_gpu.get("turquoise_water", last_turquoise_water), shelf_out.get("turquoise_water", last_turquoise_water), band)
-				var beach_eq := _equality_rate_u8(out_gpu.get("beach", last_beach), shelf_out.get("beach", last_beach), band)
-				var strength_mae := _mae_f32(out_gpu.get("turquoise_strength", last_turquoise_strength), shelf_out.get("turquoise_strength", last_turquoise_strength), band)
-				debug_last_metrics["shelf"] = {"turquoise_eq": turq_eq, "beach_eq": beach_eq, "strength_mae": strength_mae}
-				print("[Parity][Shelf] turquoise_eq=", turq_eq, " beach_eq=", beach_eq, " strength_mae=", strength_mae)
+		# Optional parity against CPU shelf
+		if debug_parity:
+			var shelf_cpu := ContinentalShelf.new().compute(w, h, last_height, last_is_land, config.sea_level, shore_noise_field, config.shallow_threshold, config.shore_band, true)
+			var band := PackedByteArray(); band.resize(size)
+			var band_radius: float = config.shore_band + config.shallow_threshold
+			for bi in range(size):
+				var near_coast: bool = (shelf_cpu["water_distance"][bi] if bi < shelf_cpu["water_distance"].size() else 0.0) <= band_radius
+				band[bi] = 1 if near_coast else 0
+			var turq_eq := _equality_rate_u8(last_turquoise_water, shelf_cpu.get("turquoise_water", last_turquoise_water), band)
+			var beach_eq := _equality_rate_u8(last_beach, shelf_cpu.get("beach", last_beach), band)
+			var strength_mae := _mae_f32(last_turquoise_strength, shelf_cpu.get("turquoise_strength", last_turquoise_strength), band)
+			debug_last_metrics["shelf"] = {"turquoise_eq": turq_eq, "beach_eq": beach_eq, "strength_mae": strength_mae}
+			print("[Parity][Shelf] turquoise_eq=", turq_eq, " beach_eq=", beach_eq, " strength_mae=", strength_mae)
+	else:
+		# CPU shelf path
+		var shelf_out := ContinentalShelf.new().compute(w, h, last_height, last_is_land, config.sea_level, shore_noise_field, config.shallow_threshold, config.shore_band, true)
+		last_turquoise_water = shelf_out["turquoise_water"]
+		last_beach = shelf_out["beach"]
+		last_water_distance = shelf_out["water_distance"]
+		last_turquoise_strength = shelf_out["turquoise_strength"]
 
 	# Step 3: climate via CPU or GPU
 	params["distance_to_coast"] = last_water_distance
@@ -473,21 +476,30 @@ func generate() -> PackedByteArray:
 			last_clouds.resize(w * h)
 			for i_c in range(w * h): last_clouds[i_c] = 0.0
 
-	# Optional clouds overlay on GPU
+	# Mountain radiance: run through ClimatePost (GPU if available)
 	if config.use_gpu_all:
-		var cloud_comp: Object = load("res://scripts/systems/CloudOverlayCompute.gd").new()
-		last_clouds = cloud_comp.compute_clouds(w, h, last_temperature, last_moisture, last_is_land, 0.0)
-
-	# Mountain radiance: run through ClimatePost system for parity
-	var post: Dictionary = ClimatePost.new().apply_mountain_radiance(w, h, last_biomes, last_temperature, last_moisture, config.mountain_cool_amp, config.mountain_wet_amp, max(0, config.mountain_radiance_passes))
-	last_temperature = post["temperature"]
-	last_moisture = post["moisture"]
+		var climpost: Object = load("res://scripts/systems/ClimatePostCompute.gd").new()
+		var post: Dictionary = climpost.apply_mountain_radiance(w, h, last_biomes, last_temperature, last_moisture, config.mountain_cool_amp, config.mountain_wet_amp, max(0, config.mountain_radiance_passes))
+		if not post.is_empty():
+			last_temperature = post["temperature"]
+			last_moisture = post["moisture"]
+	else:
+		var post: Dictionary = ClimatePost.new().apply_mountain_radiance(w, h, last_biomes, last_temperature, last_moisture, config.mountain_cool_amp, config.mountain_wet_amp, max(0, config.mountain_radiance_passes))
+		last_temperature = post["temperature"]
+		last_moisture = post["moisture"]
 
 	# Step 4: biomes — use GPU compute when available
 	var params2 := params.duplicate()
 	params2["freeze_temp_threshold"] = 0.16
 	params2["height_scale_m"] = config.height_scale_m
 	params2["lapse_c_per_km"] = 5.5
+	# Animated biome jitter to avoid banding and allow evolution
+	params2["biome_noise_strength_c"] = 0.8
+	params2["biome_moist_jitter"] = 0.06
+	params2["biome_phase"] = float(Time.get_ticks_msec() % 60000) / 60000.0
+	params2["biome_moist_jitter2"] = 0.03
+	params2["biome_moist_islands"] = 0.35
+	params2["biome_moist_elev_dry"] = 0.35
 	if config.use_gpu_all:
 		var desert_field := PackedFloat32Array()
 		if _feature_noise_cache != null:
@@ -501,10 +513,17 @@ func generate() -> PackedByteArray:
 			last_biomes = BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
 	else:
 		last_biomes = BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
-	# BiomePost: apply hot/cold overrides + lava in a single place
-	var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c)
-	last_biomes = post2["biomes"]
-	last_lava = post2["lava"]
+	# BiomePost: apply hot/cold overrides + lava + salt desert (GPU if available)
+	if config.use_gpu_all:
+		var bp: Object = load("res://scripts/systems/BiomePostCompute.gd").new()
+		var post2: Dictionary = bp.apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c, last_lake)
+		if not post2.is_empty():
+			last_biomes = post2["biomes"]
+			last_lava = post2["lava"]
+	else:
+		var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c, last_lake)
+		last_biomes = post2["biomes"]
+		last_lava = post2["lava"]
 
 	# Step 4c: ensure every land cell has a valid biome id
 	_ensure_valid_biomes()
@@ -624,11 +643,14 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_turquoise_strength.resize(size)
 	# Recompute via GPU when enabled, else CPU
 	var shore_noise_field := PackedFloat32Array()
-	shore_noise_field.resize(size)
-	for yy in range(h):
-		for xx in range(w):
-			var ii: int = xx + yy * w
-			shore_noise_field[ii] = _shore_noise.get_noise_2d(float(xx), float(yy)) * 0.5 + 0.5
+	if _feature_noise_cache != null and _feature_noise_cache.shore_noise_field.size() == size:
+		shore_noise_field = _feature_noise_cache.shore_noise_field
+	else:
+		shore_noise_field.resize(size)
+		for yy in range(h):
+			for xx in range(w):
+				var ii: int = xx + yy * w
+				shore_noise_field[ii] = _shore_noise.get_noise_2d(float(xx), float(yy)) * 0.5 + 0.5
 	if config.use_gpu_all:
 		# Distance to coast on GPU
 		if _dt_compute == null:
@@ -690,7 +712,20 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	params2["freeze_temp_threshold"] = 0.16
 	params2["height_scale_m"] = config.height_scale_m
 	params2["lapse_c_per_km"] = 5.5
-	var new_biomes := BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
+	params2["continentality_scale"] = config.continentality_scale
+	var new_biomes := PackedInt32Array()
+	if config.use_gpu_all:
+		var desert_field2 := PackedFloat32Array()
+		if _feature_noise_cache != null:
+			desert_field2 = _feature_noise_cache.desert_noise_field
+		var bc2: Object = load("res://scripts/systems/BiomeCompute.gd").new()
+		var biomes_gpu2: PackedInt32Array = bc2.classify(w, h, last_height, last_is_land, last_temperature, last_moisture, last_beach, desert_field2, params2)
+		if biomes_gpu2.size() == size:
+			new_biomes = biomes_gpu2
+		else:
+			new_biomes = BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
+	else:
+		new_biomes = BiomeClassifier.new().classify(params2, last_is_land, last_height, last_temperature, last_moisture, last_beach)
 	# Build band mask (near coast or toggled land/water)
 	var band := PackedByteArray(); band.resize(size)
 	var band_count: int = 0
@@ -714,7 +749,7 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_biomes = new_biomes
 	_ensure_valid_biomes()
 	# Centralized hot/cold/lava application
-	var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c)
+	var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c, last_lake)
 	last_biomes = post2["biomes"]
 	last_lava = post2["lava"]
 
@@ -814,8 +849,13 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 	if i >= 0 and i < last_biomes.size():
 		var bid: int = last_biomes[i]
 		if land:
-			biome_id = bid
-			biome_name = _biome_to_string(bid)
+			# Promote lava field as its own biome name
+			if i < last_lava.size() and last_lava[i] != 0:
+				biome_id = BiomeClassifier.Biome.LAVA_FIELD if BiomeClassifier.Biome.has("LAVA_FIELD") else bid
+				biome_name = "Lava Field"
+			else:
+				biome_id = bid
+				biome_name = _biome_to_string(bid)
 		else:
 			# Allow special ocean biomes like ICE_SHEET to show in info instead of generic Ocean
 			if bid == BiomeClassifier.Biome.ICE_SHEET:
@@ -828,6 +868,16 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 	var t_norm: float = (last_temperature[i] if i < last_temperature.size() else 0.5)
 	var temp_c: float = config.temp_min_c + t_norm * (config.temp_max_c - config.temp_min_c)
 	var humidity: float = (last_moisture[i] if i < last_moisture.size() else 0.5)
+	# Apply descriptive prefixes for extreme temperatures in info panel
+	var display_name: String = biome_name
+	if land and not is_lava:
+		var bid2: int = (last_biomes[i] if i < last_biomes.size() else -1)
+		if temp_c <= -5.0:
+			if bid2 != BiomeClassifier.Biome.GLACIER and bid2 != BiomeClassifier.Biome.DESERT_ICE and bid2 != BiomeClassifier.Biome.ICE_SHEET and bid2 != BiomeClassifier.Biome.FROZEN_FOREST and bid2 != BiomeClassifier.Biome.FROZEN_MARSH:
+				display_name = "Frozen " + display_name
+		elif temp_c >= 45.0:
+			if bid2 != BiomeClassifier.Biome.LAVA_FIELD:
+				display_name = "Scorched " + display_name
 	return {
 		"height": h_val,
 		"is_land": land,
@@ -837,7 +887,7 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 		"is_river": is_river,
 		"is_lake": is_lake,
 		"biome": biome_id,
-		"biome_name": biome_name,
+		"biome_name": display_name,
 		"temp_c": temp_c,
 		"humidity": humidity,
 	}
@@ -852,36 +902,54 @@ func _biome_to_string(b: int) -> String:
 			return "Beach"
 		BiomeClassifier.Biome.DESERT_SAND:
 			return "Sand Desert"
-		BiomeClassifier.Biome.DESERT_ROCK:
-			return "Rock Desert"
+		BiomeClassifier.Biome.WASTELAND:
+			return "Wasteland"
 		BiomeClassifier.Biome.DESERT_ICE:
 			return "Ice Desert"
 		BiomeClassifier.Biome.STEPPE:
 			return "Steppe"
 		BiomeClassifier.Biome.GRASSLAND:
 			return "Grassland"
-		BiomeClassifier.Biome.MEADOW:
-			return "Meadow"
-		BiomeClassifier.Biome.PRAIRIE:
-			return "Prairie"
 		BiomeClassifier.Biome.SWAMP:
 			return "Swamp"
 		BiomeClassifier.Biome.BOREAL_FOREST:
 			return "Boreal Forest"
-		BiomeClassifier.Biome.CONIFER_FOREST:
-			return "Conifer Forest"
 		BiomeClassifier.Biome.TEMPERATE_FOREST:
 			return "Temperate Forest"
 		BiomeClassifier.Biome.RAINFOREST:
 			return "Rainforest"
 		BiomeClassifier.Biome.HILLS:
 			return "Hills"
-		BiomeClassifier.Biome.FOOTHILLS:
-			return "Foothills"
 		BiomeClassifier.Biome.MOUNTAINS:
 			return "Mountains"
 		BiomeClassifier.Biome.ALPINE:
 			return "Alpine"
+		BiomeClassifier.Biome.FROZEN_FOREST:
+			return "Frozen Forest"
+		BiomeClassifier.Biome.FROZEN_MARSH:
+			return "Frozen Marsh"
+		BiomeClassifier.Biome.FROZEN_GRASSLAND:
+			return "Frozen Grassland"
+		BiomeClassifier.Biome.FROZEN_STEPPE:
+			return "Frozen Steppe"
+		# Frozen Meadow/Prairie merged into Frozen Grassland
+		BiomeClassifier.Biome.FROZEN_SAVANNA:
+			return "Frozen Savanna"
+		BiomeClassifier.Biome.FROZEN_HILLS:
+			return "Frozen Hills"
+		# Foothills merged into Hills
+		BiomeClassifier.Biome.SCORCHED_GRASSLAND:
+			return "Scorched Grassland"
+		BiomeClassifier.Biome.SCORCHED_STEPPE:
+			return "Scorched Steppe"
+		# Scorched Meadow/Prairie merged into Scorched Grassland
+		BiomeClassifier.Biome.SCORCHED_SAVANNA:
+			return "Scorched Savanna"
+		BiomeClassifier.Biome.SCORCHED_HILLS:
+			return "Scorched Hills"
+		# Foothills merged into Hills
+		BiomeClassifier.Biome.SALT_DESERT:
+			return "Salt Desert"
 		_:
 			return "Grassland"
 
@@ -923,13 +991,13 @@ func _fallback_biome(i: int) -> int:
 	if dry > 0.6 and hot > 0.3:
 		return BiomeClassifier.Biome.DESERT_SAND
 	if dry > 0.6 and hot <= 0.3:
-		return BiomeClassifier.Biome.DESERT_ROCK
+		return BiomeClassifier.Biome.WASTELAND
 	if cold > 0.6 and dry > 0.4:
 		return BiomeClassifier.Biome.DESERT_ICE
 	if wet > 0.6 and hot > 0.4:
 		return BiomeClassifier.Biome.RAINFOREST
 	if m > 0.55 and t > 0.5:
-		return BiomeClassifier.Biome.TROPICAL_FOREST
+		return BiomeClassifier.Biome.RAINFOREST
 	if wet > 0.5 and cold > 0.4:
 		return BiomeClassifier.Biome.SWAMP
 	if cold > 0.6:
@@ -937,15 +1005,15 @@ func _fallback_biome(i: int) -> int:
 	if m > 0.6 and t > 0.5:
 		return BiomeClassifier.Biome.TEMPERATE_FOREST
 	if m > 0.4 and t > 0.4:
-		return BiomeClassifier.Biome.CONIFER_FOREST
+		return BiomeClassifier.Biome.BOREAL_FOREST
 	if m > 0.3 and t > 0.3:
-		return BiomeClassifier.Biome.MEADOW
+		return BiomeClassifier.Biome.GRASSLAND
 	if m > 0.25 and t > 0.35:
-		return BiomeClassifier.Biome.PRAIRIE
+		return BiomeClassifier.Biome.GRASSLAND
 	if m > 0.2 and t > 0.25:
 		return BiomeClassifier.Biome.STEPPE
 	if high > 0.3:
-		return BiomeClassifier.Biome.FOOTHILLS
+		return BiomeClassifier.Biome.HILLS
 	if high > 0.2:
 		return BiomeClassifier.Biome.HILLS
 	return BiomeClassifier.Biome.GRASSLAND
@@ -1001,12 +1069,12 @@ func _apply_hot_temperature_override(w: int, h: int) -> void:
 					var hot: float = clamp((t_norm - 0.60) * 2.4, 0.0, 1.0)
 					var noise_val: float = n.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
 					var sand_prob: float = clamp(0.25 + 0.6 * hot, 0.0, 0.98)
-					last_biomes[i] = BiomeClassifier.Biome.DESERT_SAND if noise_val < sand_prob else BiomeClassifier.Biome.DESERT_ROCK
+					last_biomes[i] = BiomeClassifier.Biome.DESERT_SAND if noise_val < sand_prob else BiomeClassifier.Biome.WASTELAND
 				else:
 					# Hot but not very dry: keep relief unless quite dry
-					if (b == BiomeClassifier.Biome.MOUNTAINS or b == BiomeClassifier.Biome.ALPINE or b == BiomeClassifier.Biome.HILLS or b == BiomeClassifier.Biome.FOOTHILLS):
+					if (b == BiomeClassifier.Biome.MOUNTAINS or b == BiomeClassifier.Biome.ALPINE or b == BiomeClassifier.Biome.HILLS):
 						if m < 0.35:
-							last_biomes[i] = BiomeClassifier.Biome.DESERT_ROCK
+							last_biomes[i] = BiomeClassifier.Biome.WASTELAND
 						# else keep relief biome
 					else:
 						last_biomes[i] = BiomeClassifier.Biome.STEPPE
@@ -1025,4 +1093,4 @@ func _apply_cold_temperature_override(w: int, h: int) -> void:
 				if m >= 0.25:
 					last_biomes[i] = BiomeClassifier.Biome.DESERT_ICE
 				else:
-					last_biomes[i] = BiomeClassifier.Biome.DESERT_ROCK
+					last_biomes[i] = BiomeClassifier.Biome.WASTELAND

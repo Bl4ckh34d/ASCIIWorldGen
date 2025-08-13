@@ -69,16 +69,61 @@ void main() {
     int i = int(x) + int(y) * W;
 
     float lat = abs(float(y) / max(1.0, float(H) - 1.0) - 0.5) * 2.0;
-    float elev_cool = clamp((Height.height_data[i] - 0.1) * 0.7, 0.0, 1.0);
+    // Apply elevation cooling only above sea level (temperature-neutral below sea level)
+    float rel_elev = max(0.0, Height.height_data[i] - PC.sea_level);
+    float elev_cool = clamp(rel_elev * 1.2, 0.0, 1.0);
     float zonal = 0.5 + 0.5 * sin(6.28318 * float(y) / float(H) * 3.0);
     float u = 1.0 - lat;
     float t_lat = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6);
-    float t = t_lat * 0.82 + zonal * 0.15 - elev_cool * 0.9 + 0.18 * TempNoise.temp_noise_data[i];
+    bool land_px = (IsLand.is_land_data[i] != 0u);
+    float lat_amp = land_px ? 1.0 : 0.82; // damp lat gradient over ocean
+    float t = t_lat * 0.82 * lat_amp + zonal * 0.15 - elev_cool * 0.9 + 0.18 * TempNoise.temp_noise_data[i];
 
     float dc_norm = clamp(Dist.dist_data[i] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
-    float t_anom = (t - 0.5) * (1.0 + 0.8 * dc_norm);
+    float cont_gain = land_px ? 0.8 : 0.2; // much smaller anomalies over open ocean
+    float t_anom = (t - 0.5) * (1.0 + cont_gain * dc_norm);
     t = clamp01(0.5 + t_anom);
     t = clamp01((t + PC.temp_base_offset - 0.5) * PC.temp_scale + 0.5);
+
+    // Shore temperature anchoring: for first ~2 cells into the ocean,
+    // blend ocean temperature toward adjacent land temperature so polar
+    // coastlines don't have an unfrozen water rim
+    if (!land_px) {
+        float d = Dist.dist_data[i];
+        if (d <= 2.0) {
+            float t_land_sum = 0.0;
+            int cnt = 0;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dy == 0) { continue; }
+                    int nx = int(x) + dx;
+                    int ny = int(y) + dy;
+                    if (nx < 0 || ny < 0 || nx >= W || ny >= H) { continue; }
+                    int j = nx + ny * W;
+                    if (IsLand.is_land_data[j] != 0u) {
+                        float lat2 = abs(float(ny) / max(1.0, float(H) - 1.0) - 0.5) * 2.0;
+                        float u2 = 1.0 - lat2;
+                        float t_lat2 = 0.65 * pow(u2, 0.8) + 0.35 * pow(u2, 1.6);
+                        float rel_elev2 = max(0.0, Height.height_data[j] - PC.sea_level);
+                        float elev_cool2 = clamp(rel_elev2 * 1.2, 0.0, 1.0);
+                        float zonal2 = 0.5 + 0.5 * sin(6.28318 * float(ny) / float(H) * 3.0);
+                        float t2 = t_lat2 * 0.82 + zonal2 * 0.15 - elev_cool2 * 0.9 + 0.18 * TempNoise.temp_noise_data[j];
+                        float dc2 = clamp(Dist.dist_data[j] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
+                        float t_anom2 = (t2 - 0.5) * (1.0 + 0.8 * dc2);
+                        t2 = clamp01(0.5 + t_anom2);
+                        t2 = clamp01((t2 + PC.temp_base_offset - 0.5) * PC.temp_scale + 0.5);
+                        t_land_sum += t2;
+                        cnt++;
+                    }
+                }
+            }
+            if (cnt > 0) {
+                float t_land_avg = t_land_sum / float(cnt);
+                float wblend = smoothstep(0.0, 2.0, d);
+                t = mix(t_land_avg, t, wblend);
+            }
+        }
+    }
 
     float m_base = 0.5 + 0.3 * sin(6.28318 * float(y) / float(H) * 3.0);
     // Moisture base noise sampled with offset (x+100, y-50)

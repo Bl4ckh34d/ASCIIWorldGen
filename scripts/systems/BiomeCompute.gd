@@ -50,13 +50,15 @@ func _ensure() -> void:
 		_reapply_pipeline = _rd.compute_pipeline_create(_reapply_shader)
 
 func classify(w: int, h: int,
-		height: PackedFloat32Array,
-		is_land: PackedByteArray,
-		temperature: PackedFloat32Array,
-		moisture: PackedFloat32Array,
-		beach_mask: PackedByteArray,
-		desert_field: PackedFloat32Array,
-		params: Dictionary) -> PackedInt32Array:
+	height: PackedFloat32Array,
+	is_land: PackedByteArray,
+	temperature: PackedFloat32Array,
+	moisture: PackedFloat32Array,
+	beach_mask: PackedByteArray,
+	desert_field: PackedFloat32Array,
+	params: Dictionary,
+	lake_mask: PackedByteArray = PackedByteArray(),
+	river_mask: PackedByteArray = PackedByteArray()) -> PackedInt32Array:
 	_ensure()
 	if not _pipeline.is_valid():
 		return PackedInt32Array()
@@ -84,6 +86,13 @@ func classify(w: int, h: int,
 	# Output
 	var out_biomes := PackedInt32Array(); out_biomes.resize(size)
 	var buf_out := _rd.storage_buffer_create(out_biomes.to_byte_array().size(), out_biomes.to_byte_array())
+	# Optional hydro masks (lakes/rivers)
+	var lake_u32 := PackedInt32Array(); lake_u32.resize(size)
+	for i_l in range(size): lake_u32[i_l] = 1 if (i_l < lake_mask.size() and lake_mask[i_l] != 0) else 0
+	var buf_lake := _rd.storage_buffer_create(lake_u32.to_byte_array().size(), lake_u32.to_byte_array())
+	var river_u32 := PackedInt32Array(); river_u32.resize(size)
+	for i_r in range(size): river_u32[i_r] = 1 if (i_r < river_mask.size() and river_mask[i_r] != 0) else 0
+	var buf_river := _rd.storage_buffer_create(river_u32.to_byte_array().size(), river_u32.to_byte_array())
 
 	# Uniform set
 	var uniforms: Array = []
@@ -95,12 +104,19 @@ func classify(w: int, h: int,
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_beach); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(buf_desert); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(buf_out); uniforms.append(u)
+	# New optional inputs
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(buf_lake); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 8; u.add_id(buf_river); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 
 	# Push constants
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
 	var freeze_norm: float = float(params.get("freeze_temp_threshold", 0.16))
+	# Animated jitter to break banding; controllable via params
+	var noise_c: float = float(params.get("biome_noise_strength_c", 0.8))
+	var moist_jitter: float = float(params.get("biome_moist_jitter", 0.06))
+	var phase: float = float(params.get("biome_phase", 0.0))
 	# freeze provided as normalized threshold in GPU to match effective temperature space
 	var floats := PackedFloat32Array([
 		float(params.get("temp_min_c", -40.0)),
@@ -108,9 +124,27 @@ func classify(w: int, h: int,
 		float(params.get("height_scale_m", 6000.0)),
 		float(params.get("lapse_c_per_km", 5.5)),
 		freeze_norm,
+		noise_c,
+		moist_jitter,
+		phase,
+		float(params.get("biome_moist_jitter2", 0.03)),
+		float(params.get("biome_moist_islands", 0.35)),
+		float(params.get("biome_moist_elev_dry", 0.35)),
+	])
+	# Real map height min/max for normalized relief thresholds
+	var min_h: float = 1e9
+	var max_h: float = -1e9
+	for hi in range(size):
+		var hv: float = height[hi]
+		if hv < min_h: min_h = hv
+		if hv > max_h: max_h = hv
+	var floats2 := PackedFloat32Array([
+		min_h,
+		max_h,
 	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
+	pc.append_array(floats2.to_byte_array())
 	var tail := PackedInt32Array([ (1 if use_desert else 0) ])
 	pc.append_array(tail.to_byte_array())
 	# Align to 16-byte multiple
@@ -214,7 +248,7 @@ func classify(w: int, h: int,
 	_rd.free_rid(buf_beach)
 	_rd.free_rid(buf_desert)
 	_rd.free_rid(buf_out)
+	_rd.free_rid(buf_lake)
+	_rd.free_rid(buf_river)
 
 	return biomes
-
-

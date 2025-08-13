@@ -32,7 +32,9 @@ func evaluate(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArr
 		var lat: float = abs(float(y) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
 		for x in range(w):
 			var i: int = x + y * w
-			var elev_cool: float = clamp((height[i] - 0.1) * 0.7, 0.0, 1.0)
+			# Apply elevation cooling only above sea level
+			var rel_elev: float = max(0.0, height[i] - sea_level)
+			var elev_cool: float = clamp(rel_elev * 1.2, 0.0, 1.0)
 			var zonal: float = 0.5 + 0.5 * sin(6.28318 * float(y) / float(h) * 3.0)
 			var u: float = 1.0 - lat
 			var t_lat: float = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6)
@@ -75,5 +77,3 @@ func evaluate(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArr
 		"moisture": moisture,
 		"precip": precip,
 	}
-
-

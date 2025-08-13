@@ -4,7 +4,7 @@ extends RefCounted
 ## GPU ClimateAdjust using Godot 4 RenderingDevice and a compute shader.
 ## CPU fallback kept by caller.
 
-const CLIMATE_SHADER_FILE := preload("res://shaders/climate_adjust.glsl")
+var CLIMATE_SHADER_FILE: RDShaderFile = load("res://shaders/climate_adjust.glsl")
 var CLIMATE_NOISE_SHADER_FILE: RDShaderFile = load("res://shaders/climate_noise.glsl")
 
 var _rd: RenderingDevice

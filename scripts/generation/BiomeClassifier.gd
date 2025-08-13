@@ -4,34 +4,67 @@ extends RefCounted
 const BiomeRules = preload("res://scripts/systems/BiomeRules.gd")
 
 enum Biome {
-	OCEAN,
-	ICE_SHEET,
-	BEACH,
-	DESERT_SAND,
-	DESERT_ROCK,
-	DESERT_ICE,
-	STEPPE,
-	GRASSLAND,
-	MEADOW,
-	PRAIRIE,
-	SWAMP,
-	TROPICAL_FOREST,
-	BOREAL_FOREST,
-	CONIFER_FOREST,
-	TEMPERATE_FOREST,
-	RAINFOREST,
-	HILLS,
-	FOOTHILLS,
-	MOUNTAINS,
-	ALPINE,
-	TUNDRA,
-	SAVANNA,
-	FROZEN_FOREST,
-	FROZEN_MARSH,
-	GLACIER,
-	LAVA_FIELD,
-	VOLCANIC_BADLANDS,
-	SCORCHED_FOREST,
+	# Water
+	OCEAN = 0,
+	ICE_SHEET = 1,
+	BEACH = 2,
+
+	# Desert triad
+	DESERT_ICE = 5,
+	DESERT_SAND = 3,
+	WASTELAND = 4,
+	# (Scorched desert maps to same visuals; extreme becomes LAVA_FIELD)
+
+	# Grassland triad
+	FROZEN_GRASSLAND = 29,
+	GRASSLAND = 7,
+	SCORCHED_GRASSLAND = 36,
+
+	# Steppe triad
+	FROZEN_STEPPE = 30,
+	STEPPE = 6,
+	SCORCHED_STEPPE = 37,
+
+	# Meadow/Prairie collapsed into Grassland
+
+	# Savanna triad
+	FROZEN_SAVANNA = 33,
+	SAVANNA = 21,
+	SCORCHED_SAVANNA = 40,
+
+	# Hills triad
+	FROZEN_HILLS = 34,
+	HILLS = 16,
+	SCORCHED_HILLS = 41,
+
+	# Foothills collapsed into Hills
+
+	# Forest triad (multiple normals share one frozen/scorched)
+	FROZEN_FOREST = 22,
+	TROPICAL_FOREST = 11,
+	BOREAL_FOREST = 12,
+	CONIFER_FOREST = 13,
+	TEMPERATE_FOREST = 14,
+	RAINFOREST = 15,
+	SCORCHED_FOREST = 27,
+
+	# Wetland triad
+	FROZEN_MARSH = 23, # Frozen Swamp
+	SWAMP = 10,
+	# Scorched Swamp reuses SCORCHED_FOREST
+
+	# Cold band (acts as its own class)
+	TUNDRA = 20,
+
+	# Mountains and high relief
+	GLACIER = 24,
+	MOUNTAINS = 18,
+	ALPINE = 19,
+
+	# Specials
+	LAVA_FIELD = 25,
+	VOLCANIC_BADLANDS = 26,
+	SALT_DESERT = 28,
 }
 
 ## Produces smooth biomes using temperature & moisture with soft thresholds
@@ -52,8 +85,6 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 	var MIN_M_CONIFER_FOREST := 0.45
 	var MIN_M_BOREAL_FOREST := 0.40
 	var MIN_M_SWAMP := 0.65
-	var MIN_M_MEADOW := 0.35
-	var MIN_M_PRAIRIE := 0.30
 	var MIN_M_GRASSLAND := 0.25
 	var MIN_M_STEPPE := 0.15
 
@@ -128,10 +159,10 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 			# Base choice via centralized rules
 			var choice := BiomeRules.new().classify_cell(t_c_adj, m, elev, true)
 			# If rules yield a desert base at high heat/dryness, apply sand vs rock via noise
-			if choice == Biome.DESERT_ROCK and t > 0.60 and m < 0.40:
+			if choice == Biome.WASTELAND and t > 0.60 and m < 0.40:
 				var noise_val: float = (desert_field[i] if use_desert_field else (desert_noise.get_noise_2d(float(x) * xscale, float(y)) * 0.5 + 0.5))
 				var sand_prob: float = clamp(0.25 + 0.6 * clamp((t - 0.60) * 2.4, 0.0, 1.0), 0.0, 0.98)
-				choice = Biome.DESERT_SAND if noise_val < sand_prob else Biome.DESERT_ROCK
+				choice = Biome.DESERT_SAND if noise_val < sand_prob else Biome.WASTELAND
 
 			# Prevent lush tropical/rainforest at very high elevations (e.g., Tibetan Plateau)
 			if (choice == Biome.RAINFOREST or choice == Biome.TROPICAL_FOREST):
@@ -139,9 +170,9 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 					if m > 0.6 and t_eff > 0.45:
 						choice = Biome.TEMPERATE_FOREST
 					elif m > 0.45 and t_eff > 0.35:
-						choice = Biome.CONIFER_FOREST
+						choice = Biome.BOREAL_FOREST
 					elif m > 0.35:
-						choice = Biome.MEADOW
+						choice = Biome.GRASSLAND
 					else:
 						choice = Biome.STEPPE
 
@@ -153,7 +184,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 					var noise_val2: float = (desert_field[i] if use_desert_field else (desert_noise.get_noise_2d(float(x) * xscale, float(y)) * 0.5 + 0.5))
 					var heat_bias: float = clamp((t - 0.60) * 2.4, 0.0, 1.0)
 					var sand_prob2: float = clamp(0.25 + 0.6 * heat_bias, 0.0, 0.98)
-					choice = Biome.DESERT_SAND if noise_val2 < sand_prob2 else Biome.DESERT_ROCK
+					choice = Biome.DESERT_SAND if noise_val2 < sand_prob2 else Biome.WASTELAND
 			elif m < MIN_M_GRASSLAND:
 				choice = Biome.STEPPE
 			else:
@@ -163,7 +194,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 					elif m >= MIN_M_TEMPERATE_FOREST and t_eff > 0.45:
 						choice = Biome.TEMPERATE_FOREST
 					elif m >= MIN_M_CONIFER_FOREST:
-						choice = Biome.CONIFER_FOREST
+						choice = Biome.BOREAL_FOREST
 					elif m >= MIN_M_GRASSLAND:
 						choice = Biome.GRASSLAND
 					else:
@@ -172,14 +203,14 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 					if m >= MIN_M_TEMPERATE_FOREST and t_eff > 0.45:
 						choice = Biome.TEMPERATE_FOREST
 					elif m >= MIN_M_CONIFER_FOREST:
-						choice = Biome.CONIFER_FOREST
+						choice = Biome.BOREAL_FOREST
 					elif m >= MIN_M_GRASSLAND:
 						choice = Biome.GRASSLAND
 					else:
 						choice = Biome.STEPPE
 				elif choice == Biome.TEMPERATE_FOREST and m < MIN_M_TEMPERATE_FOREST:
 					if m >= MIN_M_CONIFER_FOREST:
-						choice = Biome.CONIFER_FOREST
+						choice = Biome.BOREAL_FOREST
 					elif m >= MIN_M_GRASSLAND:
 						choice = Biome.GRASSLAND
 					else:
@@ -187,7 +218,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 				elif choice == Biome.CONIFER_FOREST and m < MIN_M_CONIFER_FOREST:
 					choice = Biome.GRASSLAND if m >= MIN_M_GRASSLAND else Biome.STEPPE
 				elif choice == Biome.BOREAL_FOREST and m < MIN_M_BOREAL_FOREST:
-					choice = Biome.CONIFER_FOREST if m >= MIN_M_CONIFER_FOREST else (Biome.GRASSLAND if m >= MIN_M_GRASSLAND else Biome.STEPPE)
+					choice = Biome.BOREAL_FOREST if m >= MIN_M_CONIFER_FOREST else (Biome.GRASSLAND if m >= MIN_M_GRASSLAND else Biome.STEPPE)
 				elif choice == Biome.SWAMP and m < MIN_M_SWAMP:
 					if m >= MIN_M_TEMPERATE_FOREST and t_eff > 0.45:
 						choice = Biome.TEMPERATE_FOREST
@@ -197,10 +228,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 						choice = Biome.GRASSLAND
 					else:
 						choice = Biome.STEPPE
-				elif choice == Biome.MEADOW and m < MIN_M_MEADOW:
-					choice = Biome.GRASSLAND if m >= MIN_M_GRASSLAND else Biome.STEPPE
-				elif choice == Biome.PRAIRIE and m < MIN_M_PRAIRIE:
-					choice = Biome.GRASSLAND if m >= MIN_M_GRASSLAND else Biome.STEPPE
+				# Meadow/Prairie merged into Grassland
 				elif choice == Biome.GRASSLAND and m < MIN_M_GRASSLAND:
 					choice = Biome.STEPPE
 

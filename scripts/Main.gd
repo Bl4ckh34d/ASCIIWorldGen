@@ -12,6 +12,10 @@ extends Control
 @onready var randomize_check: CheckBox = $RootVBox/TopBar/Randomize
 @onready var sea_slider: HSlider = $RootVBox/TopBar/SeaSlider
 @onready var sea_value_label: Label = $RootVBox/TopBar/SeaVal
+var temp_slider: HSlider
+var temp_value_label: Label
+var cont_slider: HSlider
+var cont_value_label: Label
 
 var is_running: bool = false
 var generator: Object
@@ -57,11 +61,51 @@ func _ready() -> void:
 	ascii_map.resized.connect(_on_map_resized)
 	sea_slider.value_changed.connect(_on_sea_changed)
 	_update_sea_label()
+	# Create global temperature slider dynamically next to sea slider
+	var topbar: Control = $RootVBox/TopBar
+	if topbar:
+		var temp_label := Label.new()
+		temp_label.text = "Temp"
+		topbar.add_child(temp_label)
+		temp_slider = HSlider.new()
+		temp_slider.min_value = 0.0
+		temp_slider.max_value = 1.0
+		temp_slider.step = 0.001
+		temp_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		topbar.add_child(temp_slider)
+		temp_value_label = Label.new()
+		temp_value_label.text = ""
+		topbar.add_child(temp_value_label)
+		temp_slider.value_changed.connect(_on_temp_changed)
+		_update_temp_label()
+		# Continental amplification slider
+		var cont_label := Label.new()
+		cont_label.text = "Cont"
+		topbar.add_child(cont_label)
+		cont_slider = HSlider.new()
+		cont_slider.min_value = 0.0
+		cont_slider.max_value = 3.0
+		cont_slider.step = 0.01
+		cont_slider.value = 1.2
+		cont_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		topbar.add_child(cont_slider)
+		cont_value_label = Label.new()
+		cont_value_label.text = ""
+		topbar.add_child(cont_value_label)
+		cont_slider.value_changed.connect(_on_cont_changed)
+		_update_cont_label()
 	sea_debounce_timer = Timer.new()
 	sea_debounce_timer.one_shot = true
 	sea_debounce_timer.wait_time = 0.08
 	add_child(sea_debounce_timer)
 	sea_debounce_timer.timeout.connect(_on_sea_debounce_timeout)
+	# Debounce for temperature slider as well
+	var temp_timer := Timer.new()
+	temp_timer.name = "TempDebounceTimer"
+	temp_timer.one_shot = true
+	temp_timer.wait_time = 0.12
+	add_child(temp_timer)
+	(temp_timer as Timer).timeout.connect(_on_temp_debounce_timeout)
 	if settings_dialog.has_signal("settings_applied"):
 		settings_dialog.connect("settings_applied", Callable(self, "_on_settings_applied"))
 	_reset_view()
@@ -137,10 +181,7 @@ func _apply_seed_from_ui() -> void:
 	var txt: String = seed_input.text.strip_edges()
 	var cfg := {}
 	if txt.length() == 0:
-		# randomize seed
-		cfg["seed"] = null
-		generator.apply_config(cfg)
-		# reflect used seed back into UI label
+		# Leave existing seed unchanged; just reflect it in the label
 		seed_used_label.text = "Used: %d" % generator.config.rng_seed
 	else:
 		cfg["seed"] = txt
@@ -148,7 +189,9 @@ func _apply_seed_from_ui() -> void:
 		seed_used_label.text = "Used: %d" % generator.config.rng_seed
 	# If randomize is on, jitter core params slightly per Play
 	if randomize_check and randomize_check.button_pressed:
+		# Jitter other parameters but preserve current seed
 		var cfg2 := RandomizeService.new().jitter_config(generator.config, Time.get_ticks_usec())
+		cfg2.erase("seed")
 		generator.apply_config(cfg2)
 		# Reflect randomized sea level to slider without emitting value_changed
 		sea_signal_blocked = true
@@ -180,6 +223,47 @@ func _on_sea_changed(v: float) -> void:
 
 func _update_sea_label() -> void:
 	sea_value_label.text = "%.2f" % float(sea_slider.value)
+
+func _on_temp_changed(v: float) -> void:
+	if generator == null:
+		return
+	# Mapping requested:
+	# v=0 -> min=-80, max=-15 | v=1 -> min=15, max=80
+	var min_c: float = lerp(-80.0, 15.0, v)
+	var max_c: float = lerp(-15.0, 80.0, v)
+	var cfg := {
+		"temp_min_c": min_c,
+		"temp_max_c": max_c,
+		"temp_base_offset": (v - 0.5) * 0.4,
+		"temp_scale": lerp(0.9, 1.2, v),
+	}
+	generator.apply_config(cfg)
+	_update_temp_label()
+	var temp_timer := get_node_or_null("TempDebounceTimer")
+	if temp_timer and temp_timer is Timer:
+		(temp_timer as Timer).start()
+
+func _update_temp_label() -> void:
+	if temp_value_label and generator:
+		temp_value_label.text = "%d..%d C" % [int(generator.config.temp_min_c), int(generator.config.temp_max_c)]
+
+func _on_temp_debounce_timeout() -> void:
+	_generate_and_draw()
+
+func _on_cont_changed(v: float) -> void:
+	if generator == null:
+		return
+	# Apply without altering current seed
+	var cfg := { "continentality_scale": float(v) }
+	generator.apply_config(cfg)
+	_update_cont_label()
+	var temp_timer := get_node_or_null("TempDebounceTimer")
+	if temp_timer and temp_timer is Timer:
+		(temp_timer as Timer).start()
+
+func _update_cont_label() -> void:
+	if cont_value_label and generator:
+		cont_value_label.text = "x%.2f" % float(generator.config.continentality_scale)
 
 func _on_sea_debounce_timeout() -> void:
 	if sea_update_pending:

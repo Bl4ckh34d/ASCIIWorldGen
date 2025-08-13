@@ -23,32 +23,57 @@ func color_for_biome(biome: int, is_beach: bool) -> Color:
 			return Color(0.12, 0.78, 0.28)
 		BiomeClassifier.Biome.DESERT_SAND:
 			return Color(0.90, 0.85, 0.55)
-		BiomeClassifier.Biome.DESERT_ROCK:
+		BiomeClassifier.Biome.WASTELAND:
 			return Color(0.70, 0.65, 0.50)
 		BiomeClassifier.Biome.DESERT_ICE:
 			return Color(0.90, 0.95, 1.0)
 		BiomeClassifier.Biome.STEPPE:
 			return Color(0.65, 0.75, 0.50)
-		BiomeClassifier.Biome.GRASSLAND, BiomeClassifier.Biome.MEADOW, BiomeClassifier.Biome.PRAIRIE:
+		BiomeClassifier.Biome.GRASSLAND:
 			return Color(0.20, 0.80, 0.20)
 		BiomeClassifier.Biome.SWAMP:
 			return Color(0.25, 0.45, 0.25)
 		BiomeClassifier.Biome.BOREAL_FOREST:
 			return Color(0.20, 0.55, 0.25)
-		BiomeClassifier.Biome.CONIFER_FOREST:
-			return Color(0.18, 0.65, 0.28)
+		# Conifer merged into Boreal
 		BiomeClassifier.Biome.TEMPERATE_FOREST:
 			return Color(0.15, 0.70, 0.25)
 		BiomeClassifier.Biome.RAINFOREST:
 			return Color(0.10, 0.75, 0.30)
 		BiomeClassifier.Biome.HILLS:
 			return Color(0.35, 0.55, 0.25)
-		BiomeClassifier.Biome.FOOTHILLS:
-			return Color(0.45, 0.55, 0.30)
+		# Foothills merged into Hills
 		BiomeClassifier.Biome.MOUNTAINS:
 			return Color(0.50, 0.50, 0.50)
 		BiomeClassifier.Biome.ALPINE:
 			return Color(0.85, 0.85, 0.90)
+		# Frozen variants
+		BiomeClassifier.Biome.FROZEN_FOREST:
+			return Color(0.88, 0.94, 0.96)
+		BiomeClassifier.Biome.FROZEN_MARSH:
+			return Color(0.90, 0.95, 0.98)
+		BiomeClassifier.Biome.FROZEN_GRASSLAND:
+			return Color(0.82, 0.90, 0.95)
+		BiomeClassifier.Biome.FROZEN_STEPPE:
+			return Color(0.85, 0.90, 0.96)
+		# Frozen Meadow/Prairie merged into Frozen Grassland
+		BiomeClassifier.Biome.FROZEN_SAVANNA:
+			return Color(0.86, 0.92, 0.95)
+		BiomeClassifier.Biome.FROZEN_HILLS:
+			return Color(0.88, 0.92, 0.96)
+		# Scorched variants
+		BiomeClassifier.Biome.SCORCHED_GRASSLAND:
+			return Color(0.60, 0.52, 0.30)
+		BiomeClassifier.Biome.SCORCHED_STEPPE:
+			return Color(0.62, 0.54, 0.34)
+		# Scorched Meadow/Prairie merged into Scorched Grassland
+		BiomeClassifier.Biome.SCORCHED_SAVANNA:
+			return Color(0.64, 0.58, 0.36)
+		BiomeClassifier.Biome.SCORCHED_HILLS:
+			return Color(0.55, 0.50, 0.35)
+		BiomeClassifier.Biome.SALT_DESERT:
+			# Bright saline crust: white with slight cyan hint
+			return Color(0.95, 0.97, 1.0)
 		_:
 			return Color(0.30, 0.70, 0.25)
 

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://4wt1ooqtgina"
+path="res://.godot/imported/biome_overrides_lava.glsl-421b06ce727c0c3244b7c0c968f9a919.res"
+
+[deps]
+
+source_file="res://shaders/biome_overrides_lava.glsl"
+dest_files=["res://.godot/imported/biome_overrides_lava.glsl-421b06ce727c0c3244b7c0c968f9a919.res"]
+
+[params]
+

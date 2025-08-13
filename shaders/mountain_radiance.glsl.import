@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c5ee35daorju6"
+path="res://.godot/imported/mountain_radiance.glsl-25cae058b0302e5fafb0935a96a6b921.res"
+
+[deps]
+
+source_file="res://shaders/mountain_radiance.glsl"
+dest_files=["res://.godot/imported/mountain_radiance.glsl-25cae058b0302e5fafb0935a96a6b921.res"]
+
+[params]
+
