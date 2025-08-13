@@ -544,7 +544,7 @@ func generate() -> PackedByteArray:
 			if fc_out.size() > 0:
 				hydro2 = fc_out
 			else:
-				hydro2 = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "max_lakes": max_lakes_guess})
+				hydro2 = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "sea_level": config.sea_level, "rng_seed": config.rng_seed})
 			# Parity: flow vs CPU
 			if debug_parity:
 				var hydro_cpu: Dictionary = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "max_lakes": max_lakes_guess})
@@ -557,11 +557,17 @@ func generate() -> PackedByteArray:
 			hydro2 = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "max_lakes": max_lakes_guess})
 		last_flow_dir = hydro2["flow_dir"]
 		last_flow_accum = hydro2["flow_accum"]
+		# Use strict-fill lake if provided
+		if hydro2.has("lake"):
+			last_lake = hydro2["lake"]
+		if hydro2.has("lake_id"):
+			last_lake_id = hydro2["lake_id"]
 		# Trace and prune rivers on GPU if available, else use CPU result
 		if config.use_gpu_all:
 			if _river_compute == null:
 				_river_compute = RiverCompute.new()
-			var river_gpu: PackedByteArray = _river_compute.trace_rivers(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5)
+			var forced: PackedInt32Array = hydro2.get("outflow_seeds", PackedInt32Array())
+			var river_gpu: PackedByteArray = _river_compute.trace_rivers(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, forced)
 			if river_gpu.size() == w * h:
 				last_river = river_gpu
 			else:
@@ -575,11 +581,6 @@ func generate() -> PackedByteArray:
 			last_river = hydro2.get("river", last_river)
 		if hydro2.has("lake"):
 			last_pooled_lake = hydro2["lake"]
-		# Recompute lakes using fast boundary connectivity method (depression fill disabled for stability)
-		var pool_fast: Dictionary = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
-		if pool_fast.has("lake"):
-			last_lake = pool_fast["lake"]
-			last_lake_id = pool_fast["lake_id"]
 		# Freeze gating: remove rivers where glacier or freezing temps
 		var size2: int = w * h
 		if last_river.size() != size2:

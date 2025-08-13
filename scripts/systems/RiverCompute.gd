@@ -51,7 +51,7 @@ func _ensure() -> void:
 	if not _clear_pipeline.is_valid() and _clear_shader.is_valid():
 		_clear_pipeline = _rd.compute_pipeline_create(_clear_shader)
 
-func trace_rivers(w: int, h: int, is_land: PackedByteArray, lake_mask: PackedByteArray, flow_dir: PackedInt32Array, flow_accum: PackedFloat32Array, percentile: float, min_len: int) -> PackedByteArray:
+func trace_rivers(w: int, h: int, is_land: PackedByteArray, lake_mask: PackedByteArray, flow_dir: PackedInt32Array, flow_accum: PackedFloat32Array, percentile: float, min_len: int, forced_seeds: PackedInt32Array = PackedInt32Array()) -> PackedByteArray:
 	_ensure()
 	if not _seed_pipeline.is_valid() or not _trace_pipeline.is_valid():
 		return PackedByteArray()
@@ -75,6 +75,11 @@ func trace_rivers(w: int, h: int, is_land: PackedByteArray, lake_mask: PackedByt
 	var buf_dir := _rd.storage_buffer_create(flow_dir.to_byte_array().size(), flow_dir.to_byte_array())
 	# Seeds as u32 buffer
 	var seeds_u32 := PackedInt32Array(); seeds_u32.resize(size)
+	for i in range(size): seeds_u32[i] = 0
+	# Pre-stage forced seeds (set to 1) before NMS OR
+	for k in range(min(size, forced_seeds.size())):
+		var idx := forced_seeds[k]
+		if idx >= 0 and idx < size: seeds_u32[idx] = 1
 	var buf_seeds := _rd.storage_buffer_create(seeds_u32.to_byte_array().size(), seeds_u32.to_byte_array())
 	# Seed pass
 	var uniforms: Array = []

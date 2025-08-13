@@ -22,15 +22,21 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 	var flow_accum := PackedFloat32Array()
 	var river := PackedByteArray()
 	var lake_mask := PackedByteArray()
+	var lake_id := PackedInt32Array()
+	var lake_level := PackedFloat32Array()
 	flow_dir.resize(size)
 	flow_accum.resize(size)
 	river.resize(size)
 	lake_mask.resize(size)
+	lake_id.resize(size)
+	lake_level.resize(size)
 	for i0 in range(size):
 		flow_dir[i0] = -1
 		flow_accum[i0] = 0.0
 		river[i0] = 0
 		lake_mask[i0] = 0
+		lake_id[i0] = 0
+		lake_level[i0] = (height[i0] if i0 < height.size() else 0.0)
 
 	# 0) Prepare inputs and existing lakes (optional)
 	var sea_level: float = float(settings.get("sea_level", 0.0))
@@ -123,18 +129,17 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 					sink_members[resolved] = []
 				(sink_members[resolved] as Array).append(p)
 
-	# 2c) Compute spill levels and partially fill basins above sea level
-	var fill_min: float = float(settings.get("lake_fill_fraction_min", 0.85))
-	var fill_max: float = float(settings.get("lake_fill_fraction_max", 1.0))
-	var max_lakes: int = int(settings.get("max_lakes", max(4, floori(float(size) / 4096.0))))
-	var basin_scores: Array = []
-	var basin_info := {}
+	# 2c) Strict-fill basins to spill elevation; collect pour candidates and label lakes
+	var pour_points := {} # lake_label/id -> Array of [inside_i, outside_i, cost]
+	var forced_seeds_arr: Array = []
+	var next_lake_label: int = 1
 	for sid in sink_members.keys():
 		var members: Array = sink_members[sid]
 		if members.size() == 0:
 			continue
 		var min_h: float = 1e9
 		var spill: float = 1e9
+		var candidates: Array = [] # [inside_i, outside_i, cost]
 		for m in members:
 			var mi: int = int(m)
 			var hx: float = height[mi]
@@ -142,44 +147,100 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 				min_h = hx
 			var mx: int = mi % w
 			var my: int = floori(float(mi) / float(w))
-			var dirs2 := [Vector2i(0,-1), Vector2i(0,1), Vector2i(-1,0), Vector2i(1,0)]
-			for d2 in dirs2:
-				var nx: int = mx + d2.x
-				var ny: int = my + d2.y
-				if nx < 0 or ny < 0 or nx >= w or ny >= h:
-					continue
-				var ni: int = nx + ny * w
-				if sink_id[ni] == sid:
-					continue
-				var c: float = max(height[mi], height[ni])
-				if c < spill:
-					spill = c
+			for dy in range(-1, 2):
+				for dx in range(-1, 2):
+					if dx == 0 and dy == 0:
+						continue
+					var nx: int = mx + dx
+					var ny: int = my + dy
+					if nx < 0 or ny < 0 or nx >= w or ny >= h:
+						continue
+					var ni: int = nx + ny * w
+					if sink_id[ni] == sid:
+						continue
+					var c: float = max(height[mi], height[ni])
+					candidates.append([mi, ni, c])
+					if c < spill:
+						spill = c
 		if spill <= sea_level:
 			continue
-		var depth: float = spill - min_h
-		if depth <= 0.0001:
-			continue
-		basin_info[sid] = {"members": members, "min_h": min_h, "spill": spill, "depth": depth}
-		basin_scores.append([sid, depth])
-	basin_scores.sort_custom(Callable(self, "_score_desc"))
-	var filled_count: int = 0
-	for entry in basin_scores:
-		if filled_count >= max_lakes:
-			break
-		var sid2: int = int(entry[0])
-		var info: Dictionary = basin_info[sid2]
-		var min_h2: float = float(info["min_h"])
-		var spill2: float = float(info["spill"])
-		var frac: float = rng.randf_range(fill_min, fill_max)
-		var fill_level: float = min_h2 + frac * max(0.0, spill2 - min_h2)
-		if fill_level <= sea_level:
-			continue
-		var members2: Array = info["members"]
-		for m2 in members2:
-			var i2 := int(m2)
-			if height[i2] < fill_level:
+		# Strict fill: mark all member cells below spill as lake and set lake_level
+		var any_filled: bool = false
+		for m2 in members:
+			var i2: int = int(m2)
+			if height[i2] < spill:
 				lake_mask[i2] = 1
-		filled_count += 1
+				lake_level[i2] = spill
+				any_filled = true
+		if not any_filled:
+			continue
+		# Label this lake component (single-basin fill may be multiple disjoint pools in rare cases; BFS over lake_mask ∧ sink_id==sid)
+		var visited := {}
+		for m3 in members:
+			var root: int = int(m3)
+			if not (lake_mask[root] != 0):
+				continue
+			if visited.has(root):
+				continue
+			# BFS
+			var q: Array = []
+			q.append(root)
+			visited[root] = true
+			var this_label: int = next_lake_label
+			next_lake_label += 1
+			while q.size() > 0:
+				var cur: int = int(q.pop_front())
+				lake_id[cur] = this_label
+				var cx: int = cur % w
+				var cy: int = floori(float(cur) / float(w))
+				for ddy in range(-1, 2):
+					for ddx in range(-1, 2):
+						if ddx == 0 and ddy == 0:
+							continue
+						var nx2: int = cx + ddx
+						var ny2: int = cy + ddy
+						if nx2 < 0 or ny2 < 0 or nx2 >= w or ny2 >= h:
+							continue
+						var ni2: int = nx2 + ny2 * w
+						if visited.has(ni2):
+							continue
+						if lake_mask[ni2] == 0:
+							continue
+						visited[ni2] = true
+						q.append(ni2)
+		# Pour candidates: sort ascending by cost and store per resulting lake label of inside cell
+		candidates.sort_custom(func(a, b): return float(a[2]) < float(b[2]))
+		# Build mapping lake_label -> list of candidates that belong to that labeled component
+		var tmp_map := {}
+		for c3 in candidates:
+			var inside_i: int = int(c3[0])
+			if lake_mask[inside_i] == 0:
+				continue
+			var lid: int = lake_id[inside_i]
+			if lid <= 0:
+				continue
+			if not tmp_map.has(lid): tmp_map[lid] = []
+			(tmp_map[lid] as Array).append(c3)
+		for lid_key in tmp_map.keys():
+			pour_points[lid_key] = tmp_map[lid_key]
+			# Select 0..3 outflows with weighted probabilities (bias towards 0-1)
+			var picks: int = 0
+			var r: float = rng.randf()
+			# Probabilities: 0:0.5, 1:0.35, 2:0.10, 3:0.05
+			if r < 0.50:
+				picks = 0
+			elif r < 0.85:
+				picks = 1
+			elif r < 0.95:
+				picks = 2
+			else:
+				picks = 3
+			var cand_list: Array = pour_points[lid_key]
+			var take: int = min(picks, cand_list.size())
+			for ci in range(take):
+				var edge: Array = cand_list[ci]
+				var seed_i: int = int(edge[0])
+				forced_seeds_arr.append(seed_i)
 
 	# 3) River seeds by percentile + non-maximum suppression (thin centerlines)
 	var acc_vals: Array = []
@@ -229,7 +290,17 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 
 	# 4) Trace thin downstream paths from seeds to outlets/lakes
 	var visited_path := PackedByteArray(); visited_path.resize(size)
-	for s in seeds:
+	# OR forced seeds into seeds list (ensure uniqueness)
+	var forced_seeds := PackedInt32Array()
+	forced_seeds.resize(forced_seeds_arr.size())
+	for ii in range(forced_seeds_arr.size()): forced_seeds[ii] = int(forced_seeds_arr[ii])
+	var seed_set := {}
+	for s0 in seeds: seed_set[int(s0)] = true
+	for fs in forced_seeds_arr: seed_set[int(fs)] = true
+	var seeds_final: Array = []
+	for k in seed_set.keys(): seeds_final.append(int(k))
+	seeds_final.sort()
+	for s in seeds_final:
 		var start: int = int(s)
 		var cur: int = start
 		var guard: int = 0
@@ -263,6 +334,10 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 		"flow_accum": flow_accum,
 		"river": river,
 		"lake": lake_mask,
+		"lake_id": lake_id,
+		"lake_level": lake_level,
+		"outflow_seeds": forced_seeds,
+		"pour_points": pour_points,
 	}
 
 func compute_fast(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray) -> Dictionary:
