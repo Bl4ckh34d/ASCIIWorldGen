@@ -157,13 +157,13 @@ func _generate_and_draw() -> void:
 	var h: int = generator.config.height
 	var styler: Object = AsciiStyler.new()
 	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds)
-	# Optional: draw cloud overlay layer on top with translucent glyphs
-	var clouds_text: String = styler.build_cloud_overlay(w, h, generator.last_clouds)
+	# Cloud overlay disabled for now
+	var clouds_text: String = ""
 	ascii_map.clear()
 	ascii_map.append_text(ascii_str)
 	cloud_map.clear()
 	cloud_map.append_text(clouds_text)
-	cloud_map.visible = true
+	cloud_map.visible = false
 	last_ascii_text = ascii_str
 	_update_char_size_cache()
 

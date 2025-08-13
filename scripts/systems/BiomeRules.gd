@@ -17,6 +17,17 @@ func classify_cell(t_c: float, m: float, elev_norm: float, is_land: bool) -> int
     if elev_norm > 0.60:
         return BiomeClassifier.Biome.MOUNTAINS
     if elev_norm > 0.30:
+        # Forest overrides hills: if any forest condition matches, prefer that over hills
+        if t_c <= 8.0 and m >= 0.50:
+            return BiomeClassifier.Biome.BOREAL_FOREST
+        if t_c <= 18.0:
+            if m >= 0.60:
+                return BiomeClassifier.Biome.TEMPERATE_FOREST
+            if m >= 0.45:
+                return BiomeClassifier.Biome.BOREAL_FOREST
+        if t_c <= 30.0:
+            if m >= 0.55:
+                return BiomeClassifier.Biome.RAINFOREST
         return BiomeClassifier.Biome.HILLS
 
     # Temperature/moisture bands

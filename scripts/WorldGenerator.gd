@@ -463,18 +463,10 @@ func generate() -> PackedByteArray:
 	last_moisture = climate["moisture"]
 	last_distance_to_coast = last_water_distance
 
-	# Update clouds overlay as well (GPU if available)
-	if config.use_gpu_all:
-		var cloud_comp2: Object = load("res://scripts/systems/CloudOverlayCompute.gd").new()
-		var phase: float = float(Time.get_ticks_msec() % 16000) / 16000.0
-		var clouds2: PackedFloat32Array = cloud_comp2.compute_clouds(w, h, last_temperature, last_moisture, last_is_land, phase)
-		if clouds2.size() == w * h:
-			last_clouds = clouds2
-	else:
-		# Ensure we always provide a buffer to overlay (even if empty)
-		if last_clouds.size() != w * h:
-			last_clouds.resize(w * h)
-			for i_c in range(w * h): last_clouds[i_c] = 0.0
+	# Deactivated: clouds overlay generation
+	if last_clouds.size() != w * h:
+		last_clouds.resize(w * h)
+		for i_c in range(w * h): last_clouds[i_c] = 0.0
 
 	# Mountain radiance: run through ClimatePost (GPU if available)
 	if config.use_gpu_all:
@@ -583,6 +575,11 @@ func generate() -> PackedByteArray:
 			last_river = hydro2.get("river", last_river)
 		if hydro2.has("lake"):
 			last_pooled_lake = hydro2["lake"]
+		# Recompute lakes using fast boundary connectivity method (depression fill disabled for stability)
+		var pool_fast: Dictionary = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
+		if pool_fast.has("lake"):
+			last_lake = pool_fast["lake"]
+			last_lake_id = pool_fast["lake_id"]
 		# Freeze gating: remove rivers where glacier or freezing temps
 		var size2: int = w * h
 		if last_river.size() != size2:
@@ -794,9 +791,9 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 				last_river[gi2] = 0
 	else:
 		# CPU fallback
-		var pool2c := PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
-		last_lake = pool2c["lake"]
-		last_lake_id = pool2c["lake_id"]
+		var pool2c: Dictionary = PoolingSystem.new().compute(w, h, last_height, last_is_land, true)
+		last_lake = pool2c.get("lake", last_lake)
+		last_lake_id = pool2c.get("lake_id", last_lake_id)
 		var hydro3c: Dictionary = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {"river_percentile": 0.97, "min_river_length": 5, "lake_mask": last_lake, "max_lakes": max(4, floori(float(w * h) / 2048.0))})
 		last_flow_dir = hydro3c["flow_dir"]
 		last_flow_accum = hydro3c["flow_accum"]

@@ -146,7 +146,18 @@ void main() {
     float jitter = 0.03 * t_mid * ((hnoise - 0.5) * 2.0);
     float elev_j = clamp01(elev_norm + jitter);
     if (elev_j >= 0.87) { Out.out_biome[i] = BIOME_FOOTHILLS; return; }       // next ~7% with jittered edges
-    if (elev_j >= 0.78) { Out.out_biome[i] = BIOME_HILLS; return; }           // next ~9% with jittered edges
+    if (elev_j >= 0.78) {
+        // Forest overrides hills: check forests before returning hills
+        if (t_c0 <= 8.0 && m >= 0.50) { Out.out_biome[i] = BIOME_BOREAL_FOREST; return; }
+        if (t_c0 <= 18.0) {
+            if (m >= 0.60) { Out.out_biome[i] = BIOME_TEMPERATE_FOREST; return; }
+            if (m >= 0.45) { Out.out_biome[i] = BIOME_CONIFER_FOREST; return; }
+        }
+        if (t_c0 <= 30.0) {
+            if (m >= 0.55) { Out.out_biome[i] = BIOME_RAINFOREST; return; }
+        }
+        Out.out_biome[i] = BIOME_HILLS; return;
+    }
 
     // Temperature/moisture bands
     if (t_c0 <= -10.0) {
