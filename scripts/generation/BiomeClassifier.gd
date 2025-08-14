@@ -73,6 +73,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 	var w: int = int(params.get("width", 275))
 	var h: int = int(params.get("height", 62))
 	var rng_seed: int = int(params.get("seed", 0))
+	var glacier_phase: float = float(params.get("glacier_phase", 0.0))
 	var temp_min_c: float = float(params.get("temp_min_c", -40.0))
 	var temp_max_c: float = float(params.get("temp_max_c", 45.0))
 	var height_scale_m: float = float(params.get("height_scale_m", 4000.0))
@@ -107,7 +108,12 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 	var glacier_mask_noise := FastNoiseLite.new()
 	glacier_mask_noise.seed = rng_seed ^ 0xA17C5
 	glacier_mask_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	glacier_mask_noise.frequency = 0.06
+	# Increase frequency and use FBM to get finer, more detailed breakup
+	glacier_mask_noise.frequency = 0.18
+	glacier_mask_noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+	glacier_mask_noise.fractal_octaves = 4
+	glacier_mask_noise.fractal_lacunarity = 2.1
+	glacier_mask_noise.fractal_gain = 0.47
 	var ice_noise_o := FastNoiseLite.new()
 	ice_noise_o.seed = rng_seed ^ 0x1CE
 	ice_noise_o.noise_type = FastNoiseLite.TYPE_SIMPLEX
@@ -151,7 +157,11 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 				can_glacier = true
 			if can_glacier:
 				# Fine-grained split: ~1/3 glaciers, 2/3 mountains/alpine
-				var gmask: float = glacier_mask_noise.get_noise_2d(float(x) * xscale, float(y)) * 0.5 + 0.5
+				# Sample mask at higher spatial detail for less blobby regions
+				# Evolve smoothly using a phase offset derived from sliders
+				var px: float = float(x) * xscale + 37.0 * glacier_phase
+				var py: float = float(y) + 71.0 * glacier_phase
+				var gmask: float = glacier_mask_noise.get_noise_2d(px, py) * 0.5 + 0.5
 				if gmask <= 0.333:
 					out[i] = Biome.GLACIER
 					continue
@@ -197,7 +207,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 			# Enforce humidity minima and dry fallbacks
 			if m < MIN_M_STEPPE:
 				if t_c0 <= -2.0:
-					# Ice desert only when polar and low elevation; else let cold biomes handle
+					# No ice desert on mountains; restrict to polar lowlands only
 					var is_polar2: bool = (lat >= 0.66)
 					var low_elev2: bool = (elev_m <= 800.0)
 					if is_polar2 and low_elev2 and m < 0.30:
@@ -206,12 +216,13 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 						# Prefer tundra/frozen steppe outside polar lowlands
 						choice = Biome.TUNDRA if m >= 0.20 else Biome.WASTELAND
 				else:
+					# Hot deserts tied to low elevations near the equator
 					var noise_val2: float = (desert_field[i] if use_desert_field else (desert_noise.get_noise_2d(float(x) * xscale, float(y)) * 0.5 + 0.5))
 					var heat_bias: float = clamp((t - 0.60) * 2.4, 0.0, 1.0)
 					var sand_prob2: float = clamp(0.25 + 0.6 * heat_bias, 0.0, 0.98)
-					# Favor sandy deserts at low elevations near sea level; otherwise rockier wasteland
 					var low_elev_hot: bool = (elev_m <= 600.0)
-					if low_elev_hot and noise_val2 < sand_prob2:
+					var equatorial: bool = (lat <= 0.33)
+					if low_elev_hot and equatorial and noise_val2 < sand_prob2:
 						choice = Biome.DESERT_SAND
 					else:
 						choice = Biome.WASTELAND

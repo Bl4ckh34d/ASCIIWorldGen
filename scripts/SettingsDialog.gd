@@ -59,9 +59,10 @@ func _on_apply() -> void:
 	if polar_cap_frac != null:
 		cfg["polar_cap_frac"] = float(polar_cap_frac.value)
 	if temp_min_spin != null:
-		cfg["temp_min_c"] = float(temp_min_spin.value)
+		# Double slider span by mapping UI value to a wider internal range
+		cfg["temp_min_c"] = float(temp_min_spin.value) * 2.0
 	if temp_max_spin != null:
-		cfg["temp_max_c"] = float(temp_max_spin.value)
+		cfg["temp_max_c"] = float(temp_max_spin.value) * 2.0
 	# compute toggles
 	cfg["use_gpu_all"] = bool(gpu_all.button_pressed)
 	# rivers

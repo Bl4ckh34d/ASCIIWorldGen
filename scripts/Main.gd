@@ -174,7 +174,7 @@ func _generate_and_draw() -> void:
 	var w: int = generator.config.width
 	var h: int = generator.config.height
 	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds)
+	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()))
 	# Cloud overlay disabled for now
 	var clouds_text: String = ""
 	ascii_map.clear()
@@ -303,7 +303,7 @@ func _generate_and_draw_preserve_seed() -> void:
 	var w: int = generator.config.width
 	var h: int = generator.config.height
 	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava)
+	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()))
 	ascii_map.clear()
 	ascii_map.append_text(ascii_str)
 	last_ascii_text = ascii_str

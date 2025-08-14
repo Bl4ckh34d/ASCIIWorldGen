@@ -30,9 +30,7 @@ func classify_cell(t_c: float, m: float, elev_norm: float, is_land: bool) -> int
                 return BiomeClassifier.Biome.RAINFOREST
         return BiomeClassifier.Biome.HILLS
 
-    # Temperature/moisture bands
-    if t_c <= -10.0:
-        return BiomeClassifier.Biome.DESERT_ICE
+	# Temperature/moisture bands (Ice Desert handled in classifier to enforce polar lowlands)
     if t_c <= 2.0:
         return BiomeClassifier.Biome.TUNDRA if m >= 0.30 else BiomeClassifier.Biome.WASTELAND
     if t_c <= 8.0:

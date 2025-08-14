@@ -425,7 +425,13 @@ func generate() -> PackedByteArray:
 							var eff: float = spill
 							if config.sea_level < spill:
 								eff = spill - d * (spill - config.sea_level)
-							lake_mask_for_label[ii_d] = (1 if last_height[ii_d] < eff else 0)
+							var thresh: float = eff
+							if last_temperature.size() == w * h:
+								var t_norm_l: float = last_temperature[ii_d]
+								var t_c_l: float = config.temp_min_c + t_norm_l * (config.temp_max_c - config.temp_min_c)
+								if t_c_l >= 20.0:
+									thresh = eff - 0.01
+							lake_mask_for_label[ii_d] = (1 if last_height[ii_d] < thresh else 0)
 				var pool_gpu := {}
 				if lake_mask_for_label.size() == w * h:
 					var lab: Dictionary = LakeLabelFromMaskCompute.new().label_from_mask(w, h, lake_mask_for_label, true)
@@ -452,10 +458,13 @@ func generate() -> PackedByteArray:
 						pool_gpu = {"lake": lab["lake"], "lake_id": lab["lake_id"], "outflow_seeds": pour.get("outflow_seeds", PackedInt32Array())}
 				if pool_gpu.has("lake") and pool_gpu.has("lake_id"):
 					pool = pool_gpu
-				else:
-					pool = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {
+			else:
+				pool = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {
 						"sea_level": config.sea_level,
 						"rng_seed": config.rng_seed,
+						"temperature": last_temperature,
+						"temp_min_c": config.temp_min_c,
+						"temp_max_c": config.temp_max_c,
 						"wrap_x": true,
 						"shore_band": config.shore_band,
 						"dist_to_ocean": last_water_distance,
@@ -464,20 +473,7 @@ func generate() -> PackedByteArray:
 						"prob_outflow_1": config.prob_outflow_1,
 						"prob_outflow_2": config.prob_outflow_2,
 						"prob_outflow_3": config.prob_outflow_3,
-					})
-			else:
-				pool = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {
-				"sea_level": config.sea_level,
-				"rng_seed": config.rng_seed,
-				"wrap_x": true,
-				"shore_band": config.shore_band,
-				"dist_to_ocean": last_water_distance,
-				"max_forced_outflows": config.max_forced_outflows,
-				"prob_outflow_0": config.prob_outflow_0,
-				"prob_outflow_1": config.prob_outflow_1,
-				"prob_outflow_2": config.prob_outflow_2,
-				"prob_outflow_3": config.prob_outflow_3,
-			})
+				})
 			if not (pool.has("lake") and pool.has("lake_id")):
 				var pool_fallback: Dictionary = _lake_label_compute.label_lakes(w, h, last_is_land, true)
 				if pool_fallback.is_empty() or not pool_fallback.has("lake"):
@@ -941,6 +937,9 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 				pool2 = FlowErosionSystem.new().compute_full(w, h, last_height, last_is_land, {
 					"sea_level": config.sea_level,
 					"rng_seed": config.rng_seed,
+					"temperature": last_temperature,
+					"temp_min_c": config.temp_min_c,
+					"temp_max_c": config.temp_max_c,
 					"wrap_x": true,
 					"shore_band": config.shore_band,
 					"dist_to_ocean": last_water_distance,

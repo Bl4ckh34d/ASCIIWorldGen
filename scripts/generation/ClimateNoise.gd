@@ -114,11 +114,14 @@ func generate(params: Dictionary, height: PackedFloat32Array, is_land: PackedByt
 			# Temperature latitudinal profile: quick warm-up from poles, slower approach to equator
 			var u: float = 1.0 - lat
 			var t_lat: float = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6)
-			var t: float = t_lat * 0.82 + zonal * 0.15 - elev_cool * 0.9 + 0.18 * temp_noise.get_noise_2d(x * xscale, y)
-			# Continentality: farther from coast → stronger extremes
+			# Build temperature components
+			var t_base: float = t_lat * 0.82 + zonal * 0.15 - elev_cool * 0.9
+			var t_noise: float = 0.18 * temp_noise.get_noise_2d(x * xscale, y)
+			var t_raw: float = t_base + t_noise
+			# Continentality: farther from coast → stronger extremes (scale around baseline, not global 0.5)
 			var dc: float = clamp(distance_to_coast[i] / float(max(1, w)), 0.0, 1.0) * continentality_scale
-			var t_anom := (t - 0.5) * (1.0 + 0.8 * dc)
-			t = clamp(0.5 + t_anom, 0.0, 1.0)
+			var factor: float = (1.0 + 0.8 * dc)
+			var t: float = clamp(t_base + (t_raw - t_base) * factor, 0.0, 1.0)
 			t = clamp((t + temp_base_offset - 0.5) * temp_scale + 0.5, 0.0, 1.0)
 			# Base humidity from zonal bands and noise
 			var m_base: float = 0.5 + 0.3 * sin(6.28318 * float(y) / float(h) * 3.0)

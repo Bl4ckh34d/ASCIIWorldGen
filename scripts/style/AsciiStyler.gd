@@ -149,7 +149,7 @@ func glyph_for(x: int, y: int, is_land: bool, biome_id: int, is_beach: bool, rng
 		var idx_w: int = _hash2(x, y, rng_seed) % max(1, set_w.size())
 		return set_w[idx_w]
 
-func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, is_turq: PackedByteArray, turq_strength: PackedFloat32Array, is_beach: PackedByteArray, water_distance: PackedFloat32Array, biomes: PackedInt32Array, _sea_level: float, rng_seed: int, temperature: PackedFloat32Array = PackedFloat32Array(), temp_min_c: float = 0.0, temp_max_c: float = 1.0, shelf_value_noise_field: PackedFloat32Array = PackedFloat32Array(), lake_mask: PackedByteArray = PackedByteArray(), river_mask: PackedByteArray = PackedByteArray(), pooled_lake: PackedByteArray = PackedByteArray(), lava_mask: PackedByteArray = PackedByteArray(), cloud_shadow: PackedFloat32Array = PackedFloat32Array()) -> String:
+func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, is_turq: PackedByteArray, turq_strength: PackedFloat32Array, is_beach: PackedByteArray, water_distance: PackedFloat32Array, biomes: PackedInt32Array, _sea_level: float, rng_seed: int, temperature: PackedFloat32Array = PackedFloat32Array(), temp_min_c: float = 0.0, temp_max_c: float = 1.0, shelf_value_noise_field: PackedFloat32Array = PackedFloat32Array(), lake_mask: PackedByteArray = PackedByteArray(), river_mask: PackedByteArray = PackedByteArray(), pooled_lake: PackedByteArray = PackedByteArray(), lava_mask: PackedByteArray = PackedByteArray(), cloud_shadow: PackedFloat32Array = PackedFloat32Array(), lake_freeze: PackedByteArray = PackedByteArray()) -> String:
 	var sb: PackedStringArray = []
 	var _depth_scale: float = max(8.0, float(min(w, h)) / 3.0)
 	# Smooth transition factor across extreme ocean fractions to avoid visual jump
@@ -172,11 +172,7 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 			var hydrolake_on_land: bool = land and (lake_mask.size() == w * h and lake_mask[i] != 0)
 			var inland_water_lake: bool = (not land) and (pooled_lake.size() == w * h and pooled_lake[i] != 0)
 			var lake_here: bool = hydrolake_on_land or inland_water_lake
-			# Exclude ice and lava from lake highlighting
-			if biomes.size() == w * h:
-				var b: int = biomes[i]
-				if b == BiomeClassifier.Biome.ICE_SHEET or b == BiomeClassifier.Biome.DESERT_ICE or b == BiomeClassifier.Biome.GLACIER:
-					lake_here = false
+			# Exclude only lava from lake highlighting (allow lakes to freeze instead of disappearing)
 			if lava_mask.size() == w * h and lava_mask[i] != 0:
 				lake_here = false
 			# Heat-driven drying thresholds (delayed by +25 C): start at 60C, full at 85C
@@ -221,12 +217,11 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 				# Color all water (sea, ocean, lakes, rivers) using the same ocean water palette
 				# Lakes: reuse ocean shelf coloring by synthesizing a local shelf mask near lake shores
 				var shelf_val: float = _shelf_noise
+				var lake_near_shore: bool = false
 				if lake_here:
-					# Approximate distance to lake shore using height offset from sea level as proxy
-					# near edges (land neighbors). Simple 8-neighbor check for land adjacency
-					var near_shore: bool = false
-					if land: # hydrolake_on_land
-						near_shore = true
+					# Simple 8-neighbor check for land adjacency to approximate lake shore
+					if land:
+						lake_near_shore = true
 					else:
 						var cx: int = x
 						var cy: int = y
@@ -237,20 +232,23 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 								var ny: int = cy + ddy
 								if nx < 0 or ny < 0 or nx >= w or ny >= h: continue
 								var ni: int = nx + ny * w
-								if i < is_land.size() and is_land[ni] != 0: near_shore = true
-								if near_shore: break
-							if near_shore: break
-					var local_shelf: float = (1.0 if near_shore else 0.0)
+								if i < is_land.size() and is_land[ni] != 0: lake_near_shore = true
+								if lake_near_shore: break
+							if lake_near_shore: break
+					var local_shelf: float = (1.0 if lake_near_shore else 0.0)
 					shelf_val = max(shelf_val, local_shelf)
+					# Use turquoise overlay near lake shores similar to ocean shallow water
+					_is_turq_here = _is_turq_here or lake_near_shore
+					_turq_here = max(_turq_here, (0.6 if lake_near_shore else 0.0))
 				color = color_for_water(hv, _sea_level, _is_turq_here, _turq_here, (water_distance[i] if i < water_distance.size() else 0.0), _depth_scale, shelf_val)
 				# Rivers use the same glyph as ocean for consistency
 				if river_here:
 					glyph = "~"
 				# Freeze thresholds for fresh water and ocean
-				var lake_freeze: bool = (lake_here and t_c_local <= -1.0)
+				var lake_freeze_flag: bool = (lake_here and ((lake_freeze.size() == w * h and lake_freeze[i] != 0) or t_c_local <= -5.0))
 				var river_freeze: bool = (river_here and t_c_local <= -15.0)
 				var ocean_freeze: bool = ((not land) and (not river_here) and (not lake_here) and t_c_local <= -10.0)
-				if lake_freeze or river_freeze or ocean_freeze:
+				if lake_freeze_flag or river_freeze or ocean_freeze:
 					# Draw frozen water with icy tint
 					var ice_col := Color(0.88, 0.93, 1.0)
 					color = ice_col

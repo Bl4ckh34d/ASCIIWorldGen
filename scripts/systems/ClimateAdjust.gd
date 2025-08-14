@@ -46,10 +46,14 @@ func evaluate(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArr
 			var zonal: float = 0.5 + 0.5 * sin(6.28318 * float(y) / float(h) * 3.0)
 			var u: float = 1.0 - lat
 			var t_lat: float = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6)
-			var t: float = t_lat * 0.82 + zonal * 0.15 - elev_cool * 0.9 + 0.18 * temp_noise.get_noise_2d(x * xscale, y)
+			# Build temperature components
+			var t_base: float = t_lat * 0.82 + zonal * 0.15 - elev_cool * 0.9
+			var t_noise: float = 0.18 * temp_noise.get_noise_2d(x * xscale, y)
+			var t_raw: float = t_base + t_noise
+			# Continentality scales deviation around baseline (latitude/elevation/zonal), not global midpoint
 			var dc: float = clamp(distance_to_coast[i] / float(max(1, w)), 0.0, 1.0) * continentality_scale
-			var t_anom := (t - 0.5) * (1.0 + 0.8 * dc)
-			t = clamp(0.5 + t_anom, 0.0, 1.0)
+			var factor: float = (1.0 + 0.8 * dc)
+			var t: float = clamp(t_base + (t_raw - t_base) * factor, 0.0, 1.0)
 			t = clamp((t + temp_base_offset - 0.5) * temp_scale + 0.5, 0.0, 1.0)
 			var m_base: float = 0.5 + 0.3 * sin(6.28318 * float(y) / float(h) * 3.0)
 			var m_noise: float = 0.3 * moist_noise.get_noise_2d(x * xscale + 100.0, y - 50.0)

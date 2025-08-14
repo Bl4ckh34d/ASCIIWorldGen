@@ -80,12 +80,15 @@ void main() {
     float t_lat = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6);
     bool land_px = (IsLand.is_land_data[i] != 0u);
     float lat_amp = land_px ? 1.0 : 0.82; // damp lat gradient over ocean
-    float t = t_lat * 0.82 * lat_amp + zonal * 0.15 - elev_cool * 0.9 + 0.18 * TempNoise.temp_noise_data[i];
+    // Build temperature components
+    float t_base = t_lat * 0.82 * lat_amp + zonal * 0.15 - elev_cool * 0.9;
+    float t_noise = 0.18 * TempNoise.temp_noise_data[i];
+    float t_raw = t_base + t_noise;
 
     float dc_norm = clamp(Dist.dist_data[i] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
     float cont_gain = land_px ? 0.8 : 0.2; // much smaller anomalies over open ocean
-    float t_anom = (t - 0.5) * (1.0 + cont_gain * dc_norm);
-    t = clamp01(0.5 + t_anom);
+    float factor = (1.0 + cont_gain * dc_norm);
+    float t = clamp01(t_base + (t_raw - t_base) * factor);
     t = clamp01((t + PC.temp_base_offset - 0.5) * PC.temp_scale + 0.5);
 
     // Shore temperature anchoring: for first ~2 cells into the ocean,
@@ -110,10 +113,12 @@ void main() {
                         float rel_elev2 = max(0.0, Height.height_data[j] - PC.sea_level);
                         float elev_cool2 = clamp(rel_elev2 * 1.2, 0.0, 1.0);
                         float zonal2 = 0.5 + 0.5 * sin(6.28318 * float(ny) / float(H) * 3.0);
-                        float t2 = t_lat2 * 0.82 + zonal2 * 0.15 - elev_cool2 * 0.9 + 0.18 * TempNoise.temp_noise_data[j];
+                        float t_base2 = t_lat2 * 0.82 + zonal2 * 0.15 - elev_cool2 * 0.9;
+                        float t_noise2 = 0.18 * TempNoise.temp_noise_data[j];
+                        float t_raw2 = t_base2 + t_noise2;
                         float dc2 = clamp(Dist.dist_data[j] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
-                        float t_anom2 = (t2 - 0.5) * (1.0 + 0.8 * dc2);
-                        t2 = clamp01(0.5 + t_anom2);
+                        float factor2 = (1.0 + 0.8 * dc2);
+                        float t2 = clamp01(t_base2 + (t_raw2 - t_base2) * factor2);
                         t2 = clamp01((t2 + PC.temp_base_offset - 0.5) * PC.temp_scale + 0.5);
                         t_land_sum += t2;
                         cnt++;

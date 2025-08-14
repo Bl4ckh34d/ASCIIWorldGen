@@ -117,12 +117,14 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 	var lake_mask := PackedByteArray()
 	var lake_id := PackedInt32Array()
 	var lake_level := PackedFloat32Array()
+	var lake_freeze := PackedByteArray()
 	flow_dir.resize(size)
 	flow_accum.resize(size)
 	river.resize(size)
 	lake_mask.resize(size)
 	lake_id.resize(size)
 	lake_level.resize(size)
+	lake_freeze.resize(size)
 	for i0 in range(size):
 		flow_dir[i0] = -1
 		flow_accum[i0] = 0.0
@@ -130,6 +132,7 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 		lake_mask[i0] = 0
 		lake_id[i0] = 0
 		lake_level[i0] = (height[i0] if i0 < height.size() else 0.0)
+		lake_freeze[i0] = 0
 
 	# 0) Prepare inputs and existing lakes (optional)
 	var sea_level: float = float(settings.get("sea_level", 0.0))
@@ -225,6 +228,7 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 				(sink_members[resolved] as Array).append(p)
 
 	# 2c) Strict-fill basins to spill elevation; collect pour candidates and label lakes
+	#     Apply climate-dependent shrink/freeze rules using optional temperature field.
 	var pour_points := {} # lake_label/id -> Array of [inside_i, outside_i, cost]
 	var forced_seeds_arr: Array = []
 	var next_lake_label: int = 1
@@ -286,21 +290,45 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 					candidates.append([mi, ni, c])
 					if c < spill:
 						spill = c
-		if spill <= sea_level:
-			continue
-		# Tie lake water level to ocean level: as sea level lowers, lakes dry up.
-		# Blend spill elevation toward sea level using a dryness factor d in [0,1]
-		# where d increases as sea_level goes below 0. This yields a progressive
-		# shrink band between sea_level and effective_level.
-		var d: float = clamp(-sea_level, 0.0, 1.0)
+		# Lake–ocean blending behavior
+		# 1) If basin is already open to ocean (spill <= sea_level), keep a thin
+		#    residual water band above sea level to avoid instant lake disappearance.
+		# 2) If basin is closed (spill > sea_level), apply dryness coupling so lakes
+		#    shrink as sea level drops.
 		var effective_level: float = spill
-		if d > 0.0 and sea_level < spill:
-			effective_level = spill - d * (spill - sea_level)
+		if spill <= sea_level:
+			var blend_band: float = float(settings.get("lake_ocean_blend_band", 0.02))
+			effective_level = min(spill + blend_band, sea_level + blend_band)
+		else:
+			# Tie lake water level to ocean level: as sea level lowers, lakes dry up.
+			var d: float = clamp(-sea_level, 0.0, 1.0)
+			if d > 0.0 and sea_level < spill:
+				effective_level = spill - d * (spill - sea_level)
+		# Apply temperature-based shrinkage of lakes (hot climates)
+		var temp: PackedFloat32Array = settings.get("temperature", PackedFloat32Array())
+		var temp_min_c: float = float(settings.get("temp_min_c", -40.0))
+		var temp_max_c: float = float(settings.get("temp_max_c", 70.0))
+		var shrink_hot_c: float = float(settings.get("lake_shrink_hot_c", 20.0))
+		var lakes_freeze_c: float = float(settings.get("lake_freeze_c", -5.0))
+		var lakes_icesheet_c: float = float(settings.get("lake_icesheet_c", -15.0))
 		# Fill: mark member cells below the effective lake level
 		var any_filled: bool = false
 		for m2 in members:
 			var i2: int = int(m2)
-			if height[i2] < effective_level:
+			var fill_here: bool = height[i2] < effective_level
+			# Temperature shrink: if local temp exceeds 20 C, shrink back by a small margin
+			if fill_here and temp.size() == size:
+				var t_norm := temp[i2]
+				var t_c := temp_min_c + t_norm * (temp_max_c - temp_min_c)
+				if t_c >= shrink_hot_c:
+					# shrink by thin band (~0.01 height units)
+					fill_here = height[i2] < (effective_level - 0.01)
+				# Freeze flags for rendering/logic
+				if t_c <= lakes_freeze_c:
+					lake_freeze[i2] = 1
+				if t_c <= lakes_icesheet_c:
+					lake_freeze[i2] = 2
+			if fill_here:
 				lake_mask[i2] = 1
 				lake_level[i2] = effective_level
 				any_filled = true
@@ -498,6 +526,7 @@ func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 		"lake": lake_mask,
 		"lake_id": lake_id,
 		"lake_level": lake_level,
+		"lake_freeze": lake_freeze,
 		"outflow_seeds": forced_seeds,
 		"pour_points": pour_points,
 	}
