@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dwamegod0n42r"
+path="res://.godot/imported/day_night_light.glsl-0ba606d84d77b8a2057a2c9ed6262752.res"
+
+[deps]
+
+source_file="res://shaders/day_night_light.glsl"
+dest_files=["res://.godot/imported/day_night_light.glsl-0ba606d84d77b8a2057a2c9ed6262752.res"]
+
+[params]
+

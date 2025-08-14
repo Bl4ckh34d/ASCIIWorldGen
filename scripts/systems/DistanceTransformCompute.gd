@@ -22,7 +22,7 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 
 func _ensure() -> void:
 	if _rd == null:
-		_rd = RenderingServer.get_rendering_device()
+		_rd = RenderingServer.create_local_rendering_device()
 	if not _shader.is_valid():
 		var spirv: RDShaderSPIRV = _get_spirv(DT_SHADER)
 		if spirv == null:

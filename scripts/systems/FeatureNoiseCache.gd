@@ -35,7 +35,7 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 
 func _ensure() -> void:
 	if _rd == null:
-		_rd = RenderingServer.get_rendering_device()
+		_rd = RenderingServer.create_local_rendering_device()
 	if _shader_file != null and not _shader.is_valid():
 		var s: RDShaderSPIRV = _get_spirv(_shader_file)
 		if s != null:

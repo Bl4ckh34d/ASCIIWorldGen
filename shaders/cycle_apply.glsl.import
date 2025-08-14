@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ourbdke6ojcg"
+path="res://.godot/imported/cycle_apply.glsl-85371fbee368531a95b7eb76125646f1.res"
+
+[deps]
+
+source_file="res://shaders/cycle_apply.glsl"
+dest_files=["res://.godot/imported/cycle_apply.glsl-85371fbee368531a95b7eb76125646f1.res"]
+
+[params]
+

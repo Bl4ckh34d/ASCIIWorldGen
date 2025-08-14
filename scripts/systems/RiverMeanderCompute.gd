@@ -17,7 +17,7 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 	return file.get_spirv(chosen_version)
 
 func _ensure() -> void:
-	if _rd == null: _rd = RenderingServer.get_rendering_device()
+	if _rd == null: _rd = RenderingServer.create_local_rendering_device()
 	if not _shader.is_valid():
 		var s: RDShaderSPIRV = _get_spirv(MEANDER_SHADER)
 		if s == null: return

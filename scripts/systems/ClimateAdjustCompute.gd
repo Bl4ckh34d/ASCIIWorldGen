@@ -27,7 +27,7 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 func _ensure_device_and_pipeline() -> void:
 	if _rd == null:
 		# Use main rendering device to avoid version mismatch with imported SPIR-V
-		_rd = RenderingServer.get_rendering_device()
+		_rd = RenderingServer.create_local_rendering_device()
 	if not _shader.is_valid():
 		# Ensure shader import resource exists and has compute entry
 		var spirv: RDShaderSPIRV = _get_spirv(CLIMATE_SHADER_FILE)
