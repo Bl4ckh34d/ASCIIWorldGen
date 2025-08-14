@@ -3,6 +3,7 @@ extends Control
 
 @onready var play_button: Button = $RootVBox/TopBar/PlayButton
 @onready var reset_button: Button = $RootVBox/TopBar/ResetButton
+@onready var top_bar: Control = $RootVBox/TopBar
 @onready var ascii_map: RichTextLabel = %AsciiMap
 @onready var info_label: Label = %Info
 @onready var settings_dialog: Window = $SettingsDialog
@@ -66,6 +67,19 @@ var tiles_across_spin: SpinBox
 var tiles_down_spin: SpinBox
 var lock_aspect_check: CheckBox
 var ckpt_interval_spin: SpinBox
+var save_ckpt_button: Button
+var load_ckpt_button: Button
+var scrub_days_spin: SpinBox
+var scrub_button: Button
+var ckpt_list: OptionButton
+var ckpt_refresh_button: Button
+var ckpt_load_button: Button
+var top_save_ckpt_button: Button
+var top_load_ckpt_button: Button
+var top_seed_label: Label
+var top_time_label: Label
+var save_dialog: FileDialog
+var load_dialog: FileDialog
 
 func _ready() -> void:
 	generator = load("res://scripts/WorldGenerator.gd").new()
@@ -240,6 +254,77 @@ func _ready() -> void:
 			if _checkpoint_sys and "set_interval_days" in _checkpoint_sys:
 				_checkpoint_sys.set_interval_days(float(v))
 		)
+		# Save/Load checkpoint controls
+		var save_lbl := Label.new(); save_lbl.text = "Checkpoint"; simulation_box.add_child(save_lbl)
+		save_ckpt_button = Button.new(); save_ckpt_button.text = "Save"; simulation_box.add_child(save_ckpt_button)
+		save_ckpt_button.pressed.connect(func() -> void:
+			if save_dialog:
+				save_dialog.current_dir = "user://"
+				save_dialog.current_file = "world_%d.tres" % int(Time.get_ticks_msec())
+				save_dialog.popup_centered()
+		)
+		load_ckpt_button = Button.new(); load_ckpt_button.text = "Load"; simulation_box.add_child(load_ckpt_button)
+		load_ckpt_button.pressed.connect(func() -> void:
+			if load_dialog:
+				load_dialog.current_dir = "user://"
+				load_dialog.popup_centered()
+		)
+		# Scrub UI
+		var scrub_lbl := Label.new(); scrub_lbl.text = "Scrub (days)"; simulation_box.add_child(scrub_lbl)
+		scrub_days_spin = SpinBox.new(); scrub_days_spin.min_value = 0.0; scrub_days_spin.max_value = 100000.0; scrub_days_spin.step = 0.1; scrub_days_spin.value = 0.0; simulation_box.add_child(scrub_days_spin)
+		scrub_button = Button.new(); scrub_button.text = "Go"; simulation_box.add_child(scrub_button)
+		scrub_button.pressed.connect(func() -> void:
+			if _checkpoint_sys and "scrub_to" in _checkpoint_sys and time_system and simulation and generator and "_world_state" in generator:
+				var ok_scrub: bool = _checkpoint_sys.scrub_to(float(scrub_days_spin.value), time_system, simulation, generator._world_state)
+				if ok_scrub:
+					if year_label and time_system and "get_year_float" in time_system:
+						year_label.text = "Year: %.2f" % float(time_system.get_year_float())
+					_redraw_ascii_from_current_state()
+		)
+		# Checkpoint list UI
+		ckpt_list = OptionButton.new(); simulation_box.add_child(ckpt_list)
+		ckpt_refresh_button = Button.new(); ckpt_refresh_button.text = "Refresh"; simulation_box.add_child(ckpt_refresh_button)
+		ckpt_load_button = Button.new(); ckpt_load_button.text = "Load Selected"; simulation_box.add_child(ckpt_load_button)
+		ckpt_refresh_button.pressed.connect(func() -> void:
+			if _checkpoint_sys and "list_checkpoint_times" in _checkpoint_sys:
+				ckpt_list.clear()
+				var times: PackedFloat32Array = _checkpoint_sys.list_checkpoint_times()
+				for i in range(times.size()):
+					ckpt_list.add_item("t=%.2f d" % float(times[i]), i)
+		)
+		ckpt_load_button.pressed.connect(func() -> void:
+			if _checkpoint_sys and "load_by_index" in _checkpoint_sys:
+				var idx: int = int(ckpt_list.get_selected_id())
+				var ok_load: bool = _checkpoint_sys.load_by_index(idx)
+				if ok_load:
+					if "last_loaded_time_days" in _checkpoint_sys and time_system:
+						var lt: float = float(_checkpoint_sys.last_loaded_time_days)
+						time_system.simulation_time_days = lt
+					if year_label and time_system and "get_year_float" in time_system:
+						year_label.text = "Year: %.2f" % float(time_system.get_year_float())
+					_redraw_ascii_from_current_state()
+		)
+	# Always-visible Save/Load on Top Bar
+	if top_bar:
+		top_save_ckpt_button = Button.new(); top_save_ckpt_button.text = "Save"; top_bar.add_child(top_save_ckpt_button)
+		top_save_ckpt_button.pressed.connect(func() -> void:
+			if save_dialog:
+				save_dialog.current_dir = "user://"
+				save_dialog.current_file = "world_%d.tres" % int(Time.get_ticks_msec())
+				save_dialog.popup_centered()
+		)
+		top_load_ckpt_button = Button.new(); top_load_ckpt_button.text = "Load"; top_bar.add_child(top_load_ckpt_button)
+		top_load_ckpt_button.pressed.connect(func() -> void:
+			if load_dialog:
+				load_dialog.current_dir = "user://"
+				load_dialog.popup_centered()
+		)
+		# Top bar seed/time labels
+		top_seed_label = Label.new(); top_seed_label.text = "Seed: -"; top_bar.add_child(top_seed_label)
+		top_time_label = Label.new(); top_time_label.text = "Time: 0y 0d 00:00"; top_bar.add_child(top_time_label)
+		_update_top_seed_label()
+		_update_top_time_label()
+
 	if climate_box:
 		var cc_lbl := Label.new(); cc_lbl.text = "Cloud->Moisture"; climate_box.add_child(cc_lbl)
 		cloud_coupling_check = CheckBox.new(); cloud_coupling_check.text = "Enable"; cloud_coupling_check.button_pressed = true; climate_box.add_child(cloud_coupling_check)
@@ -284,6 +369,33 @@ func _ready() -> void:
 	# Auto-generate first world on startup at base resolution
 	base_width = generator.config.width
 	base_height = generator.config.height
+
+	# File dialogs for Save/Load
+	save_dialog = FileDialog.new()
+	save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	save_dialog.access = FileDialog.ACCESS_USERDATA
+	save_dialog.title = "Save Worldmap"
+	save_dialog.add_filter("*.tres", "Checkpoint (*.tres)")
+	add_child(save_dialog)
+	save_dialog.file_selected.connect(func(path: String) -> void:
+		if _checkpoint_sys and "export_latest_to_file" in _checkpoint_sys:
+			_checkpoint_sys.export_latest_to_file(path)
+	)
+	load_dialog = FileDialog.new()
+	load_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	load_dialog.access = FileDialog.ACCESS_USERDATA
+	load_dialog.title = "Load Worldmap"
+	load_dialog.add_filter("*.tres", "Checkpoint (*.tres)")
+	add_child(load_dialog)
+	load_dialog.file_selected.connect(func(path: String) -> void:
+		if _checkpoint_sys and "import_from_file" in _checkpoint_sys:
+			var ok_res: bool = _checkpoint_sys.import_from_file(path)
+			if ok_res:
+				if year_label and time_system and "get_year_float" in time_system:
+					year_label.text = "Year: %.2f" % float(time_system.get_year_float())
+				_update_top_time_label()
+				_redraw_ascii_from_current_state()
+	)
 	_generate_and_draw()
 	# capture base dimensions for scaling
 	base_width = generator.config.width
@@ -394,8 +506,61 @@ func _on_sim_tick(_dt_days: float) -> void:
 		if _checkpoint_sys and time_system and "maybe_checkpoint" in _checkpoint_sys:
 			_checkpoint_sys.maybe_checkpoint(float(time_system.simulation_time_days))
 		if _sim_tick_counter % 5 == 0:
+			# Keep WorldState synchronized from generator fields for consumers that rely on it
+			_sync_world_state_from_generator()
+			_update_top_time_label()
 			_redraw_ascii_from_current_state()
 			_sim_tick_counter = 0
+
+func _update_top_seed_label() -> void:
+	if top_seed_label and generator:
+		top_seed_label.text = "Seed: %d" % int(generator.config.rng_seed)
+
+func _update_top_time_label() -> void:
+	if top_time_label and time_system:
+		var days_total: float = float(time_system.simulation_time_days)
+		var years: int = int(floor(days_total / 365.0))
+		var rem_days_f: float = fmod(days_total, 365.0)
+		if rem_days_f < 0.0:
+			rem_days_f += 365.0
+		var days_int: int = int(floor(rem_days_f))
+		var day_frac: float = rem_days_f - float(days_int)
+		var minutes_total: int = int(round(day_frac * 24.0 * 60.0))
+		if minutes_total >= 24 * 60:
+			minutes_total -= 24 * 60
+			days_int += 1
+		var hours: int = int(floor(float(minutes_total) / 60.0))
+		var minutes: int = minutes_total % 60
+		top_time_label.text = "Time: %dy %dd %02d:%02d" % [years, days_int, hours, minutes]
+func _sync_world_state_from_generator() -> void:
+	if generator == null or not ("_world_state" in generator) or generator._world_state == null:
+		return
+	var ws = generator._world_state
+	ws.width = int(generator.config.width)
+	ws.height = int(generator.config.height)
+	ws.rng_seed = int(generator.config.rng_seed)
+	ws.height_scale_m = float(generator.config.height_scale_m)
+	ws.temp_min_c = float(generator.config.temp_min_c)
+	ws.temp_max_c = float(generator.config.temp_max_c)
+	ws.lava_temp_threshold_c = float(generator.config.lava_temp_threshold_c)
+	ws.ocean_fraction = float(generator.last_ocean_fraction)
+	# Arrays (assign references; they’re persistent PackedArrays)
+	ws.height_field = generator.last_height
+	ws.is_land = generator.last_is_land
+	ws.coast_distance = generator.last_water_distance
+	ws.turquoise_water = generator.last_turquoise_water
+	ws.turquoise_strength = generator.last_turquoise_strength
+	ws.beach = generator.last_beach
+	ws.flow_dir = generator.last_flow_dir
+	ws.flow_accum = generator.last_flow_accum
+	ws.river = generator.last_river
+	ws.lake = generator.last_lake
+	ws.lake_id = generator.last_lake_id
+	ws.lava = generator.last_lava
+	ws.temperature = generator.last_temperature
+	ws.moisture = generator.last_moisture
+	ws.precip = PackedFloat32Array() # currently not computed separately
+	ws.biome_id = generator.last_biomes
 
 func _redraw_ascii_from_current_state() -> void:
 	var w: int = generator.config.width
@@ -429,18 +594,14 @@ func _on_step_pressed() -> void:
 		time_system.step_once()
 
 func _on_backstep_pressed() -> void:
-	# Load latest checkpoint before current time; no forward simulation yet.
-	if _checkpoint_sys and "load_latest_before_or_equal" in _checkpoint_sys and time_system:
-		var t: float = float(time_system.simulation_time_days)
-		var ok: bool = _checkpoint_sys.load_latest_before_or_equal(t - float(time_system.tick_days))
-		if ok:
-			# Sync time system to loaded checkpoint time if available
-			if "last_loaded_time_days" in _checkpoint_sys:
-				var lt: float = float(_checkpoint_sys.last_loaded_time_days)
-				time_system.simulation_time_days = lt
-				if year_label:
-					year_label.text = "Year: %.2f" % float(time_system.get_year_float())
-			# Reflect loaded state on screen
+	# Load checkpoint and deterministically simulate forward to exact target.
+	if _checkpoint_sys and "scrub_to" in _checkpoint_sys and time_system and simulation and generator and "_world_state" in generator:
+		var t_now: float = float(time_system.simulation_time_days)
+		var target: float = max(0.0, t_now - float(time_system.tick_days))
+		var ok2: bool = _checkpoint_sys.scrub_to(target, time_system, simulation, generator._world_state)
+		if ok2:
+			if year_label:
+				year_label.text = "Year: %.2f" % float(time_system.get_year_float())
 			_redraw_ascii_from_current_state()
 
 func _on_season_strength_changed(v: float) -> void:

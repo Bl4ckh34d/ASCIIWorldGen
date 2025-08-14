@@ -67,8 +67,8 @@ class Config:
 	var continentality_scale: float = 1.2
 	# Seasonal climate parameters (normalized temp space)
 	var season_phase: float = 0.0
-	var season_amp_equator: float = 0.10
-	var season_amp_pole: float = 0.25
+	var season_amp_equator: float = 0.0
+	var season_amp_pole: float = 0.0
 	var season_ocean_damp: float = 0.6
 	# Diurnal temperature cycle
 	var diurnal_amp_equator: float = 0.06
