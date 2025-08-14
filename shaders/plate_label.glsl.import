@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://jln6rk4vya8j"
+path="res://.godot/imported/plate_label.glsl-e102119f9d2b6caea74236732479dd38.res"
+
+[deps]
+
+source_file="res://shaders/plate_label.glsl"
+dest_files=["res://.godot/imported/plate_label.glsl-e102119f9d2b6caea74236732479dd38.res"]
+
+[params]
+

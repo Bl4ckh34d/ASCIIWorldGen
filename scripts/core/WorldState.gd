@@ -44,6 +44,11 @@ var precip: PackedFloat32Array = PackedFloat32Array()
 # Biomes
 var biome_id: PackedInt32Array = PackedInt32Array()
 
+# Time metadata (simulation)
+var simulation_time_days: float = 0.0
+var time_scale: float = 1.0
+var tick_days: float = 1.0 / 120.0
+
 func configure(w: int, h: int, new_seed: int) -> void:
     width = max(1, w)
     height = max(1, h)

@@ -30,6 +30,16 @@ layout(push_constant) uniform Params {
     float continentality_scale;
     float ocean_frac;
     float noise_x_scale;
+    // Seasonal controls
+    float season_phase;           // 0..1 (day_of_year)
+    float season_amp_equator;     // amplitude at equator (0..1 normalized temp units)
+    float season_amp_pole;        // amplitude at poles
+    float season_ocean_damp;      // 0..1 multiplier for ocean seasonal amplitude
+    // Diurnal controls
+    float diurnal_amp_equator;
+    float diurnal_amp_pole;
+    float diurnal_ocean_damp;
+    float time_of_day;            // 0..1
 } PC;
 
 // Helpers
@@ -89,6 +99,16 @@ void main() {
     float cont_gain = land_px ? 0.8 : 0.2; // much smaller anomalies over open ocean
     float factor = (1.0 + cont_gain * dc_norm);
     float t = clamp01(t_base + (t_raw - t_base) * factor);
+    // Seasonal term: amplitude grows with latitude and continentality; damped over oceans
+    float amp_lat = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat, 1.2));
+    float cont_amp = land_px ? (0.2 + 0.8 * dc_norm) : 0.0;
+    float amp_cont = mix(PC.season_ocean_damp, 1.0, cont_amp);
+    float season = amp_lat * amp_cont * cos(6.28318 * PC.season_phase);
+    // Diurnal term: latitude and ocean damped
+    float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat, 1.2));
+    float amp_cont_d = land_px ? 1.0 : PC.diurnal_ocean_damp;
+    float diurnal = amp_lat_d * amp_cont_d * cos(6.28318 * PC.time_of_day);
+    t = clamp01(t + season + diurnal);
     t = clamp01((t + PC.temp_base_offset - 0.5) * PC.temp_scale + 0.5);
 
     // Shore temperature anchoring: for first ~2 cells into the ocean,
@@ -119,6 +139,11 @@ void main() {
                         float dc2 = clamp(Dist.dist_data[j] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
                         float factor2 = (1.0 + 0.8 * dc2);
                         float t2 = clamp01(t_base2 + (t_raw2 - t_base2) * factor2);
+                        float amp_lat2 = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat2, 1.2));
+                        float cont_amp2 = 1.0; // neighbor is land by construction here
+                        float amp_cont2 = mix(PC.season_ocean_damp, 1.0, cont_amp2);
+                        float season2 = amp_lat2 * amp_cont2 * cos(6.28318 * PC.season_phase);
+                        t2 = clamp01(t2 + season2);
                         t2 = clamp01((t2 + PC.temp_base_offset - 0.5) * PC.temp_scale + 0.5);
                         t_land_sum += t2;
                         cnt++;

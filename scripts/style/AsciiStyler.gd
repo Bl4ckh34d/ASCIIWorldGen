@@ -329,24 +329,18 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 
 func build_cloud_overlay(w: int, h: int, clouds: PackedFloat32Array) -> String:
 	var sb: PackedStringArray = []
-	if clouds.size() != w * h:
-		# Empty overlay
-		for _y in range(h):
-			sb.append("\n")
-		return "".join(sb)
+	var has_buf: bool = (clouds.size() == w * h)
 	for y in range(h):
 		for x in range(w):
 			var i: int = x + y * w
-			var c: float = clamp(clouds[i], 0.0, 1.0)
-			var alpha: float = clamp(0.4 + 0.6 * c, 0.0, 1.0)
-			# Choose high-contrast block glyphs by intensity
-			var glyph: String = "▒"
-			if c > 0.66:
-				glyph = "█"
-			elif c > 0.33:
-				glyph = "▓"
-			# Make clouds pink/magenta for visibility
-			var col := Color(1.0, 0.3, 0.8, alpha)
-			sb.append("[color=" + col.to_html(true) + "]" + glyph + "[/color]")
+			var c: float = 0.0
+			if has_buf:
+				c = clamp(clouds[i], 0.0, 1.0)
+			# Only draw where clouds exist; use solid block for 100% coverage
+			if c > 0.0:
+				var col := Color(1.0, 0.0, 1.0, 1.0)
+				sb.append("[color=" + col.to_html(true) + "]█[/color]")
+			else:
+				sb.append(" ")
 		sb.append("\n")
 	return "".join(sb)

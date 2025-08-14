@@ -54,6 +54,16 @@ func evaluate(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArr
 			var dc: float = clamp(distance_to_coast[i] / float(max(1, w)), 0.0, 1.0) * continentality_scale
 			var factor: float = (1.0 + 0.8 * dc)
 			var t: float = clamp(t_base + (t_raw - t_base) * factor, 0.0, 1.0)
+			# Seasonal term (CPU parity with shader). UI can set amplitudes; default 0 keeps parity.
+			var season_phase: float = float(params.get("season_phase", 0.0))
+			var season_amp_equator: float = float(params.get("season_amp_equator", 0.0))
+			var season_amp_pole: float = float(params.get("season_amp_pole", 0.0))
+			var season_ocean_damp: float = float(params.get("season_ocean_damp", 0.0))
+			var amp_lat: float = lerp(season_amp_equator, season_amp_pole, pow(lat, 1.2))
+			var cont_amp: float = 0.2 + 0.8 * dc
+			var amp_cont: float = lerp(season_ocean_damp, 1.0, cont_amp)
+			var season: float = amp_lat * amp_cont * cos(6.28318 * season_phase)
+			t = clamp(t + season, 0.0, 1.0)
 			t = clamp((t + temp_base_offset - 0.5) * temp_scale + 0.5, 0.0, 1.0)
 			var m_base: float = 0.5 + 0.3 * sin(6.28318 * float(y) / float(h) * 3.0)
 			var m_noise: float = 0.3 * moist_noise.get_noise_2d(x * xscale + 100.0, y - 50.0)

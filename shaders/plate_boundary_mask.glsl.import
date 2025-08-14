@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cdsi4pqlyg3s1"
+path="res://.godot/imported/plate_boundary_mask.glsl-c345d413399bfa7aa6856cbe20b0cc2e.res"
+
+[deps]
+
+source_file="res://shaders/plate_boundary_mask.glsl"
+dest_files=["res://.godot/imported/plate_boundary_mask.glsl-c345d413399bfa7aa6856cbe20b0cc2e.res"]
+
+[params]
+

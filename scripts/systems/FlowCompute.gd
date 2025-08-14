@@ -61,7 +61,7 @@ func _ensure() -> void:
 	if not _clear_pipeline.is_valid() and _clear_shader.is_valid():
 		_clear_pipeline = _rd.compute_pipeline_create(_clear_shader)
 
-func compute_flow(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, wrap_x: bool) -> Dictionary:
+func compute_flow(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, wrap_x: bool, roi: Rect2i = Rect2i(0,0,0,0)) -> Dictionary:
 	_ensure()
 	if not _dir_pipeline.is_valid() or not _acc_pipeline.is_valid():
 		return {}
@@ -82,7 +82,14 @@ func compute_flow(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(buf_land); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(buf_dir); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _dir_shader, 0)
-	var pc := PackedByteArray(); var ints := PackedInt32Array([w, h, (1 if wrap_x else 0)])
+	# ROI bounds
+	var rx0: int = 0; var ry0: int = 0; var rx1: int = w; var ry1: int = h
+	if roi.size.x > 0 and roi.size.y > 0:
+		rx0 = clamp(roi.position.x, 0, max(0, w))
+		ry0 = clamp(roi.position.y, 0, max(0, h))
+		rx1 = clamp(roi.position.x + roi.size.x, 0, max(0, w))
+		ry1 = clamp(roi.position.y + roi.size.y, 0, max(0, h))
+	var pc := PackedByteArray(); var ints := PackedInt32Array([w, h, (1 if wrap_x else 0), rx0, ry0, rx1, ry1])
 	pc.append_array(ints.to_byte_array())
 	# Align to 16 bytes (push constants often require 16-byte multiples)
 	var pad0 := (16 - (pc.size() % 16)) % 16
@@ -116,7 +123,10 @@ func compute_flow(w: int, h: int, height: PackedFloat32Array, is_land: PackedByt
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(buf_total); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_front_out); uniforms.append(u)
 	u_set = _rd.uniform_set_create(uniforms, _push_shader, 0)
-	pc = PackedByteArray(); var total_arr: PackedInt32Array = PackedInt32Array([size]); pc.append_array(total_arr.to_byte_array())
+	pc = PackedByteArray()
+	# push constants for push pass: total_cells, roi, width
+	var push_consts := PackedInt32Array([size, rx0, ry0, rx1, ry1, w])
+	pc.append_array(push_consts.to_byte_array())
 	# Align to 16 bytes
 	var pad_p := (16 - (pc.size() % 16)) % 16
 	if pad_p > 0:

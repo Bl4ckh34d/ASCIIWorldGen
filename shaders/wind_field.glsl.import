@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://yp24vbesdkny"
+path="res://.godot/imported/wind_field.glsl-3a6f5bb954208867a25efdc5f1e925f5.res"
+
+[deps]
+
+source_file="res://shaders/wind_field.glsl"
+dest_files=["res://.godot/imported/wind_field.glsl-3a6f5bb954208867a25efdc5f1e925f5.res"]
+
+[params]
+

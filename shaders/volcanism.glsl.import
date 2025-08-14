@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cwri163npixed"
+path="res://.godot/imported/volcanism.glsl-b3bc0f6e68fdf8f44bdd43c0e44d5d8c.res"
+
+[deps]
+
+source_file="res://shaders/volcanism.glsl"
+dest_files=["res://.godot/imported/volcanism.glsl-b3bc0f6e68fdf8f44bdd43c0e44d5d8c.res"]
+
+[params]
+

@@ -61,6 +61,16 @@ func _pack_push_constants(width: int, height: int, params: Dictionary, ocean_fra
 		float(params.get("continentality_scale", 1.0)),
 		float(ocean_frac),
 		float(params.get("noise_x_scale", 1.0)),
+		# Seasonal constants
+		float(params.get("season_phase", 0.0)),
+		float(params.get("season_amp_equator", 0.0)),
+		float(params.get("season_amp_pole", 0.0)),
+		float(params.get("season_ocean_damp", 0.0)),
+		# Diurnal constants
+		float(params.get("diurnal_amp_equator", 0.0)),
+		float(params.get("diurnal_amp_pole", 0.0)),
+		float(params.get("diurnal_ocean_damp", 0.0)),
+		float(params.get("time_of_day", 0.0)),
 	])
 	arr.append_array(ints.to_byte_array())
 	arr.append_array(floats.to_byte_array())

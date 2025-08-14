@@ -36,51 +36,102 @@ text = "Play"
 layout_mode = 2
 text = "Reset"
 
-[node name="SettingsButton" type="Button" parent="RootVBox/TopBar"]
-layout_mode = 2
-text = "Settings"
-
 [node name="Randomize" type="CheckBox" parent="RootVBox/TopBar"]
 layout_mode = 2
 text = "Randomize"
 
-[node name="SeaLbl" type="Label" parent="RootVBox/TopBar"]
+[node name="MainSplit" type="HSplitContainer" parent="RootVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="LeftPanel" type="PanelContainer" parent="RootVBox/MainSplit"]
+custom_minimum_size = Vector2(320, 0)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Tabs" type="TabContainer" parent="RootVBox/MainSplit/LeftPanel"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+current_tab = 0
+
+[node name="General" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+metadata/_tab_index = 0
+
+[node name="SeedLbl" type="Label" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
+layout_mode = 2
+text = "Seed:"
+
+[node name="SeedInput" type="LineEdit" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "empty = random"
+
+[node name="SeedUsed" type="Label" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
+layout_mode = 2
+text = "Used: -"
+
+[node name="SeaLbl" type="Label" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
 layout_mode = 2
 text = "Sea:"
 
-[node name="SeaSlider" type="HSlider" parent="RootVBox/TopBar"]
+[node name="SeaSlider" type="HSlider" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
 layout_mode = 2
 size_flags_horizontal = 3
 min_value = -1.0
 max_value = 1.0
 step = 0.01
 
-[node name="SeaVal" type="Label" parent="RootVBox/TopBar"]
+[node name="SeaVal" type="Label" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
 layout_mode = 2
 text = "0.00"
 
-[node name="SeedLbl" type="Label" parent="RootVBox/TopBar"]
-layout_mode = 2
-text = "Seed:"
-
-[node name="SeedInput" type="LineEdit" parent="RootVBox/TopBar"]
+[node name="Climate" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
+visible = false
 layout_mode = 2
 size_flags_horizontal = 3
-placeholder_text = "empty = random"
+size_flags_vertical = 3
+metadata/_tab_index = 1
 
-[node name="SeedUsed" type="Label" parent="RootVBox/TopBar"]
+[node name="Hydro" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
+visible = false
 layout_mode = 2
-text = "Used: -"
+size_flags_horizontal = 3
+size_flags_vertical = 3
+metadata/_tab_index = 2
 
-[node name="AsciiMap" type="RichTextLabel" parent="RootVBox"]
+[node name="Simulation" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+metadata/_tab_index = 3
+
+[node name="Systems" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+metadata/_tab_index = 4
+
+[node name="RightContent" type="VBoxContainer" parent="RootVBox/MainSplit"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="AsciiMap" type="RichTextLabel" parent="RootVBox/MainSplit/RightContent"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_font_sizes/normal_font_size = 10
 bbcode_enabled = true
 autowrap_mode = 0
 
-[node name="Info" type="Label" parent="RootVBox"]
+[node name="Info" type="Label" parent="RootVBox/MainSplit/RightContent"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Hover: -"

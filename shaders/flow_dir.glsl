@@ -7,7 +7,15 @@ layout(std430, set = 0, binding = 0) buffer HeightBuf { float height_data[]; } H
 layout(std430, set = 0, binding = 1) buffer IsLandBuf { uint is_land_data[]; } Land;
 layout(std430, set = 0, binding = 2) buffer FlowDirBuf { int flow_dir[]; } Flow;
 
-layout(push_constant) uniform Params { int width; int height; int wrap_x; } PC;
+layout(push_constant) uniform Params {
+    int width;
+    int height;
+    int wrap_x;
+    int roi_x0;
+    int roi_y0;
+    int roi_x1;
+    int roi_y1;
+} PC;
 
 int idx(int x, int y) { return x + y * PC.width; }
 
@@ -15,6 +23,10 @@ void main(){
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
     if (x >= uint(PC.width) || y >= uint(PC.height)) return;
+    // ROI early-out: skip work outside tile
+    if (int(x) < PC.roi_x0 || int(x) >= PC.roi_x1 || int(y) < PC.roi_y0 || int(y) >= PC.roi_y1) {
+        return;
+    }
     int W = PC.width; int H = PC.height; int i = int(x) + int(y) * W;
     if (Land.is_land_data[i] == 0u) { Flow.flow_dir[i] = -1; return; }
     float h0 = Height.height_data[i];

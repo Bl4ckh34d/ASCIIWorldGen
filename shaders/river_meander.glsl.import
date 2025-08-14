@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cs3k7nqlfkg2w"
+path="res://.godot/imported/river_meander.glsl-f6059f694c1030aad363c418f3203bd7.res"
+
+[deps]
+
+source_file="res://shaders/river_meander.glsl"
+dest_files=["res://.godot/imported/river_meander.glsl-f6059f694c1030aad363c418f3203bd7.res"]
+
+[params]
+
