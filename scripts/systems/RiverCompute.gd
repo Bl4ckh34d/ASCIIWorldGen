@@ -330,8 +330,8 @@ func trace_rivers_roi(
 	var river_out := PackedByteArray(); river_out.resize(size)
 	for k in range(size): river_out[k] = 1 if (k < river_u32_out.size() and river_u32_out[k] != 0) else 0
 
-	# Cleanup
-	_rd.free_rid(buf_acc); _rd.free_rid(buf_land); _rd.free_rid(buf_dir); _rd.free_rid(buf_seeds)
-	_rd.free_rid(buf_front_out); _rd.free_rid(buf_river); _rd.free_rid(buf_lake)
+	# Cleanup (avoid double-free since buf_front_in and buf_seeds can point to same buffer)
+	_rd.free_rid(buf_acc); _rd.free_rid(buf_land); _rd.free_rid(buf_dir)
+	_rd.free_rid(buf_front_in); _rd.free_rid(buf_front_out); _rd.free_rid(buf_river); _rd.free_rid(buf_lake)
 
 	return river_out

@@ -19,7 +19,7 @@ func ensure_buffer(name: String, size_bytes: int, initial_data: PackedByteArray 
 	if existing.has("rid") and existing.rid.is_valid() and existing.get("size", 0) >= size_bytes:
 		# Optionally update with new data if provided
 		if initial_data.size() > 0:
-			_rd.buffer_update(existing.rid, 0, RenderingDevice.BARRIER_MASK_COMPUTE, initial_data)
+			_rd.buffer_update(existing.rid, 0, RenderingDevice.BARRIER_MASK_ALL_BARRIERS, initial_data)
 		return existing.rid
 	
 	# Create new buffer or resize existing
@@ -52,7 +52,7 @@ func update_buffer(name: String, data: PackedByteArray, offset: int = 0) -> bool
 		push_error("GPUBufferManager: Update would exceed buffer size")
 		return false
 	
-	_rd.buffer_update(buf.rid, offset, RenderingDevice.BARRIER_MASK_COMPUTE, data)
+	_rd.buffer_update(buf.rid, offset, RenderingDevice.BARRIER_MASK_ALL_BARRIERS, data)
 	return true
 
 func read_buffer(name: String, staging_name: String = "") -> PackedByteArray:
@@ -86,7 +86,7 @@ func clear_buffer(name: String, clear_value: int = 0) -> bool:
 	var clear_data = PackedByteArray()
 	clear_data.resize(buf.size)
 	clear_data.fill(clear_value)
-	_rd.buffer_update(buf.rid, 0, RenderingDevice.BARRIER_MASK_COMPUTE, clear_data)
+	_rd.buffer_update(buf.rid, 0, RenderingDevice.BARRIER_MASK_ALL_BARRIERS, clear_data)
 	return true
 
 func free_buffer(name: String) -> void:

@@ -1271,7 +1271,7 @@ func ensure_persistent_buffers() -> void:
 	
 	var size = config.width * config.height
 	var float_size = size * 4  # 4 bytes per float32
-	var byte_size = size      # 1 byte per byte
+	var _byte_size = size      # 1 byte per byte
 	var int_size = size * 4   # 4 bytes per int32
 	
 	# Allocate persistent buffers for common data

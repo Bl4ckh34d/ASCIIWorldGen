@@ -1,6 +1,9 @@
 {
-  "outputStyle": "default",
   "permissions": {
-    "defaultMode": "acceptEdits"
-  }
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(godot:*)"
+    ]
+  },
+  "outputStyle": "default"
 }

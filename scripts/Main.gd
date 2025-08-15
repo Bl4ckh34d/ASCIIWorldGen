@@ -88,6 +88,9 @@ func _ready() -> void:
 	add_child(time_system)
 	simulation = load("res://scripts/core/Simulation.gd").new()
 	add_child(simulation)
+	# Balance simulation performance with UI responsiveness
+	simulation.set_max_tick_time_ms(12.0)  # Allow up to 12ms per tick (keep UI at 60fps)
+	simulation.set_max_systems_per_tick(2)  # Fewer systems per tick for smoother UI
 	# Create checkpoint system (in-memory ring buffer)
 	_checkpoint_sys = load("res://scripts/core/CheckpointSystem.gd").new()
 	add_child(_checkpoint_sys)
@@ -99,38 +102,39 @@ func _ready() -> void:
 	_seasonal_sys = load("res://scripts/systems/SeasonalClimateSystem.gd").new()
 	if "initialize" in _seasonal_sys:
 		_seasonal_sys.initialize(generator)
-	if "register_system" in simulation:
-		simulation.register_system(_seasonal_sys, 5, 0)
-	# Register hydro updater at a slower cadence
+	# NOTE: SeasonalClimateSystem now runs directly in _on_sim_tick() to ensure it's never skipped due to frame budgeting
+	# Register hydro updater at a much slower cadence (most expensive system)
 	_hydro_sys = load("res://scripts/systems/HydroUpdateSystem.gd").new()
 	if "initialize" in _hydro_sys:
 		_hydro_sys.initialize(generator)
+		# Reduce tiles per tick for hydro system performance
+		_hydro_sys.tiles_per_tick = 1  # Process 1 tile per tick instead of 2
 	if "register_system" in simulation:
-		simulation.register_system(_hydro_sys, 20, 0)
+		simulation.register_system(_hydro_sys, 60, 0)  # Much slower hydro updates
 	# Register cloud/wind overlay updater (visual only for now)
 	_clouds_sys = load("res://scripts/systems/CloudWindSystem.gd").new()
 	if "initialize" in _clouds_sys:
 		_clouds_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_clouds_sys, 10, 0)
+		simulation.register_system(_clouds_sys, 15, 0)  # Slower cloud updates
 	# Register biome reclassify system (cadence separate from climate)
 	_biome_sys = load("res://scripts/systems/BiomeUpdateSystem.gd").new()
-	# Register plates prototype at a slow cadence
+	# Register plates prototype at a very slow cadence
 	_plates_sys = load("res://scripts/systems/PlateSystem.gd").new()
 	if "initialize" in _plates_sys:
 		_plates_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_plates_sys, 120, 0)
+		simulation.register_system(_plates_sys, 180, 0)  # Even slower plate updates
 	if "initialize" in _biome_sys:
 		_biome_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_biome_sys, 15, 0)
-	# Register volcanism system at moderate cadence
+		simulation.register_system(_biome_sys, 20, 0)  # Slower biome updates
+	# Register volcanism system at slower cadence
 	var _volc_sys: Object = load("res://scripts/systems/VolcanismSystem.gd").new()
 	if "initialize" in _volc_sys:
 		_volc_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_volc_sys, 5, 0)
+		simulation.register_system(_volc_sys, 8, 0)  # Slower volcanism
 	# Forward ticks to simulation (world state lives in generator)
 	if time_system.has_signal("tick"):
 		time_system.connect("tick", Callable(self, "_on_sim_tick"))
@@ -182,11 +186,9 @@ func _ready() -> void:
 		ocean_damp_slider.value_changed.connect(_on_ocean_damp_changed)
 	if systems_box:
 		var cad_lbl := Label.new(); cad_lbl.text = "Cadence"; systems_box.add_child(cad_lbl)
-		var clim_cad := SpinBox.new(); clim_cad.min_value = 1; clim_cad.max_value = 120; clim_cad.step = 1; clim_cad.value = 5; systems_box.add_child(clim_cad)
-		clim_cad.value_changed.connect(func(v: float) -> void:
-			if simulation and _seasonal_sys and "update_cadence" in simulation:
-				simulation.update_cadence(_seasonal_sys, int(v))
-		)
+		var clim_cad := SpinBox.new(); clim_cad.min_value = 1; clim_cad.max_value = 120; clim_cad.step = 1; clim_cad.value = 1; systems_box.add_child(clim_cad)
+		clim_cad.tooltip_text = "SeasonalClimateSystem now runs every tick (bypasses simulation orchestrator)"
+		clim_cad.editable = false  # Can't be changed since it runs directly in main loop
 		var hydro_cad := SpinBox.new(); hydro_cad.min_value = 1; hydro_cad.max_value = 120; hydro_cad.step = 1; hydro_cad.value = 20; systems_box.add_child(hydro_cad)
 		hydro_cad.value_changed.connect(func(v: float) -> void:
 			if simulation and _hydro_sys and "update_cadence" in simulation:
@@ -488,6 +490,11 @@ func _on_sim_tick(_dt_days: float) -> void:
 	# Minimal MVP: on each tick, just refresh overlays that depend on time (future: incremental system updates)
 	if generator == null:
 		return
+	
+	# Check if we have enough frame time budget for simulation work
+	var frame_start_time = Time.get_ticks_usec()
+	var available_frame_time_ms = 16.67  # Target 60fps = 16.67ms per frame
+	
 	# For now, only update Year label if present and refresh climate season phase into next generation params
 	# Redraw ASCII less frequently to avoid heavy load; could throttle with a frame counter
 	# Simple approach: regenerate climate/biome every N ticks can be wired later via Simulation
@@ -498,38 +505,119 @@ func _on_sim_tick(_dt_days: float) -> void:
 		generator._world_state.tick_days = float(time_system.tick_days)
 		if year_label:
 			year_label.text = "Year: %.2f" % float(time_system.get_year_float())
-	# Drive registered systems via orchestrator (MVP)
-	if simulation and "on_tick" in simulation and "_world_state" in generator:
-		simulation.on_tick(_dt_days, generator._world_state, {})
-		_sim_tick_counter += 1
-		# Periodic checkpointing based on in-game time
-		if _checkpoint_sys and time_system and "maybe_checkpoint" in _checkpoint_sys:
-			_checkpoint_sys.maybe_checkpoint(float(time_system.simulation_time_days))
-		# Adaptive ASCII redraw cadence based on map size
-		var redraw_cadence = _get_adaptive_redraw_cadence()
-		if _sim_tick_counter % redraw_cadence == 0:
+	
+	# Check frame time budget before heavy simulation work
+	var current_time = Time.get_ticks_usec()
+	var elapsed_ms = float(current_time - frame_start_time) / 1000.0
+	
+	# CRITICAL: Always run essential systems like day-night cycle, even if frame budget is tight
+	# This ensures the day-night cycle never freezes due to performance budgeting
+	if _seasonal_sys and "tick" in _seasonal_sys and "_world_state" in generator:
+		_seasonal_sys.tick(_dt_days, generator._world_state, {})
+	
+	# Only do full simulation work if we have frame time budget left
+	if elapsed_ms < available_frame_time_ms * 0.8:  # Use only 80% of frame budget
+		# Drive registered systems via orchestrator (MVP)
+		if simulation and "on_tick" in simulation and "_world_state" in generator:
+			simulation.on_tick(_dt_days, generator._world_state, {})
+			_sim_tick_counter += 1
+			
+			# Debug performance every 30 ticks and auto-tune
+			if _sim_tick_counter % 30 == 0:
+				_log_performance_stats()
+				_auto_tune_performance()
+	else:
+		# Skip heavy simulation systems this frame to maintain UI responsiveness
+		print("Skipping heavy simulation systems to maintain UI responsiveness (day-night cycle still running)")
+	
+	# Always do these lightweight tasks regardless of frame budget
+	# Periodic checkpointing based on in-game time
+	if _checkpoint_sys and time_system and "maybe_checkpoint" in _checkpoint_sys:
+		_checkpoint_sys.maybe_checkpoint(float(time_system.simulation_time_days))
+	
+	# Adaptive ASCII redraw cadence based on map size (but check frame budget)
+	var redraw_cadence = _get_adaptive_redraw_cadence()
+	if _sim_tick_counter % redraw_cadence == 0:
+		# Check frame budget again before expensive ASCII redraw
+		var current_time2 = Time.get_ticks_usec()
+		var elapsed_ms2 = float(current_time2 - frame_start_time) / 1000.0
+		
+		if elapsed_ms2 < available_frame_time_ms * 0.9:  # Use 90% budget for ASCII
 			# Keep WorldState synchronized from generator fields for consumers that rely on it
 			_sync_world_state_from_generator()
 			_update_top_time_label()
 			_redraw_ascii_from_current_state()
-			_sim_tick_counter = 0
+		else:
+			# Skip ASCII redraw to maintain UI responsiveness
+			_update_top_time_label()  # At least update time label
+		_sim_tick_counter = 0
+
+func _log_performance_stats() -> void:
+	"""Log performance statistics to help diagnose slow simulation"""
+	if simulation and "get_performance_stats" in simulation:
+		var stats = simulation.get_performance_stats()
+		print("=== SIMULATION PERFORMANCE ===")
+		print("Current tick time: %.2f ms (budget: %.2f ms)" % [stats.get("current_tick_time_ms", 0), stats.get("max_budget_ms", 0)])
+		print("Average tick time: %.2f ms" % stats.get("avg_tick_time_ms", 0))
+		print("Performance status: %s" % stats.get("performance_status", "unknown"))
+		print("Skipped systems: %d" % stats.get("skipped_systems_count", 0))
+		print("System breakdown:")
+		var system_breakdown = stats.get("system_breakdown", [])
+		for system in system_breakdown:
+			print("  - %s: %.2f ms (cadence: %d)" % [system.get("name", "unknown"), system.get("avg_cost_ms", 0), system.get("cadence", 1)])
+		print("==============================")
+
+func _auto_tune_performance() -> void:
+	"""Automatically adjust performance settings based on current stats with UI priority"""
+	if simulation and "get_performance_stats" in simulation:
+		var stats = simulation.get_performance_stats()
+		var avg_time = stats.get("avg_tick_time_ms", 0)
+		var budget = stats.get("max_budget_ms", 12)
+		var skip_count = stats.get("skipped_systems_count", 0)
+		
+		# Prioritize UI responsiveness - keep budget low
+		var max_allowed_budget = 14.0  # Never exceed this for UI responsiveness
+		
+		# If we're consistently over budget, aggressively reduce load
+		if avg_time > budget * 0.7:  # More aggressive threshold
+			# Slow down expensive systems more aggressively
+			if _hydro_sys and "tiles_per_tick" in _hydro_sys:
+				_hydro_sys.tiles_per_tick = max(1, _hydro_sys.tiles_per_tick - 1)
+			# Only increase budget very slightly and within UI limits
+			if skip_count > 15:
+				var new_budget = min(max_allowed_budget, budget * 1.05)
+				simulation.set_max_tick_time_ms(new_budget)
+		
+		# If we're consistently under budget, carefully increase performance
+		elif avg_time < budget * 0.4 and skip_count == 0:
+			# Speed up systems more conservatively
+			if _hydro_sys and "tiles_per_tick" in _hydro_sys:
+				_hydro_sys.tiles_per_tick = min(2, _hydro_sys.tiles_per_tick + 1)  # Max 2 tiles
+		
+		# Use built-in auto-tuning but with UI constraints
+		if "auto_tune_budget" in simulation:
+			simulation.auto_tune_budget()
+			# Ensure auto-tuning doesn't exceed UI-friendly limits
+			var current_budget = stats.get("max_budget_ms", 12)
+			if current_budget > max_allowed_budget:
+				simulation.set_max_tick_time_ms(max_allowed_budget)
 
 func _get_adaptive_redraw_cadence() -> int:
 	"""Adaptive ASCII redraw cadence based on map size and performance"""
 	if generator == null:
-		return 5
+		return 8
 	
 	var total_cells = generator.config.width * generator.config.height
 	
-	# Base cadence on map size to maintain reasonable frame rates
+	# More aggressive cadence scaling for better frame rates
 	if total_cells <= 4000:        # Small maps (e.g., 50x80)
-		return 3
+		return 4
 	elif total_cells <= 10000:     # Medium maps (e.g., 100x100)  
-		return 5
-	elif total_cells <= 25000:     # Large maps (e.g., 200x125)
 		return 8
+	elif total_cells <= 25000:     # Large maps (e.g., 200x125)
+		return 15
 	else:                          # Very large maps
-		return 12
+		return 25
 
 func _update_top_seed_label() -> void:
 	if top_seed_label and generator:

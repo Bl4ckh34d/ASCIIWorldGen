@@ -6,6 +6,7 @@ extends RefCounted
 # next climate recompute picks up phase/amplitudes.
 
 var generator: Object = null
+var _light_update_counter: int = 0
 
 func initialize(gen: Object) -> void:
 	generator = gen
@@ -13,6 +14,8 @@ func initialize(gen: Object) -> void:
 func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null:
 		return {}
+	# Debug: Track that this system is actually being called
+	print("SeasonalClimateSystem.tick() called - dt_days: %.6f" % _dt_days)
 	# Compute season phase from world time if available; otherwise no-op
 	var season_phase: float = 0.0
 	if world != null:
@@ -38,8 +41,9 @@ func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if world != null:
 		if "quick_update_climate" in generator:
 			generator.quick_update_climate()
-		# Update day-night light field every tick (cheap)
-		_update_light_field(world)
+		# Update day-night light field EVERY tick to ensure continuous movement
+		_light_update_counter += 1
+		_update_light_field(world)  # Always update for continuous day-night cycle
 	return {"dirty_fields": PackedStringArray(["climate", "light"]) }
 
 func _update_light_field(world: Object) -> void:
@@ -59,8 +63,9 @@ func _update_light_field(world: Object) -> void:
 	var time_of_day = 0.0
 	if world != null and "simulation_time_days" in world:
 		var sim_days = float(world.simulation_time_days)
-		day_of_year = fposmod(sim_days / 365.0, 1.0)
-		time_of_day = fposmod(sim_days, 1.0)  # Daily cycle
+		# ACCELERATED SEASONS: Make seasonal changes happen much faster for visibility
+		day_of_year = fposmod(sim_days / 30.0, 1.0)  # Full year cycle every 30 sim days instead of 365
+		time_of_day = fposmod(sim_days, 1.0)  # Daily cycle unchanged
 	
 	var light_params = {
 		"day_of_year": day_of_year,
@@ -68,6 +73,19 @@ func _update_light_field(world: Object) -> void:
 		"day_night_base": generator.config.day_night_base,
 		"day_night_contrast": generator.config.day_night_contrast
 	}
+	
+	# Debug day-night cycle more frequently to catch freezing
+	if _light_update_counter % 10 == 0:
+		var season_name = ""
+		if day_of_year < 0.25:
+			season_name = "Winter"
+		elif day_of_year < 0.5:
+			season_name = "Spring" 
+		elif day_of_year < 0.75:
+			season_name = "Summer"
+		else:
+			season_name = "Fall"
+		print("Day-Night Debug - Sim days: %.3f, Day of year: %.3f (%s), Time of day: %.3f" % [world.simulation_time_days if world != null and "simulation_time_days" in world else -1, day_of_year, season_name, time_of_day])
 	
 	# Evaluate light field on GPU
 	var light_field = generator._climate_compute_gpu.evaluate_light_field(w, h, light_params)

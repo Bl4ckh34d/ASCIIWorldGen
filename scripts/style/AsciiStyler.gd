@@ -45,7 +45,7 @@ func _glyph_for_biome(biome: int, is_beach: bool) -> String:
 
 # -------------------- Color helpers --------------------
 
-func _color_for_land(h_val: float, biome: int, is_beach: bool) -> Color:
+func _color_for_land(_h_val: float, biome: int, is_beach: bool) -> Color:
 	return BiomePalette.new().color_for_biome(biome, is_beach)
 
 func _color_for_water(
@@ -106,6 +106,7 @@ func build_ascii(
 	var have_lava: bool = _safe_size(lava_mask) == total
 	var have_clouds: bool = _safe_size(clouds) == total
 	var have_freeze: bool = _safe_size(lake_freeze) == total
+	var have_temp: bool = _safe_size(temperature) == total
 
 	for y in range(h):
 		for x in range(w):
@@ -120,7 +121,9 @@ func build_ascii(
 					var biome_id: int = (biomes[i] if have_biome else BiomeClassifier.Biome.GRASSLAND)
 					var is_beach: bool = have_beach and beach_mask[i] == 1
 					col = _color_for_land(height[i], biome_id, is_beach)
-					glyph = _glyph_for_biome(biome_id, is_beach)
+					
+					# Use rng_seed for varied glyphs based on position
+					glyph = glyph_for(x, y, true, biome_id, is_beach, rng_seed)
 
 					# lakes (override water visuals on land tiles marked as lakes)
 					if have_lake and lake_mask[i] == 1:
@@ -134,10 +137,26 @@ func build_ascii(
 						col = col.lerp(Color(0.25,0.55,0.95), 0.65)
 						glyph = "≈"
 
+					# pooled lakes (larger inland water bodies)
+					if have_pool and pooled_lake_mask[i] == 1:
+						var shelf_val: float = (shelf_noise[i] if have_shelf else 0.0)
+						col = _color_for_water(height[i], sea_level, false, 0.0, 0.0, 1.0, shelf_val)
+						glyph = "≈"
+					
 					# lava overlay
 					if have_lava and lava_mask[i] == 1:
 						col = col.lerp(Color(1.0, 0.35, 0.1), 0.85)
 						glyph = "≈"
+					
+					# Temperature color modulation (subtle tinting)
+					if have_temp:
+						# Convert normalized temperature to Celsius and then to 0-1 range
+						var temp_c = temp_min_c + temperature[i] * (temp_max_c - temp_min_c)
+						var temp_norm = clamp((temp_c - temp_min_c) / (temp_max_c - temp_min_c), 0.0, 1.0)
+						if temp_norm > 0.7:  # Hot areas get red tint
+							col = col.lerp(Color(1.0, 0.8, 0.6), 0.15)
+						elif temp_norm < 0.3:  # Cold areas get blue tint
+							col = col.lerp(Color(0.8, 0.9, 1.0), 0.15)
 				else:
 					# water tile
 					var is_turq: bool = have_turq and turquoise_mask[i] == 1
@@ -189,11 +208,33 @@ func build_cloud_overlay(w: int, h: int, clouds: PackedFloat32Array) -> String:
 func glyph_for(x: int, y: int, is_land: bool, biome_id: int, is_beach: bool, rng_seed: int) -> String:
 	if not is_land:
 		return "≈"
-	return _glyph_for_biome(biome_id, is_beach)
+	# Add randomization to glyphs based on position and seed for visual variety
+	var base_glyph = _glyph_for_biome(biome_id, is_beach)
+	var glyph_hash = _hash2(x, y, rng_seed)
+	
+	# Different biomes get different glyph variations
+	match biome_id:
+		BiomeClassifier.Biome.TEMPERATE_FOREST, BiomeClassifier.Biome.BOREAL_FOREST:
+			var tree_variants = ["Y", "T", "♠", "↑"]  # Tree variants
+			return tree_variants[glyph_hash % tree_variants.size()]
+		BiomeClassifier.Biome.MOUNTAINS:
+			var mountain_variants = ["M", "^", "⌂", "∩"]  # Mountain variants
+			return mountain_variants[glyph_hash % mountain_variants.size()]
+		BiomeClassifier.Biome.HILLS:
+			var hill_variants = ["+", "∩", "~", "≈"]  # Hill variants  
+			return hill_variants[glyph_hash % hill_variants.size()]
+		BiomeClassifier.Biome.DESERT_SAND:
+			var desert_variants = [":", ".", "°", "·"]  # Desert variants
+			return desert_variants[glyph_hash % desert_variants.size()]
+		BiomeClassifier.Biome.GRASSLAND:
+			var grass_variants = [",", "'", "`", "."]  # Grass variants
+			return grass_variants[glyph_hash % grass_variants.size()]
+		_:
+			return base_glyph
 
 # Deterministic tiny hash if needed in the future for randomized glyph choices
-static func _hash2(x: int, y: int, seed: int) -> int:
-	var h: int = seed ^ (x * 374761393) ^ (y * 668265263)
+static func _hash2(x: int, y: int, rng_seed: int) -> int:
+	var h: int = rng_seed ^ (x * 374761393) ^ (y * 668265263)
 	h = (h ^ (h >> 13)) * 1274126177
 	h = h ^ (h >> 16)
 	return h & 0x7fffffff
