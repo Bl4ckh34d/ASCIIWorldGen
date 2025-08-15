@@ -45,7 +45,7 @@ func initialize(gen: Object) -> void:
 	_noise_u.frequency = 0.015
 	_noise_v.frequency = 0.015
 	# Prepare advection shader if available
-	var rd := RenderingServer.create_local_rendering_device()
+	var rd := RenderingServer.get_rendering_device()
 	if _advec_shader != null:
 		var spirv := _advec_shader.get_spirv() if "get_spirv" in _advec_shader else null
 		if spirv != null:
@@ -165,7 +165,7 @@ func _update_wind_field(world: Object, w: int, h: int) -> void:
 			wind_v[i] = (v_band * wind_mult) + nv * 0.6
 
 func _update_wind_field_gpu(world: Object, w: int, h: int) -> void:
-	var rd := RenderingServer.create_local_rendering_device()
+	var rd := RenderingServer.get_rendering_device()
 	if not _wind_pipeline.is_valid():
 		return
 	var size: int = w * h
@@ -237,7 +237,7 @@ func _advect_and_mix_clouds(dt_days: float, w: int, h: int, source: PackedFloat3
 	generator.last_clouds = _tmp_clouds.duplicate()
 
 func _advect_and_mix_clouds_gpu(dt_days: float, w: int, h: int, source: PackedFloat32Array) -> void:
-	var rd := RenderingServer.create_local_rendering_device()
+	var rd := RenderingServer.get_rendering_device()
 	if not _advec_pipeline.is_valid():
 		return
 	var size: int = w * h

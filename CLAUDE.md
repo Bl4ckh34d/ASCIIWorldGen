@@ -1,1 +1,0 @@
-- We use Godot 4.4.1 and you are running your commands on a Windows 11 machine.

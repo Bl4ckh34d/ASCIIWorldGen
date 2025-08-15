@@ -24,7 +24,7 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 
 func _ensure() -> void:
 	if _rd == null:
-		_rd = RenderingServer.create_local_rendering_device()
+		_rd = RenderingServer.get_rendering_device()
 	if not _fill_shader.is_valid():
 		var s := _get_spirv(FILL_SHADER_FILE)
 		if s == null:
@@ -100,3 +100,5 @@ func compute_E(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteAr
 	_rd.free_rid(buf_e_in)
 	_rd.free_rid(buf_e_out)
 	return {"E": E, "lake": lake}
+
+
