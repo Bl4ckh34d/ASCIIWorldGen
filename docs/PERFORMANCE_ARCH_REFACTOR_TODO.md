@@ -113,3 +113,15 @@
 - `scripts/style/AsciiStyler.gd`, `scripts/Main.gd`
 
 
+
+
+### Done (this commit)
+- ROI seeding for river tracing (`shaders/river_seed_nms.glsl`) with `rx0,ry0,rx1,ry1` push constants and early-out.
+- Added `trace_rivers_roi(...)` entry point in `RiverCompute.gd` to restrict seeds to a region while tracing globally.
+- Kept existing `trace_rivers(...)` for backward compatibility.
+- Hydro tiling system already present; wire ROI tiles into `trace_rivers_roi(...)` next.
+
+### Next steps (easy wins)
+- Pass tile ROI from `HydroUpdateSystem` into `FlowCompute.step(...)` (already accepts ROI) and `RiverCompute.trace_rivers_roi(...)`.
+- Add early-exit in `DepressionFillCompute` via a 1×u32 “changed” SSBO flag to stop iterations if stable.
+- Fuse `biome_smooth` + `biome_reapply` into a single pass with in-pass conditional to reduce dispatch overhead.

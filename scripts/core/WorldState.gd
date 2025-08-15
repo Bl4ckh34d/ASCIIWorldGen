@@ -50,58 +50,56 @@ var time_scale: float = 1.0
 var tick_days: float = 1.0 / 120.0
 
 func configure(w: int, h: int, new_seed: int) -> void:
-    width = max(1, w)
-    height = max(1, h)
-    rng_seed = new_seed
-    _allocate_all()
+	width = max(1, w)
+	height = max(1, h)
+	rng_seed = new_seed
+	_allocate_all()
 
 func size() -> int:
-    return width * height
+	return width * height
 
 func clear_fields() -> void:
-    var n: int = size()
-    if n <= 0:
-        return
-    for i in range(n):
-        if i < height_field.size(): height_field[i] = 0.0
-        if i < is_land.size(): is_land[i] = 0
-        if i < coast_distance.size(): coast_distance[i] = 0.0
-        if i < turquoise_water.size(): turquoise_water[i] = 0
-        if i < turquoise_strength.size(): turquoise_strength[i] = 0.0
-        if i < beach.size(): beach[i] = 0
-        if i < flow_dir.size(): flow_dir[i] = 0
-        if i < flow_accum.size(): flow_accum[i] = 0.0
-        if i < river.size(): river[i] = 0
-        if i < lake.size(): lake[i] = 0
-        if i < lake_id.size(): lake_id[i] = 0
-        if i < lava.size(): lava[i] = 0
-        if i < temperature.size(): temperature[i] = 0.0
-        if i < moisture.size(): moisture[i] = 0.0
-        if i < precip.size(): precip[i] = 0.0
-        if i < biome_id.size(): biome_id[i] = 0
+	var n: int = size()
+	if n <= 0:
+		return
+	for i in range(n):
+		if i < height_field.size(): height_field[i] = 0.0
+		if i < is_land.size(): is_land[i] = 0
+		if i < coast_distance.size(): coast_distance[i] = 0.0
+		if i < turquoise_water.size(): turquoise_water[i] = 0
+		if i < turquoise_strength.size(): turquoise_strength[i] = 0.0
+		if i < beach.size(): beach[i] = 0
+		if i < flow_dir.size(): flow_dir[i] = 0
+		if i < flow_accum.size(): flow_accum[i] = 0.0
+		if i < river.size(): river[i] = 0
+		if i < lake.size(): lake[i] = 0
+		if i < lake_id.size(): lake_id[i] = 0
+		if i < lava.size(): lava[i] = 0
+		if i < temperature.size(): temperature[i] = 0.0
+		if i < moisture.size(): moisture[i] = 0.0
+		if i < precip.size(): precip[i] = 0.0
+		if i < biome_id.size(): biome_id[i] = 0
 
 func _allocate_all() -> void:
-    var n: int = size()
-    if n <= 0:
-        return
-    height_field.resize(n)
-    is_land.resize(n)
-    coast_distance.resize(n)
-    turquoise_water.resize(n)
-    turquoise_strength.resize(n)
-    beach.resize(n)
-    flow_dir.resize(n)
-    flow_accum.resize(n)
-    river.resize(n)
-    lake.resize(n)
-    lake_id.resize(n)
-    lava.resize(n)
-    temperature.resize(n)
-    moisture.resize(n)
-    precip.resize(n)
-    biome_id.resize(n)
+	var n: int = size()
+	if n <= 0:
+		return
+	height_field.resize(n)
+	is_land.resize(n)
+	coast_distance.resize(n)
+	turquoise_water.resize(n)
+	turquoise_strength.resize(n)
+	beach.resize(n)
+	flow_dir.resize(n)
+	flow_accum.resize(n)
+	river.resize(n)
+	lake.resize(n)
+	lake_id.resize(n)
+	lava.resize(n)
+	temperature.resize(n)
+	moisture.resize(n)
+	precip.resize(n)
+	biome_id.resize(n)
 
 func index_of(x: int, y: int) -> int:
-    return x + y * width
-
-
+	return x + y * width

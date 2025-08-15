@@ -10,6 +10,10 @@ var max_tick_time_ms: float = 6.0
 var budget_mode_time_ms: bool = true # if true, enforce time-based budget, else count-based
 var _last_tick_start_us: int = 0
 var last_dirty_fields: PackedStringArray = PackedStringArray()
+var _total_tick_time_ms: float = 0.0
+var _skipped_systems_count: int = 0
+var _stats_window_size: int = 100
+var _tick_time_history: Array = []
 
 const _SMOOTH_ALPHA := 0.3
 
@@ -40,6 +44,7 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 			var predicted_ms: float = float(s.get("avg_cost_ms", 0.0))
 			if elapsed_ms + predicted_ms > max(0.0, max_tick_time_ms):
 				# Try to fit other systems this tick; skip this one
+				_skipped_systems_count += 1
 				continue
 		else:
 			if executed >= max(1, max_systems_per_tick):
@@ -72,6 +77,15 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 			if "on_dirty" in s2["instance"]:
 				# Let systems react to dirty fields cheaply (they may no-op)
 				s2["instance"].on_dirty(agg, world, gpu_ctx)
+	
+	# Track total tick time
+	var end_us: int = Time.get_ticks_usec()
+	_total_tick_time_ms = float(end_us - start_us) / 1000.0
+	
+	# Maintain rolling window of tick times for statistics
+	_tick_time_history.append(_total_tick_time_ms)
+	if _tick_time_history.size() > _stats_window_size:
+		_tick_time_history.pop_front()
 
 func update_cadence(instance: Object, cadence: int) -> void:
 	var new_c: int = max(1, int(cadence))
@@ -88,3 +102,79 @@ func set_max_tick_time_ms(ms: float) -> void:
 
 func set_budget_mode_time(on: bool) -> void:
 	budget_mode_time_ms = bool(on)
+
+func get_performance_stats() -> Dictionary:
+	"""Get current performance statistics for monitoring and tuning"""
+	var stats = {
+		"current_tick_time_ms": _total_tick_time_ms,
+		"max_budget_ms": max_tick_time_ms,
+		"skipped_systems_count": _skipped_systems_count,
+		"systems_count": systems.size(),
+		"tick_counter": tick_counter,
+		"budget_mode_time": budget_mode_time_ms
+	}
+	
+	# Calculate rolling window statistics
+	if _tick_time_history.size() > 0:
+		var total = 0.0
+		var min_time = _tick_time_history[0]
+		var max_time = _tick_time_history[0]
+		
+		for time in _tick_time_history:
+			total += time
+			min_time = min(min_time, time)
+			max_time = max(max_time, time)
+		
+		stats["avg_tick_time_ms"] = total / float(_tick_time_history.size())
+		stats["min_tick_time_ms"] = min_time
+		stats["max_tick_time_ms"] = max_time
+		stats["window_size"] = _tick_time_history.size()
+		
+		# Performance health indicator
+		var avg_time = stats["avg_tick_time_ms"]
+		if avg_time > max_tick_time_ms * 0.9:
+			stats["performance_status"] = "critical"
+		elif avg_time > max_tick_time_ms * 0.7:
+			stats["performance_status"] = "warning"
+		else:
+			stats["performance_status"] = "healthy"
+	else:
+		stats["avg_tick_time_ms"] = 0.0
+		stats["performance_status"] = "no_data"
+	
+	# Per-system timing breakdown
+	var system_stats = []
+	for s in systems:
+		system_stats.append({
+			"name": str(s.get("instance", "unknown")),
+			"avg_cost_ms": s.get("avg_cost_ms", 0.0),
+			"cadence": s.get("cadence", 1)
+		})
+	stats["system_breakdown"] = system_stats
+	
+	return stats
+
+func auto_tune_budget() -> void:
+	"""Automatically adjust budget based on recent performance"""
+	if _tick_time_history.size() < 10:
+		return  # Need sufficient data
+	
+	var recent_avg = 0.0
+	var recent_count = min(20, _tick_time_history.size())
+	for i in range(_tick_time_history.size() - recent_count, _tick_time_history.size()):
+		recent_avg += _tick_time_history[i]
+	recent_avg /= float(recent_count)
+	
+	# If consistently under budget, try to increase performance
+	if recent_avg < max_tick_time_ms * 0.5:
+		max_tick_time_ms = max(3.0, max_tick_time_ms * 0.9)
+	# If over budget, be more conservative
+	elif recent_avg > max_tick_time_ms * 0.85:
+		max_tick_time_ms = min(16.0, max_tick_time_ms * 1.1)
+
+func reset_stats() -> void:
+	"""Reset performance statistics"""
+	_tick_time_history.clear()
+	_skipped_systems_count = 0
+	for s in systems:
+		s["avg_cost_ms"] = 0.0

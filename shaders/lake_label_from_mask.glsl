@@ -7,6 +7,7 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) buffer MaskBuf { uint lake_mask[]; } M;
 layout(std430, set = 0, binding = 1) buffer LabelsBuf { int labels[]; } L;
+layout(std430, set = 0, binding = 2) buffer ChangedBuf { uint flag[]; } Changed;
 
 layout(push_constant) uniform Params { int width; int height; int wrap_x; } PC;
 
@@ -31,7 +32,10 @@ void main(){
             if (lbl > 0 && (best == 0 || lbl < best)) best = lbl;
         }
     }
-    if (best > 0) L.labels[i] = best;
+    if (best > 0 && best != L.labels[i]) {
+        L.labels[i] = best;
+        Changed.flag[0] = 1u;
+    }
 }
 
 

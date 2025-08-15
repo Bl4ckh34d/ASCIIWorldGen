@@ -192,3 +192,146 @@ func trace_rivers(w: int, h: int, is_land: PackedByteArray, lake_mask: PackedByt
 	_rd.free_rid(buf_river)
 	_rd.free_rid(buf_lake)
 	return river_out
+
+# ROI-aware variant: only seed within roi, then trace globally from those seeds.
+func trace_rivers_roi(
+		w: int, h: int,
+		is_land: PackedByteArray,
+		lake_mask: PackedByteArray,
+		flow_dir: PackedInt32Array,
+		flow_accum: PackedFloat32Array,
+		percentile: float = 0.97,
+		min_len: int = 5,
+		roi: Rect2i = Rect2i(0,0,0,0),
+		forced_seeds: PackedInt32Array = PackedInt32Array()
+	) -> PackedByteArray:
+	_ensure()
+	if not _seed_pipeline.is_valid() or not _trace_pipeline.is_valid():
+		return PackedByteArray()
+	var size: int = max(0, w * h)
+
+	# Compute global threshold by percentile on CPU
+	var acc_vals: Array = []
+	for i in range(size):
+		if is_land[i] != 0:
+			acc_vals.append(flow_accum[i])
+	acc_vals.sort()
+	var thr_idx: int = clamp(int(floor(float(acc_vals.size() - 1) * percentile)), 0, max(0, acc_vals.size() - 1))
+	var thr: float = 4.0
+	if acc_vals.size() > 0:
+		thr = max(4.0, float(acc_vals[thr_idx]))
+
+	# Buffers: inputs
+	var buf_acc := _rd.storage_buffer_create(flow_accum.to_byte_array().size(), flow_accum.to_byte_array())
+	var land_u32 := PackedInt32Array(); land_u32.resize(size)
+	for k in range(size): land_u32[k] = 1 if (k < is_land.size() and is_land[k] != 0) else 0
+	var buf_land := _rd.storage_buffer_create(land_u32.to_byte_array().size(), land_u32.to_byte_array())
+	var buf_dir := _rd.storage_buffer_create(flow_dir.to_byte_array().size(), flow_dir.to_byte_array())
+	var lake_u32 := PackedInt32Array(); lake_u32.resize(size)
+	for k in range(size): lake_u32[k] = 1 if (k < lake_mask.size() and lake_mask[k] != 0) else 0
+	var buf_lake := _rd.storage_buffer_create(lake_u32.to_byte_array().size(), lake_u32.to_byte_array())
+
+	# Seeds buffer (u32 flags)
+	var seeds_u32 := PackedInt32Array(); seeds_u32.resize(size)
+	for k in range(size): seeds_u32[k] = 0
+	if forced_seeds.size() > 0:
+		for idx in forced_seeds: if idx >= 0 and idx < size: seeds_u32[int(idx)] = 1
+	var buf_seeds := _rd.storage_buffer_create(seeds_u32.to_byte_array().size(), seeds_u32.to_byte_array())
+
+	# Seed selection pass with ROI clipping in shader
+	var uniforms: Array = []
+	var u: RDUniform
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(buf_acc); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(buf_land); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(buf_dir); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_seeds); uniforms.append(u)
+	var u_set := _rd.uniform_set_create(uniforms, _seed_shader, 0)
+	# Push constants: width, height, threshold, rx0, ry0, rx1, ry1
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h])
+	pc.append_array(ints.to_byte_array())
+	var f := PackedFloat32Array([thr]); pc.append_array(f.to_byte_array())
+	var rx0: int = 0; var ry0: int = 0; var rx1: int = w; var ry1: int = h
+	if roi.size.x > 0 and roi.size.y > 0:
+		rx0 = clamp(roi.position.x, 0, max(0, w))
+		ry0 = clamp(roi.position.y, 0, max(0, h))
+		rx1 = clamp(roi.position.x + roi.size.x, 0, max(0, w))
+		ry1 = clamp(roi.position.y + roi.size.y, 0, max(0, h))
+	var roi_ints := PackedInt32Array([rx0, ry0, rx1, ry1])
+	pc.append_array(roi_ints.to_byte_array())
+	var pad_seed := (16 - (pc.size() % 16)) % 16
+	if pad_seed > 0:
+		var z_seed := PackedByteArray(); z_seed.resize(pad_seed)
+		pc.append_array(z_seed)
+	var gx: int = int(ceil(float(w) / 16.0)); var gy: int = int(ceil(float(h) / 16.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _seed_pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, gx, gy, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+
+	# Trace pass: ping-pong
+	var buf_front_in := buf_seeds
+	var frontier_out := PackedInt32Array(); frontier_out.resize(size)
+	for k in range(size): frontier_out[k] = 0
+	var buf_front_out := _rd.storage_buffer_create(frontier_out.to_byte_array().size(), frontier_out.to_byte_array())
+	var river_u32 := PackedInt32Array(); river_u32.resize(size)
+	for k in range(size): river_u32[k] = 0
+	var buf_river := _rd.storage_buffer_create(river_u32.to_byte_array().size(), river_u32.to_byte_array())
+
+	# Clear helper uniforms for frontier_out
+	var uniforms_c: Array = []
+	var uc := RDUniform.new(); uc.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; uc.binding = 0; uc.add_id(buf_front_out); uniforms_c.append(uc)
+	var u_set_c := _rd.uniform_set_create(uniforms_c, _clear_shader, 0)
+
+	# Iterative trace
+	var total_cells_i := PackedInt32Array([size])
+	var pc_trace := PackedByteArray(); pc_trace.append_array(total_cells_i.to_byte_array())
+	var pad_tr := (16 - (pc_trace.size() % 16)) % 16
+	if pad_tr > 0:
+		var z_tr := PackedByteArray(); z_tr.resize(pad_tr); pc_trace.append_array(z_tr)
+	var g1d := int(ceil(float(size) / 256.0))
+	for it in range(max(1, min_len + 4)): # cap iterations ~ path length safety
+		# trace step
+		var uniforms_t: Array = []
+		var ut: RDUniform
+		ut = RDUniform.new(); ut.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ut.binding = 0; ut.add_id(buf_dir); uniforms_t.append(ut)
+		ut = RDUniform.new(); ut.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ut.binding = 1; ut.add_id(buf_land); uniforms_t.append(ut)
+		ut = RDUniform.new(); ut.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ut.binding = 2; ut.add_id(buf_lake); uniforms_t.append(ut)
+		ut = RDUniform.new(); ut.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ut.binding = 3; ut.add_id(buf_front_in); uniforms_t.append(ut)
+		ut = RDUniform.new(); ut.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ut.binding = 4; ut.add_id(buf_front_out); uniforms_t.append(ut)
+		ut = RDUniform.new(); ut.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; ut.binding = 5; ut.add_id(buf_river); uniforms_t.append(ut)
+		var u_set_t := _rd.uniform_set_create(uniforms_t, _trace_shader, 0)
+		var clt := _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(clt, _trace_pipeline)
+		_rd.compute_list_bind_uniform_set(clt, u_set_t, 0)
+		_rd.compute_list_set_push_constant(clt, pc_trace, pc_trace.size())
+		_rd.compute_list_dispatch(clt, g1d, 1, 1)
+		_rd.compute_list_end()
+		_rd.free_rid(u_set_t)
+
+		# Swap frontiers and clear out
+		var tmp := buf_front_in; buf_front_in = buf_front_out; buf_front_out = tmp
+		var pc_c := PackedByteArray(); pc_c.append_array(PackedInt32Array([size]).to_byte_array())
+		var pad_c := (16 - (pc_c.size() % 16)) % 16
+		if pad_c > 0: var zc := PackedByteArray(); zc.resize(pad_c); pc_c.append_array(zc)
+		var clc := _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(clc, _clear_pipeline)
+		_rd.compute_list_bind_uniform_set(clc, u_set_c, 0)
+		_rd.compute_list_set_push_constant(clc, pc_c, pc_c.size())
+		_rd.compute_list_dispatch(clc, g1d, 1, 1)
+		_rd.compute_list_end()
+
+	# Read back rivers
+	var river_bytes := _rd.buffer_get_data(buf_river)
+	var river_u32_out := river_bytes.to_int32_array()
+	var river_out := PackedByteArray(); river_out.resize(size)
+	for k in range(size): river_out[k] = 1 if (k < river_u32_out.size() and river_u32_out[k] != 0) else 0
+
+	# Cleanup
+	_rd.free_rid(buf_acc); _rd.free_rid(buf_land); _rd.free_rid(buf_dir); _rd.free_rid(buf_seeds)
+	_rd.free_rid(buf_front_out); _rd.free_rid(buf_river); _rd.free_rid(buf_lake)
+
+	return river_out

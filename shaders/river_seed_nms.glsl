@@ -8,7 +8,7 @@ layout(std430, set = 0, binding = 1) buffer IsLandBuf { uint is_land[]; } Land;
 layout(std430, set = 0, binding = 2) buffer FlowDirBuf { int flow_dir[]; } Flow;
 layout(std430, set = 0, binding = 3) buffer SeedsBuf { uint seeds[]; } Seeds;
 
-layout(push_constant) uniform Params { int width; int height; float threshold; } PC;
+layout(push_constant) uniform Params { int width; int height; float threshold; int rx0; int ry0; int rx1; int ry1; } PC;
 
 int idx(int x, int y) { return x + y * PC.width; }
 
@@ -20,6 +20,8 @@ void main(){
     Seeds.seeds[i] = 0u;
     if (Land.is_land[i] == 0u) return;
     if (Flow.flow_dir[i] < 0) return;
+    // Check ROI bounds - only seed within the specified region
+    if (int(x) < PC.rx0 || int(x) >= PC.rx1 || int(y) < PC.ry0 || int(y) >= PC.ry1) return;
     float a = Acc.accum[i];
     if (a < PC.threshold) return;
     // Non-maximum suppression in 8-neighborhood

@@ -9,8 +9,9 @@ layout(std430, set = 0, binding = 0) buffer HeightBuf { float height[]; } H;
 layout(std430, set = 0, binding = 1) buffer LandBuf { uint is_land[]; } L;
 layout(std430, set = 0, binding = 2) buffer EInBuf { float e_in[]; } Ein;
 layout(std430, set = 0, binding = 3) buffer EOutBuf { float e_out[]; } Eout;
+layout(std430, set = 0, binding = 4) buffer ChangedBuf { uint flag[]; } Changed;
 
-layout(push_constant) uniform Params { int width; int height_px; int wrap_x; int total_cells; } PC;
+layout(push_constant) uniform Params { int width; int height_px; int wrap_x; int total_cells; float eps; } PC;
 
 void main(){
     uint i = gl_GlobalInvocationID.x;
@@ -35,6 +36,7 @@ void main(){
     }
     // Ensure we never go below the local terrain height
     if (best < H.height[i]) best = H.height[i];
+    if (abs(best - Ein.e_in[i]) > PC.eps) { Changed.flag[0] = 1u; }
     Eout.e_out[i] = best;
 }
 

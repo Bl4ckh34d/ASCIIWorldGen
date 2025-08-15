@@ -468,7 +468,7 @@ func _generate_and_draw() -> void:
 	var w: int = generator.config.width
 	var h: int = generator.config.height
 	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()))
+	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()), generator.last_light)
 	# Cloud overlay disabled for now
 	var clouds_text: String = AsciiStyler.new().build_cloud_overlay(w, h, generator.last_clouds)
 	ascii_map.clear()
@@ -505,12 +505,31 @@ func _on_sim_tick(_dt_days: float) -> void:
 		# Periodic checkpointing based on in-game time
 		if _checkpoint_sys and time_system and "maybe_checkpoint" in _checkpoint_sys:
 			_checkpoint_sys.maybe_checkpoint(float(time_system.simulation_time_days))
-		if _sim_tick_counter % 5 == 0:
+		# Adaptive ASCII redraw cadence based on map size
+		var redraw_cadence = _get_adaptive_redraw_cadence()
+		if _sim_tick_counter % redraw_cadence == 0:
 			# Keep WorldState synchronized from generator fields for consumers that rely on it
 			_sync_world_state_from_generator()
 			_update_top_time_label()
 			_redraw_ascii_from_current_state()
 			_sim_tick_counter = 0
+
+func _get_adaptive_redraw_cadence() -> int:
+	"""Adaptive ASCII redraw cadence based on map size and performance"""
+	if generator == null:
+		return 5
+	
+	var total_cells = generator.config.width * generator.config.height
+	
+	# Base cadence on map size to maintain reasonable frame rates
+	if total_cells <= 4000:        # Small maps (e.g., 50x80)
+		return 3
+	elif total_cells <= 10000:     # Medium maps (e.g., 100x100)  
+		return 5
+	elif total_cells <= 25000:     # Large maps (e.g., 200x125)
+		return 8
+	else:                          # Very large maps
+		return 12
 
 func _update_top_seed_label() -> void:
 	if top_seed_label and generator:
@@ -567,7 +586,7 @@ func _redraw_ascii_from_current_state() -> void:
 	var h: int = generator.config.height
 	var grid: PackedByteArray = generator.last_is_land
 	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()))
+	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()), generator.last_light)
 	ascii_map.clear()
 	ascii_map.append_text(ascii_str)
 	# Update cloud overlay string
@@ -767,7 +786,7 @@ func _generate_and_draw_preserve_seed() -> void:
 	var w: int = generator.config.width
 	var h: int = generator.config.height
 	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()))
+	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()), generator.last_light)
 	ascii_map.clear()
 	ascii_map.append_text(ascii_str)
 	last_ascii_text = ascii_str

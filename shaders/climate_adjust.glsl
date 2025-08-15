@@ -78,7 +78,8 @@ void main() {
     int H = PC.height;
     int i = int(x) + int(y) * W;
 
-    float lat = abs(float(y) / max(1.0, float(H) - 1.0) - 0.5) * 2.0;
+    float lat_norm_signed = (float(y) / max(1.0, float(H) - 1.0)) - 0.5; // -0.5..+0.5
+    float lat = abs(lat_norm_signed) * 2.0;
     // Apply elevation cooling only above sea level (temperature-neutral below sea level)
     // Anchored baseline: approximate by median/mean land height pre-computed on CPU — here we use a neutral 0.0 and rely on CPU path for parity,
     // but we clamp relative elevation to a narrow band to avoid global freezes when sea level changes.
@@ -103,7 +104,10 @@ void main() {
     float amp_lat = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat, 1.2));
     float cont_amp = land_px ? (0.2 + 0.8 * dc_norm) : 0.0;
     float amp_cont = mix(PC.season_ocean_damp, 1.0, cont_amp);
-    float season = amp_lat * amp_cont * cos(6.28318 * PC.season_phase);
+    // Hemispheric inversion: southern hemisphere is +0.5 phase shift
+    float phase_h = PC.season_phase + (lat_norm_signed < 0.0 ? 0.5 : 0.0);
+    phase_h = fract(phase_h);
+    float season = amp_lat * amp_cont * cos(6.28318 * phase_h);
     // Diurnal term: latitude and ocean damped
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat, 1.2));
     float amp_cont_d = land_px ? 1.0 : PC.diurnal_ocean_damp;
@@ -142,7 +146,10 @@ void main() {
                         float amp_lat2 = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat2, 1.2));
                         float cont_amp2 = 1.0; // neighbor is land by construction here
                         float amp_cont2 = mix(PC.season_ocean_damp, 1.0, cont_amp2);
-                        float season2 = amp_lat2 * amp_cont2 * cos(6.28318 * PC.season_phase);
+                        float lat_norm_signed2 = (float(ny) / max(1.0, float(H) - 1.0)) - 0.5;
+                        float phase_h2 = PC.season_phase + (lat_norm_signed2 < 0.0 ? 0.5 : 0.0);
+                        phase_h2 = fract(phase_h2);
+                        float season2 = amp_lat2 * amp_cont2 * cos(6.28318 * phase_h2);
                         t2 = clamp01(t2 + season2);
                         t2 = clamp01((t2 + PC.temp_base_offset - 0.5) * PC.temp_scale + 0.5);
                         t_land_sum += t2;

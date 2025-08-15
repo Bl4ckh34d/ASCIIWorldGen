@@ -25,6 +25,7 @@ const RiverCompute = preload("res://scripts/systems/RiverCompute.gd")
 const DepressionFillCompute = preload("res://scripts/systems/DepressionFillCompute.gd")
 const LakeLabelFromMaskCompute = preload("res://scripts/systems/LakeLabelFromMaskCompute.gd")
 const PourPointReduceCompute = preload("res://scripts/systems/PourPointReduceCompute.gd")
+const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 var _terrain_compute: Object = null
 var _dt_compute: Object = null
 var _shelf_compute: Object = null
@@ -32,6 +33,7 @@ var _climate_compute_gpu: Object = null
 var _flow_compute: Object = null
 var _river_compute: Object = null
 var _lake_label_compute: Object = null
+var _gpu_buffer_manager: Object = null
 
 class Config:
 	var rng_seed: int = 0
@@ -67,13 +69,17 @@ class Config:
 	var continentality_scale: float = 1.2
 	# Seasonal climate parameters (normalized temp space)
 	var season_phase: float = 0.0
-	var season_amp_equator: float = 0.0
-	var season_amp_pole: float = 0.0
-	var season_ocean_damp: float = 0.6
+	var season_amp_equator: float = 0.10
+	var season_amp_pole: float = 0.25
+	var season_ocean_damp: float = 0.60
 	# Diurnal temperature cycle
 	var diurnal_amp_equator: float = 0.06
 	var diurnal_amp_pole: float = 0.03
 	var diurnal_ocean_damp: float = 0.4
+	var time_of_day: float = 0.0
+	# Day-night visual settings
+	var day_night_contrast: float = 0.75
+	var day_night_base: float = 0.25
 	# Mountain radiance influence
 	var mountain_cool_amp: float = 0.15
 	var mountain_wet_amp: float = 0.10
@@ -123,6 +129,7 @@ var last_flow_accum: PackedFloat32Array = PackedFloat32Array()
 var last_river: PackedByteArray = PackedByteArray()
 var last_pooled_lake: PackedByteArray = PackedByteArray()
 var last_clouds: PackedFloat32Array = PackedFloat32Array()
+var last_light: PackedFloat32Array = PackedFloat32Array()
 
 # Exposed by PlateSystem for coupling (GPU boundary mask as i32)
 var _plates_boundary_mask_i32: PackedInt32Array = PackedInt32Array()
@@ -149,6 +156,7 @@ func _init() -> void:
 	_world_state.lava_temp_threshold_c = config.lava_temp_threshold_c
 	_feature_noise_cache = FeatureNoiseCache.new()
 	_climate_base = ClimateBase.new().build(config.rng_seed)
+	_gpu_buffer_manager = GPUBufferManager.new()
 
 func apply_config(dict: Dictionary) -> void:
 	if dict.has("seed"):
@@ -335,6 +343,15 @@ func generate() -> PackedByteArray:
 		"season_amp_equator": config.season_amp_equator,
 		"season_amp_pole": config.season_amp_pole,
 		"season_ocean_damp": config.season_ocean_damp,
+		# Diurnal controls
+		"diurnal_amp_equator": config.diurnal_amp_equator,
+		"diurnal_amp_pole": config.diurnal_amp_pole,
+		"diurnal_ocean_damp": config.diurnal_ocean_damp,
+		"time_of_day": config.time_of_day,
+		# Day-night visual settings
+		"day_of_year": config.season_phase,  # Use season_phase as day_of_year for now
+		"day_night_base": config.day_night_base,
+		"day_night_contrast": config.day_night_contrast,
 	}
 
 	# Step 1: terrain (GPU) with wrapper reuse
@@ -556,7 +573,7 @@ func generate() -> PackedByteArray:
 		if _river_compute == null:
 			_river_compute = RiverCompute.new()
 		var forced: PackedInt32Array = hydro2.get("outflow_seeds", PackedInt32Array())
-		var river_gpu: PackedByteArray = _river_compute.trace_rivers(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, forced)
+		var river_gpu: PackedByteArray = _river_compute.trace_rivers_roi(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, Rect2i(0,0,0,0), forced)
 		if river_gpu.size() == w * h:
 			last_river = river_gpu
 		# GPU river delta widening (post)
@@ -794,7 +811,7 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		if _river_compute == null:
 			_river_compute = RiverCompute.new()
 		var forced2: PackedInt32Array = pool2.get("outflow_seeds", PackedInt32Array())
-		var river_gpu: PackedByteArray = _river_compute.trace_rivers(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, forced2)
+		var river_gpu: PackedByteArray = _river_compute.trace_rivers_roi(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, Rect2i(0,0,0,0), forced2)
 		if river_gpu.size() == w * h:
 			last_river = river_gpu
 		# Delta widening (GPU/CPU)
@@ -857,21 +874,45 @@ func quick_update_climate() -> void:
 		"season_amp_equator": config.season_amp_equator,
 		"season_amp_pole": config.season_amp_pole,
 		"season_ocean_damp": config.season_ocean_damp,
+		"diurnal_amp_equator": config.diurnal_amp_equator,
+		"diurnal_amp_pole": config.diurnal_amp_pole,
+		"diurnal_ocean_damp": config.diurnal_ocean_damp,
+		"time_of_day": config.time_of_day,
+		"day_of_year": config.season_phase,
+		"day_night_base": config.day_night_base,
+		"day_night_contrast": config.day_night_contrast,
 	}
 	params["distance_to_coast"] = last_water_distance
-	var climate: Dictionary
+	
 	if _climate_compute_gpu == null:
 		_climate_compute_gpu = ClimateAdjustCompute.new()
-	climate = _climate_compute_gpu.evaluate(w, h, last_height, last_is_land, _climate_base, params, last_water_distance, last_ocean_fraction)
-	if climate.size() > 0:
-		last_temperature = climate.get("temperature", last_temperature)
-		last_moisture = climate.get("moisture", last_moisture)
-		# Apply mountain radiance smoothing on updated climate (GPU)
-		var climpost: Object = load("res://scripts/systems/ClimatePostCompute.gd").new()
-		var post: Dictionary = climpost.apply_mountain_radiance(w, h, last_biomes, last_temperature, last_moisture, config.mountain_cool_amp, config.mountain_wet_amp, max(0, config.mountain_radiance_passes))
-		if not post.is_empty():
-			last_temperature = post["temperature"]
-			last_moisture = post["moisture"]
+	
+	# Fast path: if only seasonal/diurnal phases changed, use cycle_apply_only
+	# This is a simplification - in a full implementation you'd track what changed
+	var use_fast_path = last_temperature.size() == size
+	
+	if use_fast_path:
+		# Apply only cycles to existing temperature
+		last_temperature = _climate_compute_gpu.apply_cycles_only(w, h, last_temperature, last_is_land, last_water_distance, params)
+	else:
+		# Full climate recompute
+		var climate: Dictionary = _climate_compute_gpu.evaluate(w, h, last_height, last_is_land, _climate_base, params, last_water_distance, last_ocean_fraction)
+		if climate.size() > 0:
+			last_temperature = climate.get("temperature", last_temperature)
+			last_moisture = climate.get("moisture", last_moisture)
+			# Apply mountain radiance smoothing on updated climate (GPU)
+			var climpost: Object = load("res://scripts/systems/ClimatePostCompute.gd").new()
+			var post: Dictionary = climpost.apply_mountain_radiance(w, h, last_biomes, last_temperature, last_moisture, config.mountain_cool_amp, config.mountain_wet_amp, max(0, config.mountain_radiance_passes))
+			if not post.is_empty():
+				last_temperature = post["temperature"]
+				last_moisture = post["moisture"]
+	
+	# Always update light field (cheap)
+	last_light = _climate_compute_gpu.evaluate_light_field(w, h, params)
+	# Fallback if light field evaluation failed
+	if last_light.size() != w * h:
+		last_light.resize(w * h)
+		last_light.fill(1.0)  # Default to full brightness
 
 func quick_update_biomes() -> void:
 	# Reclassify biomes using current climate (temperature/moisture) and height/land/beach.
@@ -932,7 +973,7 @@ func quick_update_flow_rivers() -> void:
 		if _river_compute == null:
 			_river_compute = RiverCompute.new()
 		var forced: PackedInt32Array = fc_out.get("outflow_seeds", PackedInt32Array())
-		var river_gpu: PackedByteArray = _river_compute.trace_rivers(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, forced)
+		var river_gpu: PackedByteArray = _river_compute.trace_rivers_roi(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, Rect2i(0,0,0,0), forced)
 		if river_gpu.size() == size:
 			last_river = river_gpu
 			var rpost: Object = load("res://scripts/systems/RiverPostCompute.gd").new()
@@ -1221,3 +1262,66 @@ func _apply_cold_temperature_override(w: int, h: int) -> void:
 					last_biomes[i] = BiomeClassifier.Biome.DESERT_ICE
 				else:
 					last_biomes[i] = BiomeClassifier.Biome.WASTELAND
+
+# GPU Buffer Management for Persistent SSBOs
+func ensure_persistent_buffers() -> void:
+	"""Allocate persistent GPU buffers for all major world data"""
+	if _gpu_buffer_manager == null:
+		return
+	
+	var size = config.width * config.height
+	var float_size = size * 4  # 4 bytes per float32
+	var byte_size = size      # 1 byte per byte
+	var int_size = size * 4   # 4 bytes per int32
+	
+	# Allocate persistent buffers for common data
+	_gpu_buffer_manager.ensure_buffer("height", float_size, last_height.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("is_land", int_size, _pack_bytes_to_u32(last_is_land).to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("temperature", float_size, last_temperature.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("moisture", float_size, last_moisture.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("flow_dir", int_size, last_flow_dir.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("flow_accum", float_size, last_flow_accum.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("biome_id", int_size, last_biomes.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("river", int_size, _pack_bytes_to_u32(last_river).to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("lake", int_size, _pack_bytes_to_u32(last_lake).to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("lake_id", int_size, last_lake_id.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("distance", float_size, last_distance_to_coast.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("clouds", float_size, last_clouds.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("light", float_size, last_light.to_byte_array())
+
+func _pack_bytes_to_u32(byte_array: PackedByteArray) -> PackedInt32Array:
+	"""Convert PackedByteArray to PackedInt32Array for GPU use"""
+	var result = PackedInt32Array()
+	result.resize(byte_array.size())
+	for i in range(byte_array.size()):
+		result[i] = 1 if byte_array[i] != 0 else 0
+	return result
+
+func update_persistent_buffer(name: String, data: PackedByteArray) -> bool:
+	"""Update a persistent buffer with new data"""
+	if _gpu_buffer_manager == null:
+		return false
+	return _gpu_buffer_manager.update_buffer(name, data)
+
+func get_persistent_buffer(name: String) -> RID:
+	"""Get a persistent buffer RID for compute shader binding"""
+	if _gpu_buffer_manager == null:
+		return RID()
+	return _gpu_buffer_manager.get_buffer(name)
+
+func read_persistent_buffer(name: String) -> PackedByteArray:
+	"""Read data back from a persistent buffer (should be used sparingly)"""
+	if _gpu_buffer_manager == null:
+		return PackedByteArray()
+	return _gpu_buffer_manager.read_buffer(name, name)
+
+func get_buffer_memory_stats() -> Dictionary:
+	"""Get GPU buffer memory usage statistics"""
+	if _gpu_buffer_manager == null:
+		return {"error": "Buffer manager not initialized"}
+	return _gpu_buffer_manager.get_buffer_stats()
+
+func cleanup_gpu_resources() -> void:
+	"""Clean up GPU resources when shutting down"""
+	if _gpu_buffer_manager != null:
+		_gpu_buffer_manager.cleanup()

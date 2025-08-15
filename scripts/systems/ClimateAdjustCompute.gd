@@ -6,10 +6,16 @@ extends RefCounted
 
 var CLIMATE_SHADER_FILE: RDShaderFile = load("res://shaders/climate_adjust.glsl")
 var CLIMATE_NOISE_SHADER_FILE: RDShaderFile = load("res://shaders/climate_noise.glsl")
+var CYCLE_APPLY_SHADER_FILE: RDShaderFile = load("res://shaders/cycle_apply.glsl")
+var DAY_NIGHT_LIGHT_SHADER_FILE: RDShaderFile = load("res://shaders/day_night_light.glsl")
 
 var _rd: RenderingDevice
 var _shader: RID
 var _pipeline: RID
+var _cycle_shader: RID
+var _cycle_pipeline: RID
+var _light_shader: RID
+var _light_pipeline: RID
 
 func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 	if file == null:
@@ -36,6 +42,18 @@ func _ensure_device_and_pipeline() -> void:
 		_shader = _rd.shader_create_from_spirv(spirv)
 	if not _pipeline.is_valid() and _shader.is_valid():
 		_pipeline = _rd.compute_pipeline_create(_shader)
+	if not _cycle_shader.is_valid():
+		var cycle_spirv: RDShaderSPIRV = _get_spirv(CYCLE_APPLY_SHADER_FILE)
+		if cycle_spirv != null:
+			_cycle_shader = _rd.shader_create_from_spirv(cycle_spirv)
+	if not _cycle_pipeline.is_valid() and _cycle_shader.is_valid():
+		_cycle_pipeline = _rd.compute_pipeline_create(_cycle_shader)
+	if not _light_shader.is_valid():
+		var light_spirv: RDShaderSPIRV = _get_spirv(DAY_NIGHT_LIGHT_SHADER_FILE)
+		if light_spirv != null:
+			_light_shader = _rd.shader_create_from_spirv(light_spirv)
+	if not _light_pipeline.is_valid() and _light_shader.is_valid():
+		_light_pipeline = _rd.compute_pipeline_create(_light_shader)
 
 func _create_storage_buffer_from_f32(data: PackedFloat32Array) -> RID:
 	var bytes := data.to_byte_array()
@@ -276,3 +294,138 @@ func evaluate(w: int, h: int,
 		"moisture": moist_out,
 		"precip": precip_out,
 	}
+
+# Fast path: apply only seasonal and diurnal cycles to existing temperature
+func apply_cycles_only(w: int, h: int,
+		current_temperature: PackedFloat32Array,
+		is_land: PackedByteArray,
+		distance_to_coast: PackedFloat32Array,
+		params: Dictionary) -> PackedFloat32Array:
+	_ensure_device_and_pipeline()
+	
+	var size: int = max(0, w * h)
+	if size == 0 or not _cycle_pipeline.is_valid():
+		return current_temperature
+	
+	# Convert land mask to u32
+	var is_land_u32 := PackedInt32Array(); is_land_u32.resize(size)
+	for i in range(size):
+		is_land_u32[i] = 1 if (i < is_land.size() and is_land[i] != 0) else 0
+	
+	# Create buffers
+	var buf_temp_in: RID = _create_storage_buffer_from_f32(current_temperature)
+	var buf_is_land: RID = _rd.storage_buffer_create(is_land_u32.to_byte_array().size(), is_land_u32.to_byte_array())
+	var buf_dist: RID = _create_storage_buffer_from_f32(distance_to_coast)
+	var out_temp := PackedFloat32Array(); out_temp.resize(size)
+	var buf_out_temp: RID = _create_storage_buffer_from_f32(out_temp)
+	
+	# Bind uniforms
+	var uniforms: Array = []
+	var u0: RDUniform = RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(buf_temp_in); uniforms.append(u0)
+	var u1: RDUniform = RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(buf_is_land); uniforms.append(u1)
+	var u2: RDUniform = RDUniform.new(); u2.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u2.binding = 2; u2.add_id(buf_dist); uniforms.append(u2)
+	var u3: RDUniform = RDUniform.new(); u3.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u3.binding = 3; u3.add_id(buf_out_temp); uniforms.append(u3)
+	
+	var uniform_set: RID = _rd.uniform_set_create(uniforms, _cycle_shader, 0)
+	
+	# Pack push constants for cycle shader
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h])
+	var floats := PackedFloat32Array([
+		float(params.get("season_phase", 0.0)),
+		float(params.get("season_amp_equator", 0.0)),
+		float(params.get("season_amp_pole", 0.0)),
+		float(params.get("season_ocean_damp", 0.0)),
+		float(params.get("diurnal_amp_equator", 0.0)),
+		float(params.get("diurnal_amp_pole", 0.0)),
+		float(params.get("diurnal_ocean_damp", 0.0)),
+		float(params.get("time_of_day", 0.0)),
+		float(params.get("continentality_scale", 1.0)),
+	])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	
+	# Align to 16 bytes
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	
+	var groups_x: int = int(ceil(float(w) / 16.0))
+	var groups_y: int = int(ceil(float(h) / 16.0))
+	
+	var cl_id: int = _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl_id, _cycle_pipeline)
+	_rd.compute_list_bind_uniform_set(cl_id, uniform_set, 0)
+	_rd.compute_list_set_push_constant(cl_id, pc, pc.size())
+	_rd.compute_list_dispatch(cl_id, groups_x, groups_y, 1)
+	_rd.compute_list_end()
+	
+	# Read back output
+	var temp_bytes: PackedByteArray = _rd.buffer_get_data(buf_out_temp)
+	var temp_result: PackedFloat32Array = temp_bytes.to_float32_array()
+	
+	# Cleanup
+	_rd.free_rid(uniform_set)
+	_rd.free_rid(buf_temp_in)
+	_rd.free_rid(buf_is_land)
+	_rd.free_rid(buf_dist)
+	_rd.free_rid(buf_out_temp)
+	
+	return temp_result
+
+# Evaluate day-night light field
+func evaluate_light_field(w: int, h: int, params: Dictionary) -> PackedFloat32Array:
+	_ensure_device_and_pipeline()
+	
+	var size: int = max(0, w * h)
+	if size == 0 or not _light_pipeline.is_valid():
+		return PackedFloat32Array()
+	
+	# Create output buffer
+	var out_light := PackedFloat32Array(); out_light.resize(size)
+	var buf_light: RID = _create_storage_buffer_from_f32(out_light)
+	
+	# Bind uniforms
+	var uniforms: Array = []
+	var u0: RDUniform = RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(buf_light); uniforms.append(u0)
+	
+	var uniform_set: RID = _rd.uniform_set_create(uniforms, _light_shader, 0)
+	
+	# Pack push constants for light shader
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h])
+	var floats := PackedFloat32Array([
+		float(params.get("day_of_year", 0.0)),
+		float(params.get("time_of_day", 0.0)),
+		float(params.get("day_night_base", 0.25)),
+		float(params.get("day_night_contrast", 0.75)),
+	])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	
+	# Align to 16 bytes
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	
+	var groups_x: int = int(ceil(float(w) / 16.0))
+	var groups_y: int = int(ceil(float(h) / 16.0))
+	
+	var cl_id: int = _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl_id, _light_pipeline)
+	_rd.compute_list_bind_uniform_set(cl_id, uniform_set, 0)
+	_rd.compute_list_set_push_constant(cl_id, pc, pc.size())
+	_rd.compute_list_dispatch(cl_id, groups_x, groups_y, 1)
+	_rd.compute_list_end()
+	
+	# Read back output
+	var light_bytes: PackedByteArray = _rd.buffer_get_data(buf_light)
+	var light_result: PackedFloat32Array = light_bytes.to_float32_array()
+	
+	# Cleanup
+	_rd.free_rid(uniform_set)
+	_rd.free_rid(buf_light)
+	
+	return light_result

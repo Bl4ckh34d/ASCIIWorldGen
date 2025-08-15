@@ -49,7 +49,7 @@ func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			if generator._river_compute == null:
 				generator._river_compute = load("res://scripts/systems/RiverCompute.gd").new()
 			var forced := PackedInt32Array()
-			var rivers: PackedByteArray = generator._river_compute.trace_rivers(w, h, generator.last_is_land, generator.last_lake, generator.last_flow_dir, generator.last_flow_accum, 0.97, 5, forced)
+			var rivers: PackedByteArray = generator._river_compute.trace_rivers_roi(w, h, generator.last_is_land, generator.last_lake, generator.last_flow_dir, generator.last_flow_accum, 0.97, 5, roi, forced)
 			if rivers.size() == w * h:
 				generator.last_river = rivers
 		processed += 1
