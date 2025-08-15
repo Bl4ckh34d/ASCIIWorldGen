@@ -4,33 +4,50 @@ extends Node
 signal tick(dt_days)
 
 var running: bool = false
-var time_scale: float = 1.0
-var tick_days: float = 1.0 / 120.0 # ~12 minutes per tick
+var time_scale: float = 0.2  # Slower time progression
+var tick_days: float = 1.0 / 1440.0 # 1 minute per tick (much smaller time steps)
 var simulation_time_days: float = 0.0
 
 var _accum_days: float = 0.0
+var _timer: Timer
 
-func _process(delta: float) -> void:
+func _ready() -> void:
+	# Create a precise timer for 10 FPS simulation ticks
+	_timer = Timer.new()
+	_timer.wait_time = 0.1  # 10 FPS = 0.1 second intervals
+	_timer.timeout.connect(_on_timer_tick)
+	add_child(_timer)
+
+func _on_timer_tick() -> void:
 	if not running:
 		return
 	if time_scale <= 0.0 or tick_days <= 0.0:
 		return
-	_accum_days += delta * time_scale
-	while _accum_days >= tick_days:
-		emit_signal("tick", tick_days)
-		simulation_time_days += tick_days
-		_accum_days -= tick_days
+	# Calculate how much simulation time passes per timer tick
+	var sim_time_per_tick = tick_days * time_scale * 10.0  # 10 FPS timer
+	emit_signal("tick", tick_days)
+	simulation_time_days += tick_days
+
+func _process(delta: float) -> void:
+	# Keep the old accumulation system as fallback but commented for reference
+	pass
 
 func start() -> void:
 	running = true
+	if _timer:
+		_timer.start()
 
 func pause() -> void:
 	running = false
+	if _timer:
+		_timer.stop()
 
 func reset() -> void:
 	running = false
 	simulation_time_days = 0.0
 	_accum_days = 0.0
+	if _timer:
+		_timer.stop()
 
 func step_once() -> void:
 	# Manual single tick (useful for step button)
@@ -40,6 +57,8 @@ func step_once() -> void:
 
 func set_time_scale(v: float) -> void:
 	time_scale = max(0.0, v)
+	# Timer runs at constant 10 FPS regardless of time_scale
+	# Time scale affects simulation progression speed, not tick frequency
 
 func set_tick_days(v: float) -> void:
 	tick_days = max(1e-6, v)

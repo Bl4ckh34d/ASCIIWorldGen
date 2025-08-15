@@ -45,8 +45,11 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	}, phase, int(generator.config.rng_seed))
 	if out.size() == size:
 		generator.last_lava.resize(size)
+		var lava_count = 0
 		for k in range(size):
-			generator.last_lava[k] = (1 if out[k] > 0.5 else 0)
+			var lava_val = (1 if out[k] > 0.5 else 0)
+			generator.last_lava[k] = lava_val
+			if lava_val == 1: lava_count += 1
 		return {"dirty_fields": PackedStringArray(["lava"]) }
 	return {}
 

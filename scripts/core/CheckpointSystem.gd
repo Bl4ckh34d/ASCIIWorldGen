@@ -165,7 +165,7 @@ func scrub_to(target_days: float, time_system: Node, simulation: Node, world: Ob
 	if not ok:
 		return false
 	# Determine tick size
-	var dt_days: float = 1.0 / 120.0
+	var dt_days: float = 1.0 / 1440.0
 	if "tick_days" in time_system:
 		dt_days = max(1e-6, float(time_system.tick_days))
 	# Get loaded checkpoint time from state

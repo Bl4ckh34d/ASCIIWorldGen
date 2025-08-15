@@ -145,8 +145,8 @@ func build_ascii(
 					
 					# lava overlay
 					if have_lava and lava_mask[i] == 1:
-						col = col.lerp(Color(1.0, 0.35, 0.1), 0.85)
-						glyph = "≈"
+						col = Color(1.0, 0.2, 0.0)  # Bright red-orange lava color
+						glyph = "▓"  # Dense block pattern for lava flows
 					
 					# Temperature color modulation (subtle tinting)
 					if have_temp:

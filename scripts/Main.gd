@@ -47,8 +47,7 @@ var simulation: Node
 var _checkpoint_sys: Node
 var AsciiStyler = load("res://scripts/style/AsciiStyler.gd")
 const RandomizeService = preload("res://scripts/ui/RandomizeService.gd")
-var highlight_rect: ColorRect
-var highlight_label: Label
+var cursor_overlay: Control
 var cloud_map: RichTextLabel
 var last_ascii_text: String = ""
 var styler_single: Object
@@ -110,13 +109,13 @@ func _ready() -> void:
 		# Reduce tiles per tick for hydro system performance
 		_hydro_sys.tiles_per_tick = 1  # Process 1 tile per tick instead of 2
 	if "register_system" in simulation:
-		simulation.register_system(_hydro_sys, 60, 0)  # Much slower hydro updates
+		simulation.register_system(_hydro_sys, 30, 0)  # Hydro: seasonal changes (monthly)
 	# Register cloud/wind overlay updater (visual only for now)
 	_clouds_sys = load("res://scripts/systems/CloudWindSystem.gd").new()
 	if "initialize" in _clouds_sys:
 		_clouds_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_clouds_sys, 15, 0)  # Slower cloud updates
+		simulation.register_system(_clouds_sys, 7, 0)  # Clouds: weekly weather patterns
 	# Register biome reclassify system (cadence separate from climate)
 	_biome_sys = load("res://scripts/systems/BiomeUpdateSystem.gd").new()
 	# Register plates prototype at a very slow cadence
@@ -124,27 +123,24 @@ func _ready() -> void:
 	if "initialize" in _plates_sys:
 		_plates_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_plates_sys, 180, 0)  # Even slower plate updates
+		simulation.register_system(_plates_sys, 365, 0)  # Plate tectonics: once per simulated year
 	if "initialize" in _biome_sys:
 		_biome_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_biome_sys, 20, 0)  # Slower biome updates
+		simulation.register_system(_biome_sys, 90, 0)  # Biomes: seasonal ecosystem shifts
 	# Register volcanism system at slower cadence
 	var _volc_sys: Object = load("res://scripts/systems/VolcanismSystem.gd").new()
 	if "initialize" in _volc_sys:
 		_volc_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_volc_sys, 8, 0)  # Slower volcanism
+		simulation.register_system(_volc_sys, 3, 0)  # Volcanism: rapid geological events
 	# Forward ticks to simulation (world state lives in generator)
 	if time_system.has_signal("tick"):
 		time_system.connect("tick", Callable(self, "_on_sim_tick"))
 	play_button.pressed.connect(_on_play_pressed)
 	reset_button.pressed.connect(_on_reset_pressed)
-	ascii_map.gui_input.connect(_on_ascii_input)
 	_apply_monospace_font()
-	ascii_map.mouse_entered.connect(_on_map_enter)
-	ascii_map.mouse_exited.connect(_on_map_exit)
-	_create_highlight_overlay()
+	_create_cursor_overlay()
 	# Create cloud overlay label above the ASCII map
 	cloud_map = RichTextLabel.new()
 	cloud_map.bbcode_enabled = true
@@ -189,24 +185,24 @@ func _ready() -> void:
 		var clim_cad := SpinBox.new(); clim_cad.min_value = 1; clim_cad.max_value = 120; clim_cad.step = 1; clim_cad.value = 1; systems_box.add_child(clim_cad)
 		clim_cad.tooltip_text = "SeasonalClimateSystem now runs every tick (bypasses simulation orchestrator)"
 		clim_cad.editable = false  # Can't be changed since it runs directly in main loop
-		var hydro_cad := SpinBox.new(); hydro_cad.min_value = 1; hydro_cad.max_value = 120; hydro_cad.step = 1; hydro_cad.value = 20; systems_box.add_child(hydro_cad)
+		var hydro_cad := SpinBox.new(); hydro_cad.min_value = 1; hydro_cad.max_value = 120; hydro_cad.step = 1; hydro_cad.value = 30; systems_box.add_child(hydro_cad)
 		hydro_cad.value_changed.connect(func(v: float) -> void:
 			if simulation and _hydro_sys and "update_cadence" in simulation:
 				simulation.update_cadence(_hydro_sys, int(v))
 		)
-		var cloud_cad := SpinBox.new(); cloud_cad.min_value = 1; cloud_cad.max_value = 120; cloud_cad.step = 1; cloud_cad.value = 10; systems_box.add_child(cloud_cad)
+		var cloud_cad := SpinBox.new(); cloud_cad.min_value = 1; cloud_cad.max_value = 120; cloud_cad.step = 1; cloud_cad.value = 7; systems_box.add_child(cloud_cad)
 		cloud_cad.value_changed.connect(func(v: float) -> void:
 			if simulation and _clouds_sys and "update_cadence" in simulation:
 				simulation.update_cadence(_clouds_sys, int(v))
 		)
 		var biome_cad_lbl := Label.new(); biome_cad_lbl.text = "Biome"; systems_box.add_child(biome_cad_lbl)
-		var biome_cad := SpinBox.new(); biome_cad.min_value = 1; biome_cad.max_value = 120; biome_cad.step = 1; biome_cad.value = 15; systems_box.add_child(biome_cad)
+		var biome_cad := SpinBox.new(); biome_cad.min_value = 1; biome_cad.max_value = 200; biome_cad.step = 1; biome_cad.value = 90; systems_box.add_child(biome_cad)
 		biome_cad.value_changed.connect(func(v: float) -> void:
 			if simulation and _biome_sys and "update_cadence" in simulation:
 				simulation.update_cadence(_biome_sys, int(v))
 		)
 		var plates_cad_lbl := Label.new(); plates_cad_lbl.text = "Plates"; systems_box.add_child(plates_cad_lbl)
-		var plates_cad := SpinBox.new(); plates_cad.min_value = 1; plates_cad.max_value = 300; plates_cad.step = 1; plates_cad.value = 40; systems_box.add_child(plates_cad)
+		var plates_cad := SpinBox.new(); plates_cad.min_value = 1; plates_cad.max_value = 1000; plates_cad.step = 1; plates_cad.value = 365; systems_box.add_child(plates_cad)
 		plates_cad.value_changed.connect(func(v: float) -> void:
 			if simulation and _plates_sys and "update_cadence" in simulation:
 				simulation.update_cadence(_plates_sys, int(v))
@@ -240,11 +236,20 @@ func _ready() -> void:
 				simulation.set_budget_mode_time(on)
 		)
 		year_label = Label.new(); year_label.text = "Year: 0.00"; simulation_box.add_child(year_label)
+		
+		# FPS Settings
+		var fps_lbl := Label.new(); fps_lbl.text = "Simulation FPS"; simulation_box.add_child(fps_lbl)
+		var fps_spin := SpinBox.new(); fps_spin.min_value = 1.0; fps_spin.max_value = 60.0; fps_spin.step = 1.0; fps_spin.value = 10.0; fps_spin.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN; simulation_box.add_child(fps_spin)
+		fps_spin.value_changed.connect(func(v: float) -> void:
+			if time_system and time_system._timer:
+				time_system._timer.wait_time = 1.0 / float(v)
+		)
+		
 		var speed_lbl := Label.new(); speed_lbl.text = "Speed"; simulation_box.add_child(speed_lbl)
-		speed_slider = HSlider.new(); speed_slider.min_value = 0.0; speed_slider.max_value = 10.0; speed_slider.step = 0.05; speed_slider.value = 1.0; speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; simulation_box.add_child(speed_slider)
+		speed_slider = HSlider.new(); speed_slider.min_value = 0.0; speed_slider.max_value = 2.0; speed_slider.step = 0.01; speed_slider.value = 0.2; speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; simulation_box.add_child(speed_slider)
 		speed_slider.value_changed.connect(_on_speed_changed)
 		var step_lbl := Label.new(); step_lbl.text = "Step (min)"; simulation_box.add_child(step_lbl)
-		step_spin = SpinBox.new(); step_spin.min_value = 1.0; step_spin.max_value = 1440.0; step_spin.step = 1.0; step_spin.value = 12.0; step_spin.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN; simulation_box.add_child(step_spin)
+		step_spin = SpinBox.new(); step_spin.min_value = 1.0; step_spin.max_value = 1440.0; step_spin.step = 1.0; step_spin.value = 1.0; step_spin.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN; simulation_box.add_child(step_spin)
 		step_spin.value_changed.connect(_on_step_minutes_changed)
 		step_button = Button.new(); step_button.text = "Step"; simulation_box.add_child(step_button)
 		step_button.pressed.connect(_on_step_pressed)
@@ -764,7 +769,8 @@ func _reset_view() -> void:
 	info_label.text = "Hover: -"
 	seed_used_label.text = "Used: -"
 	last_ascii_text = ""
-	_hide_highlight()
+	if cursor_overlay:
+		cursor_overlay.hide_cursor()
 
 func _apply_seed_from_ui() -> void:
 	var txt: String = seed_input.text.strip_edges()
@@ -879,6 +885,7 @@ func _generate_and_draw_preserve_seed() -> void:
 	ascii_map.append_text(ascii_str)
 	last_ascii_text = ascii_str
 	_update_char_size_cache()
+	_update_cursor_dimensions()
 
 func _apply_monospace_font() -> void:
 	# Use SystemFont to select an installed monospace safely (Godot 4)
@@ -895,9 +902,8 @@ func _apply_monospace_font() -> void:
 		ascii_map.add_theme_font_override("normal_font", sys)
 		if cloud_map:
 			cloud_map.add_theme_font_override("normal_font", sys)
-		if highlight_label:
-			highlight_label.add_theme_font_override("font", sys)
-			highlight_label.add_theme_color_override("font_color", Color(0, 0, 0, 1))
+		if cursor_overlay:
+			cursor_overlay.apply_font(sys)
 
 ## Styling moved to AsciiStyler
 
@@ -934,51 +940,11 @@ func _on_ascii_input(event: InputEvent) -> void:
 				var extra := ""
 				if flags.size() > 0: extra = " - " + ", ".join(flags)
 				info_label.text = "%s - %s - Type: %s - Humidity: %.2f - Temp: %.1f °C%s" % [coords, htxt, ttxt, humid, temp_c, extra]
-				_update_highlight_overlay(x, y, char_w_cached, char_h_cached)
 			else:
 				info_label.text = "Hover: -"
-				_hide_highlight()
-func _create_highlight_overlay() -> void:
-	highlight_rect = ColorRect.new()
-	highlight_rect.visible = false
-	highlight_rect.color = Color(1, 0, 0, 1)
-	highlight_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	highlight_rect.z_index = 1000
-	ascii_map.add_child(highlight_rect)
 
-	highlight_label = Label.new()
-	highlight_label.visible = false
-	highlight_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	highlight_label.z_index = 1001
-	highlight_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	highlight_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	highlight_label.add_theme_color_override("font_color", Color(0, 0, 0, 1))
-	ascii_map.add_child(highlight_label)
+# Old highlight functions removed - replaced by CursorOverlay system
 
-func _update_highlight_overlay(x: int, y: int, char_w: float, char_h: float) -> void:
-	if not highlight_rect or not highlight_label:
-		return
-	var w: int = generator.get_width()
-	var h: int = generator.get_height()
-	if x < 0 or y < 0 or x >= w or y >= h:
-		_hide_highlight()
-		return
-	highlight_rect.position = Vector2(float(x) * char_w, float(y) * char_h)
-	highlight_rect.size = Vector2(char_w, char_h)
-	highlight_rect.visible = true
-
-	# derive glyph without splitting the full text each time
-	var glyph := _glyph_at(x, y)
-	highlight_label.position = highlight_rect.position
-	highlight_label.size = highlight_rect.size
-	highlight_label.text = glyph
-	highlight_label.visible = true
-
-func _hide_highlight() -> void:
-	if highlight_rect:
-		highlight_rect.visible = false
-	if highlight_label:
-		highlight_label.visible = false
 
 func _glyph_at(x: int, y: int) -> String:
 	var w: int = generator.get_width()
@@ -1027,12 +993,7 @@ func _on_map_resized() -> void:
 	# Adjust font size to keep tile count while filling available space
 	_apply_font_to_fit_tiles()
 
-func _on_map_enter() -> void:
-	Input.set_mouse_mode(Input.MOUSE_MODE_HIDDEN)
-
-func _on_map_exit() -> void:
-	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-	_hide_highlight()
+# Mouse enter/exit now handled by CursorOverlay
 
 func _apply_font_to_fit_tiles() -> void:
 	# Compute font size to fit tile_cols x tile_rows using measured glyph metrics
@@ -1119,3 +1080,38 @@ class StringBuilder:
 		parts.append(s)
 	func as_string() -> String:
 		return "".join(parts)
+
+# New efficient cursor overlay functions
+func _create_cursor_overlay() -> void:
+	cursor_overlay = load("res://scripts/ui/CursorOverlay.gd").new()
+	cursor_overlay.tile_hovered.connect(_on_tile_hovered)
+	cursor_overlay.mouse_exited_map.connect(_on_cursor_exited)
+	ascii_map.add_child(cursor_overlay)
+
+func _on_tile_hovered(x: int, y: int) -> void:
+	# Update info panel efficiently without blocking simulation
+	if generator == null:
+		return
+	var info = generator.get_cell_info(x, y)
+	var coords: String = "(%d,%d)" % [x, y]
+	var htxt: String = "%.2f" % info.get("height_m", 0.0)
+	var humid: float = info.get("moisture", 0.0)
+	var temp_c: float = info.get("temp_c", 0.0)
+	var ttxt: String = info.get("biome_name", "Unknown")
+	var flags: PackedStringArray = PackedStringArray()
+	if info.get("is_beach", false): flags.append("Beach")
+	if info.get("is_turquoise_water", false): flags.append("Turquoise")
+	if info.get("is_lava", false): flags.append("Lava")
+	if info.get("is_river", false): flags.append("River")
+	if info.get("is_lake", false): flags.append("Lake")
+	var extra: String = ""
+	if flags.size() > 0: extra = " - " + ", ".join(flags)
+	info_label.text = "%s - %s - Type: %s - Humidity: %.2f - Temp: %.1f °C%s" % [coords, htxt, ttxt, humid, temp_c, extra]
+
+func _on_cursor_exited() -> void:
+	info_label.text = "Hover: -"
+
+func _update_cursor_dimensions() -> void:
+	# Called after char cache updates to sync cursor overlay
+	if cursor_overlay and generator and char_w_cached > 0.0 and char_h_cached > 0.0:
+		cursor_overlay.setup_dimensions(generator.get_width(), generator.get_height(), char_w_cached, char_h_cached)

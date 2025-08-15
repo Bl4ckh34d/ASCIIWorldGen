@@ -1,9 +1,10 @@
 {
   "permissions": {
-    "defaultMode": "acceptEdits",
     "allow": [
-      "Bash(godot:*)"
-    ]
+      "Bash(godot:*)",
+      "Bash(mv:*)"
+    ],
+    "defaultMode": "acceptEdits"
   },
   "outputStyle": "default"
 }

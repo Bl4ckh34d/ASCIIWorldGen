@@ -82,7 +82,11 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if "_plates_boundary_mask_i32" in generator:
 		# build Int32 mask from ByteArray boundary_mask
 		var mask_i32 := PackedInt32Array(); mask_i32.resize(w * h)
-		for m in range(w * h): mask_i32[m] = (1 if boundary_mask[m] != 0 else 0)
+		var boundary_count = 0
+		for m in range(w * h): 
+			var val = (1 if boundary_mask[m] != 0 else 0)
+			mask_i32[m] = val
+			if val == 1: boundary_count += 1
 		generator._plates_boundary_mask_i32 = mask_i32
 	_recompute_land_and_shelf(w, h)
 	return {"dirty_fields": PackedStringArray(["height", "is_land", "shelf"]) }

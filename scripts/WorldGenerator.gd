@@ -519,10 +519,12 @@ func generate() -> PackedByteArray:
 		pass # placeholder to avoid lints; actual plate boundary comes from PlateSystem
 	# Best-effort: if a boundary mask was produced by PlateSystem and stored in state, use it. Else, create empty.
 	var bnd_i32 := PackedInt32Array(); bnd_i32.resize(w * h)
-	if "_plates_sys" in self:
-		# If PlateSystem exposed boundary mask in generator, use it
-		# Fallback: leave zeros
-		pass
+	if _plates_boundary_mask_i32.size() == w * h:
+		# Use the boundary mask populated by PlateSystem
+		bnd_i32 = _plates_boundary_mask_i32
+	else:
+		# No plate boundaries available yet - volcanism will only use hotspots
+		for i in range(w * h): bnd_i32[i] = 0
 	var lava_f32 := PackedFloat32Array()
 	lava_f32.resize(w * h)
 	for i_l in range(w * h): lava_f32[i_l] = float(last_lava[i_l] if i_l < last_lava.size() else 0)

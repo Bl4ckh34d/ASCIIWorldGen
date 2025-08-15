@@ -46,8 +46,8 @@ var biome_id: PackedInt32Array = PackedInt32Array()
 
 # Time metadata (simulation)
 var simulation_time_days: float = 0.0
-var time_scale: float = 1.0
-var tick_days: float = 1.0 / 120.0
+var time_scale: float = 0.2
+var tick_days: float = 1.0 / 1440.0
 
 func configure(w: int, h: int, new_seed: int) -> void:
 	width = max(1, w)
