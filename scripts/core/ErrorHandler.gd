@@ -140,7 +140,8 @@ static func log_error(err: ErrorResult) -> void:
 	# Use appropriate Godot logging function
 	match err.severity:
 		ErrorSeverity.INFO:
-			print(full_message)
+			# print removed
+			push_warning(full_message)
 		ErrorSeverity.WARNING:
 			push_warning(full_message)
 		ErrorSeverity.ERROR, ErrorSeverity.CRITICAL:
@@ -148,7 +149,7 @@ static func log_error(err: ErrorResult) -> void:
 	
 	# Log recovery suggestion if available
 	if err.recovery_suggested:
-		print("  → Recovery: " + err.recovery_message)
+		push_warning("  → Recovery: " + err.recovery_message)
 
 # Validation functions
 static func validate_world_dimensions(width: int, height: int) -> ErrorResult:

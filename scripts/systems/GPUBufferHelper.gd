@@ -126,5 +126,5 @@ static func measure_gpu_time(rd: RenderingDevice, operation_name: String, callab
 	rd.barrier()  # Wait for completion (expensive but accurate)
 	var end_time = Time.get_ticks_usec()
 	var elapsed_ms = float(end_time - start_time) / 1000.0
-	print("GPU operation '%s' took %.2f ms" % [operation_name, elapsed_ms])
+	# debug removed
 	return elapsed_ms

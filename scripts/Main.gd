@@ -121,6 +121,10 @@ var hydro_spin: SpinBox
 var cloud_spin: SpinBox
 var biome_spin: SpinBox
 
+var hover_has_tile: bool = false
+var hover_tile_x: int = -1
+var hover_tile_y: int = -1
+
 func _initialize_ui_nodes() -> void:
 	"""Initialize all UI node references with the new layout"""
 	
@@ -156,12 +160,7 @@ func _initialize_ui_nodes() -> void:
 	# Settings dialog - WITH NULL CHECK TO PREVENT CRASH
 	settings_dialog = get_node_or_null("SettingsDialog")
 	
-	print("UI Layout initialized:")
-	print("  play_button: ", play_button != null)
-	print("  ascii_map: ", ascii_map != null)
-	print("  generation_vbox: ", generation_vbox != null)
-	print("  bottom_panel: ", bottom_panel != null)
-	print("  settings_dialog: ", settings_dialog != null)
+	# debug removed
 	
 	# Connect basic events
 	if play_button and not play_button.pressed.is_connected(_on_play_pressed):
@@ -192,7 +191,7 @@ func _initialize_ui_nodes() -> void:
 	# terrain_vbox = get_node_or_null("%TerrainVBox")
 	# ... all other UI elements commented out
 	
-	print("=== MINIMAL UI SETUP COMPLETE ===")
+	# debug removed
 
 func _setup_all_tabs() -> void:
 	"""Setup content for all tabs with proper organization"""
@@ -548,7 +547,6 @@ func _on_checkpoint_interval_changed(value: float) -> void:
 func _on_save_checkpoint_pressed() -> void:
 	if _checkpoint_sys and "save_checkpoint" in _checkpoint_sys:
 		_checkpoint_sys.save_checkpoint()
-		print("Checkpoint saved")
 
 func _on_load_checkpoint_pressed() -> void:
 	if _checkpoint_sys and "load_latest_checkpoint" in _checkpoint_sys:
@@ -558,16 +556,12 @@ func _on_load_checkpoint_pressed() -> void:
 			if generator and "apply_world_state" in generator:
 				generator.apply_world_state(result["state"])
 			_redraw_ascii_from_current_state()
-			print("Checkpoint loaded: day ", result["days"])
 		else:
-			print("Load failed: ", result.get("error", "No checkpoints available"))
+			pass
 
 func _on_refresh_checkpoints_pressed() -> void:
 	if _checkpoint_sys and "get_checkpoint_list" in _checkpoint_sys:
-		var ckpts = _checkpoint_sys.get_checkpoint_list()
-		print("Available checkpoints: ", ckpts.size())
-		for ckpt in ckpts:
-			print("  Day %.1f" % ckpt["days"])
+		var _ckpts = _checkpoint_sys.get_checkpoint_list()
 
 func _on_scrub_pressed() -> void:
 	if _checkpoint_sys and "scrub_to" in _checkpoint_sys and time_system and simulation and generator and "_world_state" in generator:
@@ -580,9 +574,8 @@ func _on_scrub_pressed() -> void:
 			if "apply_world_state" in generator:
 				generator.apply_world_state(result["state"])
 			_redraw_ascii_from_current_state()
-			print("Scrubbed to day ", result["days"])
 		else:
-			print("Scrub failed: ", result.get("error", "Unknown error"))
+			pass
 
 func _on_hydro_cadence_changed(value: float) -> void:
 	if simulation and _hydro_sys and "update_cadence" in simulation:
@@ -609,7 +602,7 @@ func _on_cloud_coupling_changed(enabled: bool) -> void:
 		_clouds_sys.set_cloud_coupling(enabled)
 
 func _force_initial_generation() -> void:
-	print("DEBUG: Force generating initial world...")
+	# debug removed
 	if ascii_map:
 		generator.generate()
 		var w = generator.config.width
@@ -619,20 +612,19 @@ func _force_initial_generation() -> void:
 		var ascii_str = styler.build_ascii(w, h, generator.last_height, generator.last_is_land)
 		ascii_map.clear()
 		ascii_map.append_text(ascii_str)
-		print("DEBUG: Forced generation complete - ascii length: ", ascii_str.length())
 	else:
-		print("DEBUG: ascii_map is null - cannot generate!")
+		pass
 
 func _print_node_tree(node: Node, depth: int) -> void:
-	var indent = ""
+	var _indent = ""
 	for i in range(depth):
-		indent += "  "
-	print(indent + node.name + " (" + node.get_class() + ")")
+		_indent += "  "
+	# debug removed
 	for child in node.get_children():
 		_print_node_tree(child, depth + 1)
 
 func _ready() -> void:
-	print("Main: _ready")
+	# debug removed
 	# Initialize UI node references
 	_initialize_ui_nodes()
 	generator = load("res://scripts/WorldGenerator.gd").new()
@@ -729,10 +721,10 @@ func _ready() -> void:
 		sea_slider.value_changed.connect(_on_sea_changed)
 		_update_sea_label()
 	else:
-		print("ERROR: sea_slider or sea_value_label is null - check scene structure")
+		pass
 	# Build left panel tabs UI; if legacy boxes are missing, continue gracefully
 	if not general_box:
-		print("ERROR: general_box is null - check scene structure")
+		pass
 	if general_box:
 		var temp_label := Label.new(); temp_label.text = "Temp"; general_box.add_child(temp_label)
 		temp_slider = HSlider.new(); temp_slider.min_value = 0.0; temp_slider.max_value = 1.0; temp_slider.step = 0.001; temp_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; general_box.add_child(temp_slider)
@@ -925,6 +917,9 @@ func _ready() -> void:
 		_update_top_seed_label()
 		_update_top_time_label()
 
+	# Register this root for quick lookup by overlay
+	add_to_group("MainRoot")
+
 	if climate_box:
 		var cc_lbl := Label.new(); cc_lbl.text = "Cloud->Moisture"; climate_box.add_child(cc_lbl)
 		cloud_coupling_check = CheckBox.new(); cloud_coupling_check.text = "Enable"; cloud_coupling_check.button_pressed = true; climate_box.add_child(cloud_coupling_check)
@@ -996,7 +991,7 @@ func _ready() -> void:
 				_update_top_time_label()
 				_redraw_ascii_from_current_state()
 	)
-	print("Main: initial generate")
+	# debug removed
 	_generate_and_draw()
 	# capture base dimensions for scaling
 	base_width = generator.config.width
@@ -1031,17 +1026,15 @@ func _generate_and_draw() -> void:
 	var clouds_text: String = AsciiStyler.new().build_cloud_overlay(w, h, generator.last_clouds)
 	ascii_map.clear()
 	ascii_map.append_text(ascii_str)
-	print("DEBUG: ASCII map updated with ", ascii_str.length(), " characters")
-	print("DEBUG: ascii_map visible: ", ascii_map.visible)
-	print("DEBUG: ascii_map modulate: ", ascii_map.modulate)
-	print("DEBUG: ascii_map size: ", ascii_map.size)
-	if ascii_str.length() > 0:
-		print("DEBUG: First 100 chars: ", ascii_str.substr(0, 100))
+	# debug removed
 	cloud_map.clear()
 	cloud_map.append_text(clouds_text)
 	cloud_map.visible = true
 	last_ascii_text = ascii_str
 	_update_char_size_cache()
+	_update_cursor_dimensions()
+	_refresh_hover_info()
+	_refresh_hover_info()
 	# Sync world state's notion of time for info overlays
 	if time_system and "simulation_time_days" in time_system and "_world_state" in generator:
 		generator._world_state.simulation_time_days = float(time_system.simulation_time_days)
@@ -1096,7 +1089,7 @@ func _on_sim_tick(_dt_days: float) -> void:
 				_auto_tune_performance()
 	else:
 		# Skip heavy simulation systems this frame to maintain UI responsiveness
-		print("Skipping heavy simulation systems to maintain UI responsiveness (day-night cycle still running)")
+		pass
 	
 	# Always do these lightweight tasks regardless of frame budget
 	# Periodic checkpointing based on in-game time
@@ -1126,22 +1119,14 @@ func _on_sim_tick(_dt_days: float) -> void:
 			_redraw_ascii_from_current_state()
 		else:
 			# Only skip for extremely large maps and high frame time usage
-			print("Extremely large map: skipping ASCII redraw to maintain performance (day-night still updating)")
+			pass
+
+	# Hover info is now updated only when mouse moves to a different tile (performance optimization)
 
 func _log_performance_stats() -> void:
 	"""Log performance statistics to help diagnose slow simulation"""
 	if simulation and "get_performance_stats" in simulation:
-		var stats = simulation.get_performance_stats()
-		print("=== SIMULATION PERFORMANCE ===")
-		print("Current tick time: %.2f ms (budget: %.2f ms)" % [stats.get("current_tick_time_ms", 0), stats.get("max_budget_ms", 0)])
-		print("Average tick time: %.2f ms" % stats.get("avg_tick_time_ms", 0))
-		print("Performance status: %s" % stats.get("performance_status", "unknown"))
-		print("Skipped systems: %d" % stats.get("skipped_systems_count", 0))
-		print("System breakdown:")
-		var system_breakdown = stats.get("system_breakdown", [])
-		for system in system_breakdown:
-			print("  - %s: %.2f ms (cadence: %d)" % [system.get("name", "unknown"), system.get("avg_cost_ms", 0), system.get("cadence", 1)])
-		print("==============================")
+		var _stats = simulation.get_performance_stats()
 
 func _auto_tune_performance() -> void:
 	"""Automatically adjust performance settings based on current stats with UI priority"""
@@ -1219,7 +1204,7 @@ func _sync_world_state_from_generator() -> void:
 	ws.temp_max_c = float(generator.config.temp_max_c)
 	ws.lava_temp_threshold_c = float(generator.config.lava_temp_threshold_c)
 	ws.ocean_fraction = float(generator.last_ocean_fraction)
-	# Arrays (assign references; they’re persistent PackedArrays)
+	# Arrays (assign references; they're persistent PackedArrays)
 	ws.height_field = generator.last_height
 	ws.is_land = generator.last_is_land
 	ws.coast_distance = generator.last_water_distance
@@ -1297,6 +1282,9 @@ func _redraw_ascii_from_current_state() -> void:
 		cloud_map.clear()
 		cloud_map.append_text(clouds_text)
 		cloud_map.visible = true
+
+	# Keep bottom panel info in sync with latest tile data
+	_refresh_hover_info()
 
 func _on_speed_changed(v: float) -> void:
 	if time_system and "set_time_scale" in time_system:
@@ -1431,6 +1419,8 @@ func _on_sea_changed(v: float) -> void:
 		sea_update_pending = true
 		if sea_debounce_timer and sea_debounce_timer.is_stopped():
 			sea_debounce_timer.start()
+	# Update hover info immediately to reflect new sea-level effects
+	_refresh_hover_info()
 
 func _update_sea_label() -> void:
 	if sea_value_label and sea_slider:
@@ -1500,15 +1490,11 @@ func _generate_and_draw_preserve_seed() -> void:
 	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()), generator.last_light, _get_plate_boundary_mask())
 	ascii_map.clear()
 	ascii_map.append_text(ascii_str)
-	print("DEBUG: ASCII map updated with ", ascii_str.length(), " characters")
-	print("DEBUG: ascii_map visible: ", ascii_map.visible)
-	print("DEBUG: ascii_map modulate: ", ascii_map.modulate)
-	print("DEBUG: ascii_map size: ", ascii_map.size)
-	if ascii_str.length() > 0:
-		print("DEBUG: First 100 chars: ", ascii_str.substr(0, 100))
+	# debug removed
 	last_ascii_text = ascii_str
 	_update_char_size_cache()
 	_update_cursor_dimensions()
+	_refresh_hover_info()
 
 func _apply_monospace_font() -> void:
 	# Use SystemFont to select an installed monospace safely (Godot 4)
@@ -1593,18 +1579,19 @@ func _update_char_size_cache() -> void:
 	var h: int = generator.get_height()
 	if char_w_cached > 0.0 and char_h_cached > 0.0 and w == tile_cols and h == tile_rows:
 		return
-	
+
+	# Always derive character cell size from current font metrics to avoid content padding effects
 	char_w_cached = 0.0
 	char_h_cached = 0.0
-	if w > 0 and h > 0:
-		var content_w: float = float(ascii_map.get_content_width())
-		var content_h: float = float(ascii_map.get_content_height())
-		if content_w > 0.0 and content_h > 0.0:
-			char_w_cached = content_w / float(w)
-			char_h_cached = content_h / float(h)
-	
-	# Fallback to font metrics if content size is unavailable
-	if char_w_cached <= 0.0 or char_h_cached <= 0.0:
+
+	# When GPU rendering is active, query exact on-screen cell size from renderer to ensure a perfect match
+	if use_gpu_rendering and gpu_ascii_renderer and gpu_ascii_renderer.has_method("get_cell_size_screen"):
+		var cs: Vector2 = gpu_ascii_renderer.get_cell_size_screen()
+		if cs.x > 0.0 and cs.y > 0.0:
+			char_w_cached = cs.x
+			char_h_cached = cs.y
+	else:
+		# Use precise font metrics with RichTextLabel-specific adjustments
 		var font: Font = ascii_map.get_theme_font("normal_font")
 		if not font:
 			font = ascii_map.get_theme_default_font()
@@ -1613,21 +1600,37 @@ func _update_char_size_cache() -> void:
 			if font_size <= 0:
 				font_size = ascii_map.get_theme_default_font_size()
 			if font_size > 0:
-				var glyph_size: Vector2 = font.get_char_size(65, font_size)
-				if glyph_size.x > 0.0 and font.get_height(font_size) > 0.0:
-					char_w_cached = float(glyph_size.x)
-					char_h_cached = float(font.get_height(font_size))
-	
+				# Use precise character measurement - test with multiple chars to get average
+				var test_chars = ["A", "M", "W", "i", "l", "1", "0", "#"]
+				var total_width: float = 0.0
+				for test_char in test_chars:
+					total_width += font.get_char_size(test_char.unicode_at(0), font_size).x
+				var avg_char_width: float = total_width / float(test_chars.size())
+				
+				var font_height: float = float(font.get_height(font_size))
+				# Include any themed line spacing to match RichTextLabel layout precisely
+				var line_spacing: int = 0
+				if ascii_map.has_theme_constant("line_spacing"):
+					line_spacing = ascii_map.get_theme_constant("line_spacing")
+				
+				if avg_char_width > 0.0 and font_height > 0.0:
+					char_w_cached = avg_char_width
+					char_h_cached = font_height + float(line_spacing)
+
 	# Final fallback values
 	if char_w_cached <= 0.0:
 		char_w_cached = 8.0
 	if char_h_cached <= 0.0:
 		char_h_cached = 16.0
 
+
 func _on_map_resized() -> void:
 	_update_char_size_cache()
 	# Adjust font size to keep tile count while filling available space
 	_apply_font_to_fit_tiles()
+	# Ensure cursor overlay tracks the resized map and updated glyph metrics
+	_update_cursor_dimensions()
+	_refresh_hover_info()
 
 # Mouse enter/exit now handled by CursorOverlay
 
@@ -1652,6 +1655,10 @@ func _apply_font_to_fit_tiles() -> void:
 	var s0: int = max(8, ascii_map.get_theme_default_font_size())
 	var cw0: float = font.get_char_size(65, s0).x
 	var ch0: float = float(font.get_height(s0))
+	var line_spacing0: int = 0
+	if ascii_map.has_theme_constant("line_spacing"):
+		line_spacing0 = ascii_map.get_theme_constant("line_spacing")
+	ch0 += float(line_spacing0)
 	if cw0 <= 0.0 or ch0 <= 0.0:
 		return
 	var cw_per_pt: float = cw0 / float(s0)
@@ -1666,6 +1673,7 @@ func _apply_font_to_fit_tiles() -> void:
 	if cloud_map:
 		cloud_map.add_theme_font_size_override("normal_font_size", size_guess)
 	_update_char_size_cache()
+	_update_cursor_dimensions()
 
 func _on_tiles_across_changed(v: float) -> void:
 	tile_cols = int(max(1, v))
@@ -1722,6 +1730,24 @@ func _connect_cursor_overlay() -> void:
 	if cursor_overlay and cursor_overlay.has_signal("tile_hovered"):
 		cursor_overlay.tile_hovered.connect(_on_tile_hovered)
 		cursor_overlay.mouse_exited_map.connect(_on_cursor_exited)
+		# Position overlay to match AsciiMap exactly
+		_setup_cursor_overlay_positioning()
+
+func _setup_cursor_overlay_positioning() -> void:
+	if cursor_overlay and ascii_map:
+		# Wait a frame to ensure ascii_map has proper size
+		await get_tree().process_frame
+		# Reparent overlay under ascii_map so it always matches map rect
+		if cursor_overlay.get_parent() != ascii_map:
+			cursor_overlay.reparent(ascii_map)
+		# Fill entire ascii_map rect and capture events for snappy cursor tracking
+		cursor_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		# Ensure same transform as map (inherit size/scale)
+		cursor_overlay.top_level = false
+		cursor_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+		# Ensure overlay renders above clouds/text (must be <= CANVAS_ITEM_Z_MAX)
+		cursor_overlay.z_index = 3000
+		# debug removed
 
 # Setup panel hide/show controls
 func _setup_panel_controls() -> void:
@@ -1776,13 +1802,37 @@ func _on_viewport_resized() -> void:
 	# Reposition floating button when viewport is resized
 	if floating_show_button and floating_show_button.visible:
 		_position_floating_button()
+	
+	# Update cursor overlay dimensions when window is resized (triggers font rescaling)
+	call_deferred("_update_cursor_dimensions")
 
 func _on_floating_show_pressed() -> void:
 	_on_hide_panel_pressed()  # Toggle back to show
 
+
 func _on_tile_hovered(x: int, y: int) -> void:
-	# Update info panel efficiently without blocking simulation
+	# Record current hover tile and update info immediately
+	hover_has_tile = true
+	hover_tile_x = x
+	hover_tile_y = y
+	_update_info_panel_for_tile(x, y)
+	# Also update GPU hover overlay immediately (if enabled)
+	_gpu_hover_cell(x, y)
+
+func _on_cursor_exited() -> void:
+	if info_label:
+		info_label.text = "Hover: -"
+	hover_has_tile = false
+	hover_tile_x = -1
+	hover_tile_y = -1
+	_gpu_clear_hover()
+
+func _update_info_panel_for_tile(x: int, y: int) -> void:
 	if generator == null:
+		return
+	var w: int = generator.get_width()
+	var h: int = generator.get_height()
+	if x < 0 or y < 0 or x >= w or y >= h:
 		return
 	var info = generator.get_cell_info(x, y)
 	var coords: String = "(%d,%d)" % [x, y]
@@ -1798,15 +1848,13 @@ func _on_tile_hovered(x: int, y: int) -> void:
 	if info.get("is_lake", false): flags.append("Lake")
 	if info.get("is_plate_boundary", false): flags.append("Tectonic")
 	var extra: String = ""
-	if flags.size() > 0: extra = " - " + ", ".join(flags)
-	
-	# Add geological activity stats when available
+	if flags.size() > 0:
+		extra = " - " + ", ".join(flags)
 	var geological_info: String = ""
 	var total_plates = info.get("tectonic_plates", 0)
 	var boundary_cells = info.get("boundary_cells", 0)
 	var lava_cells = info.get("active_lava_cells", 0)
 	var eruption_potential = info.get("eruption_potential", 0.0)
-	
 	if total_plates > 0 or lava_cells > 0:
 		var parts: PackedStringArray = []
 		if total_plates > 0:
@@ -1819,16 +1867,55 @@ func _on_tile_hovered(x: int, y: int) -> void:
 			parts.append("%.1f%% volcanic" % eruption_potential)
 		if parts.size() > 0:
 			geological_info = " | " + ", ".join(parts)
-	
-	info_label.text = "%s - %s - Type: %s - Humidity: %.2f - Temp: %.1f °C%s%s" % [coords, htxt, ttxt, humid, temp_c, extra, geological_info]
+	if info_label:
+		info_label.text = "%s - %s - Type: %s - Humidity: %.2f - Temp: %.1f °C%s%s" % [coords, htxt, ttxt, humid, temp_c, extra, geological_info]
 
-func _on_cursor_exited() -> void:
-	info_label.text = "Hover: -"
+func _refresh_hover_info() -> void:
+	if not hover_has_tile:
+		return
+	_update_info_panel_for_tile(hover_tile_x, hover_tile_y)
 
 func _update_cursor_dimensions() -> void:
 	# Called after char cache updates to sync cursor overlay
-	if cursor_overlay and generator and char_w_cached > 0.0 and char_h_cached > 0.0:
-		cursor_overlay.setup_dimensions(generator.get_width(), generator.get_height(), char_w_cached, char_h_cached)
+	if cursor_overlay and generator:
+		# Force recalculation of character dimensions to ensure we have the latest values
+		var saved_char_w = char_w_cached
+		var saved_char_h = char_h_cached
+		
+		# Temporarily clear cache to force fresh calculation
+		char_w_cached = 0.0
+		char_h_cached = 0.0
+		_update_char_size_cache()
+		
+		# Use the freshly calculated dimensions
+		if char_w_cached > 0.0 and char_h_cached > 0.0:
+			cursor_overlay.setup_dimensions(generator.get_width(), generator.get_height(), char_w_cached, char_h_cached)
+		else:
+			# Restore saved values if calculation failed
+			char_w_cached = saved_char_w
+			char_h_cached = saved_char_h
+			cursor_overlay.setup_dimensions(generator.get_width(), generator.get_height(), char_w_cached, char_h_cached)
+			
+		# Reposition overlay to match ascii_map (use call_deferred to ensure font changes are applied)
+		call_deferred("_setup_cursor_overlay_positioning")
+		# Ensure GPU hover overlay cleared on dimension changes
+		_gpu_clear_hover()
+		# Let overlay render its own rect only in string mode
+		if cursor_overlay and cursor_overlay.has_method("set_draw_enabled"):
+			(cursor_overlay as Node).call("set_draw_enabled", !use_gpu_rendering)
+	# In GPU mode, also snap the bottom-panel info grid to the renderer's exact dimensions
+	if use_gpu_rendering and gpu_ascii_renderer and gpu_ascii_renderer.has_method("get_map_dimensions"):
+		var dims: Vector2i = gpu_ascii_renderer.get_map_dimensions()
+		tile_cols = int(dims.x)
+		tile_rows = int(dims.y)
+
+func _gpu_hover_cell(x: int, y: int) -> void:
+	if use_gpu_rendering and gpu_ascii_renderer and gpu_ascii_renderer.has_method("set_hover_cell"):
+		gpu_ascii_renderer.set_hover_cell(x, y)
+
+func _gpu_clear_hover() -> void:
+	if use_gpu_rendering and gpu_ascii_renderer and gpu_ascii_renderer.has_method("clear_hover_cell"):
+		gpu_ascii_renderer.clear_hover_cell()
 
 func _on_gpu_rendering_toggled(enabled: bool) -> void:
 	"""Toggle between GPU and string-based rendering"""
@@ -1840,11 +1927,9 @@ func _on_gpu_rendering_toggled(enabled: bool) -> void:
 		if gpu_ascii_renderer and gpu_ascii_renderer.has_method("is_using_gpu_rendering") and gpu_ascii_renderer.is_using_gpu_rendering():
 			# Enable GPU rendering
 			ascii_map.modulate.a = 0.0  # Hide string rendering
-			print("Main: Switched to GPU rendering")
 	else:
 		# Enable string rendering
 		ascii_map.modulate.a = 1.0  # Show string rendering
-		print("Main: Switched to string rendering")
 	
 	# Force a redraw to show the change
 	_redraw_ascii_from_current_state()
@@ -1855,7 +1940,6 @@ func _initialize_gpu_renderer() -> void:
 	# Load GPU renderer class dynamically
 	var GPUAsciiRendererClass = load("res://scripts/rendering/GPUAsciiRenderer.gd")
 	if not GPUAsciiRendererClass:
-		print("Main: Could not load GPUAsciiRenderer")
 		use_gpu_rendering = false
 		return
 	
@@ -1888,24 +1972,19 @@ func _initialize_gpu_renderer() -> void:
 		)
 		
 		if success:
-			print("Main: GPU ASCII rendering initialized successfully")
 			# Check if GPU renderer is actually using GPU rendering
 			if gpu_ascii_renderer.has_method("is_using_gpu_rendering") and gpu_ascii_renderer.is_using_gpu_rendering():
 				# Hide the original RichTextLabel when using actual GPU rendering
 				ascii_map.modulate.a = 0.0
-				print("Main: Using GPU rendering mode")
 			else:
 				# Keep ASCII map visible when using fallback
 				ascii_map.modulate.a = 1.0
-				print("Main: GPU renderer using fallback mode - ASCII map remains visible")
 		else:
-			print("Main: GPU ASCII rendering failed, will use fallback")
 			use_gpu_rendering = false
 			gpu_ascii_renderer.queue_free()
 			gpu_ascii_renderer = null
 			ascii_map.modulate.a = 1.0
 	else:
-		print("Main: GPU renderer missing initialize_gpu_rendering method")
 		use_gpu_rendering = false
 		gpu_ascii_renderer.queue_free()
 		gpu_ascii_renderer = null

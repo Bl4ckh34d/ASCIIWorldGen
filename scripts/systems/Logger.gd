@@ -59,7 +59,8 @@ static func _log(level: LogLevel, message: String, context: String) -> void:
 		full_message += " [" + context + "]"
 	full_message += " " + message
 	
-	print(full_message)
+	# central logger; route to Godot warnings for visibility without spam
+	push_warning(full_message)
 
 # Performance measurement utilities
 static func measure_time(operation_name: String, callable: Callable, context: String = "") -> float:

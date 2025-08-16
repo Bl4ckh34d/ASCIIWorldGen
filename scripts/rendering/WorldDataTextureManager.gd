@@ -37,7 +37,7 @@ func update_world_data(
 ) -> void:
 	"""Update all world data textures"""
 	
-	print("WorldDataTextureManager: Updating textures (%dx%d)" % [width, height])
+	# debug removed
 	
 	current_width = width
 	current_height = height
@@ -207,15 +207,15 @@ func save_debug_textures(prefix: String) -> void:
 	"""Save textures to files for debugging"""
 	if data_texture_1 and data_texture_1.get_image():
 		data_texture_1.get_image().save_png(prefix + "_data1.png")
-		print("Saved debug texture: %s_data1.png" % prefix)
+		# debug removed
 	
 	if data_texture_2 and data_texture_2.get_image():
 		data_texture_2.get_image().save_png(prefix + "_data2.png")
-		print("Saved debug texture: %s_data2.png" % prefix)
+		# debug removed
 	
 	if color_palette_texture and color_palette_texture.get_image():
 		color_palette_texture.get_image().save_png(prefix + "_palette.png")
-		print("Saved debug texture: %s_palette.png" % prefix)
+		# debug removed
 
 func get_memory_usage_mb() -> float:
 	"""Estimate GPU memory usage in MB"""

@@ -30,7 +30,7 @@ static func generate_ascii_atlas(font: Font, font_size: int, atlas_size: int = A
 
 func _generate_atlas(font: Font, font_size: int, atlas_size: int) -> void:
 	"""Internal atlas generation"""
-	print("FontAtlasGenerator: Generating ASCII atlas (size: %d, font_size: %d)" % [atlas_size, font_size])
+	# debug removed
 	
 	# Calculate character dimensions (use float division to avoid warnings)
 	char_width = atlas_size / float(CHARS_PER_ROW)
@@ -79,7 +79,7 @@ func _generate_atlas(font: Font, font_size: int, atlas_size: int) -> void:
 	atlas_texture = ImageTexture.new()
 	atlas_texture.set_image(atlas_image)
 	
-	print("FontAtlasGenerator: Atlas generated successfully (%dx%d characters)" % [CHARS_PER_ROW, CHARS_PER_COL])
+	# debug removed
 
 func _render_character_to_atlas(atlas_image: Image, font: Font, font_size: int, char_string: String, x: int, y: int, width: int, height: int) -> void:
 	"""Render a single character to the atlas at specified position"""
@@ -219,7 +219,7 @@ func save_atlas_to_file(file_path: String) -> void:
 	"""Save atlas texture to file for debugging"""
 	if atlas_texture and atlas_texture.get_image():
 		atlas_texture.get_image().save_png(file_path)
-		print("FontAtlasGenerator: Atlas saved to %s" % file_path)
+		# debug removed
 
 func get_atlas_texture() -> ImageTexture:
 	"""Get the generated atlas texture"""

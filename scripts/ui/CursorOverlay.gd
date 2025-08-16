@@ -15,8 +15,15 @@ var char_height: float = 0.0
 var cursor_rect: ColorRect
 var cursor_label: Label
 var is_mouse_over: bool = false
+var draw_rect_enabled: bool = true
+var last_tile_x: int = -1
+var last_tile_y: int = -1
+var main_cached: Node = null
 
 func _ready() -> void:
+	# Cache main node reference for performance
+	main_cached = get_tree().get_first_node_in_group("MainRoot")
+	
 	# Create the cursor visual elements
 	cursor_rect = ColorRect.new()
 	cursor_rect.visible = false
@@ -43,19 +50,41 @@ func setup_dimensions(width: int, height: int, char_w: float, char_h: float) -> 
 	world_height = height
 	char_width = char_w
 	char_height = char_h
-	
-	# Set the overlay size to match the ASCII map exactly
-	custom_minimum_size = Vector2(width * char_w, height * char_h)
-	size = custom_minimum_size
+	# no-op debug removed
+
+func set_draw_enabled(enabled: bool) -> void:
+	draw_rect_enabled = enabled
+	if not enabled:
+		cursor_rect.visible = false
+		cursor_label.visible = false
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and is_mouse_over:
 		_handle_mouse_motion(event.position)
 
+var main: Node = null
+
 func _handle_mouse_motion(pos: Vector2) -> void:
 	if char_width <= 0.0 or char_height <= 0.0:
 		return
-		
+
+	# Hide when outside actual map content area
+	var map_px_w: float = float(world_width) * char_width
+	var map_px_h: float = float(world_height) * char_height
+	var inside: bool = pos.x >= 0.0 and pos.y >= 0.0 and pos.x < map_px_w and pos.y < map_px_h
+	if not inside:
+		cursor_rect.visible = false
+		cursor_label.visible = false
+		# Forward clear to GPU renderer, via cached MainRoot
+		if main_cached and main_cached.has_method("_gpu_clear_hover"):
+			main_cached._gpu_clear_hover()
+		# Emit exit-like signal for info panel clear (only if we were previously inside)
+		if last_tile_x >= 0 or last_tile_y >= 0:
+			emit_signal("mouse_exited_map")
+			last_tile_x = -1
+			last_tile_y = -1
+		return
+
 	var x: int = int(pos.x / char_width)
 	var y: int = int(pos.y / char_height)
 	
@@ -63,22 +92,35 @@ func _handle_mouse_motion(pos: Vector2) -> void:
 	x = clamp(x, 0, world_width - 1)
 	y = clamp(y, 0, world_height - 1)
 	
-	# Update cursor position
-	var cursor_pos = Vector2(float(x) * char_width, float(y) * char_height)
-	cursor_rect.position = cursor_pos
-	cursor_rect.size = Vector2(char_width, char_height)
-	cursor_rect.visible = true
+	# Only update if tile changed - major performance optimization
+	if x != last_tile_x or y != last_tile_y:
+		last_tile_x = x
+		last_tile_y = y
+		
+		# Update cursor position (only if drawing locally) - use exact pixel alignment
+		var cursor_pos = Vector2(float(x) * char_width, float(y) * char_height)
+		if draw_rect_enabled:
+			cursor_rect.position = cursor_pos
+			cursor_rect.size = Vector2(char_width, char_height)
+			cursor_rect.visible = true
+		
+		# Emit signal for info panel update (direct call, no defer for better responsiveness)
+		emit_signal("tile_hovered", x, y)
+		
+		# Forward hover to GPU renderer if present for zero-lag overlay
+		if main_cached and main_cached.has_method("_gpu_hover_cell"):
+			main_cached._gpu_hover_cell(x, y)
+	else:
+		# Still update cursor visual position for smooth movement within same tile
+		if draw_rect_enabled:
+			var cursor_pos = Vector2(float(x) * char_width, float(y) * char_height)
+			cursor_rect.position = cursor_pos
+			cursor_rect.size = Vector2(char_width, char_height)
+			cursor_rect.visible = true
 	
-	cursor_label.position = cursor_pos
-	cursor_label.size = Vector2(char_width, char_height)
-	cursor_label.text = "▓"  # Simple cursor character
-	cursor_label.visible = true
-	
-	# Emit signal for info panel update (non-blocking, deferred)
-	call_deferred("_emit_tile_signal", x, y)
+	# Keep label disabled to reduce per-frame UI work
+	cursor_label.visible = false
 
-func _emit_tile_signal(x: int, y: int) -> void:
-	emit_signal("tile_hovered", x, y)
 
 func _on_mouse_entered() -> void:
 	is_mouse_over = true
@@ -90,6 +132,10 @@ func _on_mouse_exited() -> void:
 	cursor_rect.visible = false
 	cursor_label.visible = false
 	emit_signal("mouse_exited_map")
+	last_tile_x = -1
+	last_tile_y = -1
+	if main_cached and main_cached.has_method("_gpu_clear_hover"):
+		main_cached._gpu_clear_hover()
 
 func hide_cursor() -> void:
 	cursor_rect.visible = false

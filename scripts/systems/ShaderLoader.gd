@@ -24,7 +24,6 @@ static func load_shader_safe(path: String) -> RDShaderFile:
 	
 	if shader_file != null:
 		_loaded_shaders[path] = shader_file
-		print("ShaderLoader: Successfully loaded: " + path)
 	else:
 		_failed_shaders.append(path)
 		push_error("ShaderLoader: Failed to load: " + path)
@@ -77,7 +76,7 @@ static func _attempt_load(path: String) -> RDShaderFile:
 		push_error("ShaderLoader: Generated SPIRV is invalid: " + path)
 		return null
 	
-	print("ShaderLoader: Validated shader: " + path + " (version: " + str(chosen_version) + ")")
+	# debug removed
 	return shader_file
 
 static func _choose_best_version(versions: Array) -> Variant:
@@ -124,7 +123,7 @@ static func create_shader_and_pipeline(rd: RenderingDevice, shader_file: RDShade
 		rd.free_rid(shader_rid)
 		return {"shader": RID(), "pipeline": RID(), "success": false}
 	
-	print("ShaderLoader: Created shader and pipeline for: " + name)
+	# debug removed
 	return {"shader": shader_rid, "pipeline": pipeline_rid, "success": true}
 
 static func get_system_capabilities() -> Dictionary:
@@ -152,7 +151,7 @@ static func clear_cache() -> void:
 	"""Clear shader cache (useful for development)"""
 	_loaded_shaders.clear()
 	_failed_shaders.clear()
-	print("ShaderLoader: Cache cleared")
+	# debug removed
 
 static func get_cache_stats() -> Dictionary:
 	"""Get shader cache statistics"""

@@ -366,7 +366,7 @@ func clear() -> void:
 	# Reset ocean fraction
 	last_ocean_fraction = 0.5
 	
-	print("WorldGenerator cleared - memory freed")
+	# debug removed
 
 func generate() -> PackedByteArray:
 	var w: int = config.width

@@ -1,8 +1,8 @@
 extends Control
 
 func _ready():
-	print("=== CRASH TEST STARTED ===")
-	print("Basic Control node working")
+	# debug removed
+	# debug removed
 	
 	# Create simple UI
 	var label = Label.new()
@@ -10,4 +10,4 @@ func _ready():
 	label.position = Vector2(50, 50)
 	add_child(label)
 	
-	print("=== CRASH TEST COMPLETE ===")
+	# debug removed

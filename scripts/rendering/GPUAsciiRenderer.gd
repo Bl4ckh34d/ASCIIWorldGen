@@ -24,15 +24,15 @@ func _init():
 func initialize_gpu_rendering(font: Font, font_size: int, width: int, height: int) -> bool:
 	"""Initialize GPU rendering system"""
 	
-	print("GPUAsciiRenderer: Initializing GPU rendering...")
+	# debug removed
 	
 	# Try to create GPU renderer
 	if _create_gpu_renderer(font, font_size, width, height):
-		print("GPUAsciiRenderer: GPU rendering enabled")
+		# debug removed
 		is_gpu_rendering_enabled = true
 		return true
 	else:
-		print("GPUAsciiRenderer: GPU rendering failed, falling back to RichTextLabel")
+		# debug removed
 		_create_fallback_renderer()
 		is_gpu_rendering_enabled = false
 		return false
@@ -43,19 +43,16 @@ func _create_gpu_renderer(font: Font, font_size: int, width: int, height: int) -
 	# Load the AsciiQuadRenderer class dynamically to avoid circular dependencies
 	var AsciiQuadRendererClass = load("res://scripts/rendering/AsciiQuadRenderer.gd")
 	if not AsciiQuadRendererClass:
-		print("GPUAsciiRenderer: Could not load AsciiQuadRenderer")
 		return false
 	
 	quad_renderer = AsciiQuadRendererClass.new()
 	if not quad_renderer:
-		print("GPUAsciiRenderer: Could not create AsciiQuadRenderer instance")
 		return false
 	
 	add_child(quad_renderer)
 	
 	# Initialize the renderer
 	if not quad_renderer.has_method("initialize_rendering"):
-		print("GPUAsciiRenderer: AsciiQuadRenderer missing initialize_rendering method")
 		quad_renderer.queue_free()
 		quad_renderer = null
 		return false
@@ -154,11 +151,33 @@ func get_performance_stats() -> Dictionary:
 	
 	return stats
 
+func get_cell_size() -> Vector2:
+	"""Expose current cell size in pixels when GPU renderer is active."""
+	if quad_renderer:
+		return quad_renderer.cell_size
+	return Vector2.ZERO
+
+func get_map_dimensions() -> Vector2i:
+	"""Expose current map dimensions (tiles)."""
+	if quad_renderer:
+		return Vector2i(quad_renderer.map_width, quad_renderer.map_height)
+	return Vector2i.ZERO
+
+func get_cell_size_screen() -> Vector2:
+	"""Return the on-screen cell size (in pixels), accounting for any scaling.
+	This uses this control's current size divided by the map tile dimensions.
+	"""
+	if quad_renderer and quad_renderer.map_width > 0 and quad_renderer.map_height > 0:
+		return Vector2(
+			float(size.x) / float(quad_renderer.map_width),
+			float(size.y) / float(quad_renderer.map_height)
+		)
+	return Vector2.ZERO
+
 func force_fallback_rendering() -> void:
 	"""Force switch to fallback rendering"""
 	
 	if is_gpu_rendering_enabled:
-		print("GPUAsciiRenderer: Forcing fallback to RichTextLabel rendering")
 		
 		if quad_renderer:
 			quad_renderer.queue_free()
@@ -175,7 +194,7 @@ func toggle_rendering_mode() -> void:
 	else:
 		# Try to re-enable GPU rendering
 		# Note: Would need to store initialization parameters
-		print("GPUAsciiRenderer: Re-enabling GPU rendering not implemented")
+		pass
 
 func save_debug_data(prefix: String) -> void:
 	"""Save debug data for troubleshooting"""

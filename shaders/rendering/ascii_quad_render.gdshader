@@ -14,6 +14,9 @@ uniform vec2 map_dimensions;
 uniform vec2 cell_size;
 uniform vec2 atlas_uv_size; // 1/16, 1/6
 
+// Hover overlay parameters (tile coordinates; negative disables)
+uniform vec2 hover_cell = vec2(-1.0, -1.0);
+
 // Character atlas layout (16x6 grid)
 const float CHARS_PER_ROW = 16.0;
 const float CHARS_PER_COL = 6.0;
@@ -97,6 +100,18 @@ void fragment() {
         lit_color = mix(vec3(0.2, 0.4, 0.8), vec3(0.4, 0.6, 1.0), light);
     }
     
+    // Apply hover overlay (mix red tint over the hovered cell)
+    bool hover_active = (hover_cell.x >= 0.0 && hover_cell.y >= 0.0);
+    if (hover_active) {
+        if (abs(world_cell.x - hover_cell.x) < 0.5 && abs(world_cell.y - hover_cell.y) < 0.5) {
+            // Optional border emphasis using character-local UV
+            float edge = 0.05;
+            bool is_border = (char_uv.x < edge) || (char_uv.x > 1.0 - edge) || (char_uv.y < edge) || (char_uv.y > 1.0 - edge);
+            vec3 overlay = is_border ? vec3(1.0, 0.2, 0.2) : vec3(1.0, 0.0, 0.0);
+            lit_color = mix(lit_color, overlay, 0.65);
+        }
+    }
+
     // Final output
     COLOR = vec4(lit_color, char_alpha);
 }

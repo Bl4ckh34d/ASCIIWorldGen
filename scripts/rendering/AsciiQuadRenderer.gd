@@ -46,7 +46,7 @@ func _init():
 
 func initialize_rendering(font: Font, font_size: int, width: int, height: int) -> void:
 	"""Initialize the ASCII rendering system"""
-	print("AsciiQuadRenderer: Initializing (%dx%d)" % [width, height])
+	# debug removed
 	
 	map_width = width
 	map_height = height
@@ -72,7 +72,7 @@ func initialize_rendering(font: Font, font_size: int, width: int, height: int) -
 	# Bind the viewport texture for display
 	display_rect.texture = viewport.get_texture()
 	
-	print("AsciiQuadRenderer: Initialized successfully")
+	# debug removed
 
 func _create_quad_mesh() -> void:
 	"""Create the base quad mesh"""
@@ -109,11 +109,11 @@ func _create_material() -> void:
 		quad_material.set_shader_parameter("world_data_2", tex_black)
 		quad_material.set_shader_parameter("color_palette", tex_white)
 		
-		print("AsciiQuadRenderer: Using GPU shader material")
+		pass
 	else:
 		# Fallback to simple material
 		quad_material = CanvasItemMaterial.new()
-		print("AsciiQuadRenderer: Using fallback material (shader not found)")
+		# debug removed
 
 func _create_mesh_instance() -> void:
 	"""Create mesh instance for rendering"""
@@ -135,7 +135,7 @@ func update_world_data(
 	"""Update world data for rendering"""
 	
 	if not is_initialized:
-		print("AsciiQuadRenderer: Not initialized, cannot update world data")
+		# debug removed
 		return
 	
 	# Update texture manager
@@ -155,6 +155,20 @@ func update_light_data_only(light_data: PackedFloat32Array) -> void:
 	
 	texture_manager.update_light_data_only(light_data)
 	_update_light_uniform()
+
+func set_hover_cell(x: int, y: int) -> void:
+	"""Set the hovered tile coordinate for overlay rendering on the shader."""
+	if not quad_material or not (quad_material is ShaderMaterial):
+		return
+	var shader_mat = quad_material as ShaderMaterial
+	shader_mat.set_shader_parameter("hover_cell", Vector2(float(x), float(y)))
+
+func clear_hover_cell() -> void:
+	"""Disable hover overlay."""
+	if not quad_material or not (quad_material is ShaderMaterial):
+		return
+	var shader_mat = quad_material as ShaderMaterial
+	shader_mat.set_shader_parameter("hover_cell", Vector2(-1.0, -1.0))
 
 func _update_material_uniforms() -> void:
 	"""Update shader uniforms with current textures"""
@@ -189,7 +203,7 @@ func _update_material_uniforms() -> void:
 		var atlas_uv_size = font_atlas_generator.get_uv_dimensions()
 		shader_mat.set_shader_parameter("atlas_uv_size", atlas_uv_size)
 	else:
-		print("AsciiQuadRenderer: Using fallback material - shader parameters not available")
+		pass
 
 func _update_light_uniform() -> void:
 	"""Update only the light texture uniform"""
@@ -228,7 +242,7 @@ func save_debug_image(file_path: String) -> void:
 	var image = viewport.get_texture().get_image()
 	if image:
 		image.save_png(file_path)
-		print("AsciiQuadRenderer: Debug image saved to %s" % file_path)
+		# debug removed
 
 func get_memory_usage_mb() -> float:
 	"""Get estimated memory usage"""
