@@ -15,39 +15,71 @@ var _reapply_pipeline: RID
 
 func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 	if file == null:
+		push_error("BiomeCompute: Shader file is null")
 		return null
 	var versions: Array = file.get_version_list()
 	if versions.is_empty():
+		push_error("BiomeCompute: No shader versions available")
 		return null
 	var chosen_version = versions[0]
 	for v in versions:
 		if String(v) == "vulkan":
 			chosen_version = v
 			break
-	return file.get_spirv(chosen_version)
+	var spirv = file.get_spirv(chosen_version)
+	if spirv == null:
+		push_error("BiomeCompute: Failed to get SPIRV for version: " + str(chosen_version))
+	return spirv
 
 func _ensure() -> void:
+	# GPU device initialization with error handling
 	if _rd == null:
 		_rd = RenderingServer.get_rendering_device()
+		if _rd == null:
+			push_error("BiomeCompute: RenderingDevice unavailable - GPU compute not supported")
+			return
+	
+	# Main biome shader initialization
 	if not _shader.is_valid():
 		var s: RDShaderSPIRV = _get_spirv(BIOME_SHADER_FILE)
 		if s == null:
+			push_error("BiomeCompute: Failed to load biome shader - falling back to CPU")
 			return
 		_shader = _rd.shader_create_from_spirv(s)
+		if not _shader.is_valid():
+			push_error("BiomeCompute: Failed to create biome shader from SPIRV")
+			return
+	
+	# Pipeline creation
 	if not _pipeline.is_valid() and _shader.is_valid():
 		_pipeline = _rd.compute_pipeline_create(_shader)
+		if not _pipeline.is_valid():
+			push_error("BiomeCompute: Failed to create compute pipeline")
+			return
+	
+	# Smooth shader initialization (optional)
 	if not _smooth_shader.is_valid():
 		var s2: RDShaderSPIRV = _get_spirv(_smooth_shader_file)
 		if s2 != null:
 			_smooth_shader = _rd.shader_create_from_spirv(s2)
+			if not _smooth_shader.is_valid():
+				push_warning("BiomeCompute: Failed to create smooth shader - smoothing disabled")
+	
 	if not _smooth_pipeline.is_valid() and _smooth_shader.is_valid():
 		_smooth_pipeline = _rd.compute_pipeline_create(_smooth_shader)
+		if not _smooth_pipeline.is_valid():
+			push_warning("BiomeCompute: Failed to create smooth pipeline - smoothing disabled")
 	if not _reapply_shader.is_valid():
 		var s3: RDShaderSPIRV = _get_spirv(_reapply_shader_file)
 		if s3 != null:
 			_reapply_shader = _rd.shader_create_from_spirv(s3)
 	if not _reapply_pipeline.is_valid() and _reapply_shader.is_valid():
 		_reapply_pipeline = _rd.compute_pipeline_create(_reapply_shader)
+
+func is_gpu_available() -> bool:
+	"""Check if GPU compute is available and functional"""
+	_ensure()
+	return _rd != null and _shader.is_valid() and _pipeline.is_valid()
 
 func classify(w: int, h: int,
 	height: PackedFloat32Array,

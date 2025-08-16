@@ -1,7 +1,8 @@
-[gd_scene load_steps=3 format=3 uid="uid://bry7lj5qqyx5j"]
+[gd_scene load_steps=4 format=3 uid="uid://bry7lj5qqyx5j"]
 
 [ext_resource type="Script" uid="uid://bg41d7sbqhoq3" path="res://scripts/Main.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/SettingsDialog.tscn" id="2"]
+[ext_resource type="Script" uid="uid://c50s005y1d6ne" path="res://scripts/ui/CursorOverlay.gd" id="3"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -36,93 +37,56 @@ text = "Play"
 layout_mode = 2
 text = "Reset"
 
+[node name="StepButton" type="Button" parent="RootVBox/TopBar"]
+layout_mode = 2
+text = "Step"
+
+[node name="BackStepButton" type="Button" parent="RootVBox/TopBar"]
+layout_mode = 2
+text = "Back"
+
 [node name="Randomize" type="CheckBox" parent="RootVBox/TopBar"]
 layout_mode = 2
 text = "Randomize"
 
-[node name="MainSplit" type="HSplitContainer" parent="RootVBox"]
+[node name="VSeparator" type="VSeparator" parent="RootVBox/TopBar"]
+layout_mode = 2
+
+[node name="SpeedLabel" type="Label" parent="RootVBox/TopBar"]
+layout_mode = 2
+text = "Speed:"
+
+[node name="SpeedSlider" type="HSlider" parent="RootVBox/TopBar"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+min_value = 0.1
+max_value = 10.0
+step = 0.1
+value = 1.0
+
+[node name="SpeedValue" type="Label" parent="RootVBox/TopBar"]
+layout_mode = 2
+text = "1.0x"
+
+[node name="VSeparator2" type="VSeparator" parent="RootVBox/TopBar"]
+layout_mode = 2
+
+[node name="YearLabel" type="Label" parent="RootVBox/TopBar"]
+layout_mode = 2
+text = "Year: 0.00"
+
+[node name="VSeparator3" type="VSeparator" parent="RootVBox/TopBar"]
+layout_mode = 2
+
+[node name="SettingsButton" type="Button" parent="RootVBox/TopBar"]
+layout_mode = 2
+text = "Settings"
+
+[node name="MainContent" type="VBoxContainer" parent="RootVBox"]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="LeftPanel" type="PanelContainer" parent="RootVBox/MainSplit"]
-custom_minimum_size = Vector2(320, 0)
-layout_mode = 2
-size_flags_vertical = 3
-
-[node name="Tabs" type="TabContainer" parent="RootVBox/MainSplit/LeftPanel"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-current_tab = 0
-
-[node name="General" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-metadata/_tab_index = 0
-
-[node name="SeedLbl" type="Label" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
-layout_mode = 2
-text = "Seed:"
-
-[node name="SeedInput" type="LineEdit" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
-layout_mode = 2
-size_flags_horizontal = 3
-placeholder_text = "empty = random"
-
-[node name="SeedUsed" type="Label" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
-layout_mode = 2
-text = "Used: -"
-
-[node name="SeaLbl" type="Label" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
-layout_mode = 2
-text = "Sea:"
-
-[node name="SeaSlider" type="HSlider" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
-layout_mode = 2
-size_flags_horizontal = 3
-min_value = -1.0
-max_value = 1.0
-step = 0.01
-
-[node name="SeaVal" type="Label" parent="RootVBox/MainSplit/LeftPanel/Tabs/General"]
-layout_mode = 2
-text = "0.00"
-
-[node name="Climate" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
-visible = false
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-metadata/_tab_index = 1
-
-[node name="Hydro" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
-visible = false
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-metadata/_tab_index = 2
-
-[node name="Simulation" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
-visible = false
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-metadata/_tab_index = 3
-
-[node name="Systems" type="VBoxContainer" parent="RootVBox/MainSplit/LeftPanel/Tabs"]
-visible = false
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-metadata/_tab_index = 4
-
-[node name="RightContent" type="VBoxContainer" parent="RootVBox/MainSplit"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-
-[node name="AsciiMap" type="RichTextLabel" parent="RootVBox/MainSplit/RightContent"]
+[node name="AsciiMap" type="RichTextLabel" parent="RootVBox/MainContent"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -131,9 +95,126 @@ theme_override_font_sizes/normal_font_size = 10
 bbcode_enabled = true
 autowrap_mode = 0
 
-[node name="Info" type="Label" parent="RootVBox/MainSplit/RightContent"]
+[node name="Info" type="Label" parent="RootVBox/MainContent"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Hover: -"
+
+[node name="CursorOverlay" type="Control" parent="RootVBox/MainContent"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3")
+
+[node name="BottomPanel" type="PanelContainer" parent="RootVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 350)
+layout_mode = 2
+
+[node name="MainContainer" type="VBoxContainer" parent="RootVBox/BottomPanel"]
+layout_mode = 2
+
+[node name="PanelHeader" type="HBoxContainer" parent="RootVBox/BottomPanel/MainContainer"]
+layout_mode = 2
+
+[node name="PanelTitle" type="Label" parent="RootVBox/BottomPanel/MainContainer/PanelHeader"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "World Generation Settings"
+
+[node name="Spacer" type="Control" parent="RootVBox/BottomPanel/MainContainer/PanelHeader"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="HideButton" type="Button" parent="RootVBox/BottomPanel/MainContainer/PanelHeader"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Hide Panel"
+
+[node name="ColumnsContainer" type="ScrollContainer" parent="RootVBox/BottomPanel/MainContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="FiveColumns" type="HBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="GenerationColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="GenerationHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/GenerationColumn"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Generation"
+horizontal_alignment = 1
+
+[node name="GenerationVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/GenerationColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="TerrainColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="TerrainHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/TerrainColumn"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Terrain"
+horizontal_alignment = 1
+
+[node name="TerrainVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/TerrainColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ClimateColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ClimateHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/ClimateColumn"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Climate"
+horizontal_alignment = 1
+
+[node name="ClimateVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/ClimateColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="HydroColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="HydroHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/HydroColumn"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Hydro & Rivers"
+horizontal_alignment = 1
+
+[node name="HydroVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/HydroColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="SystemsColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="SystemsHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Simulation & Systems"
+horizontal_alignment = 1
+
+[node name="SimulationVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="SystemsVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
+unique_name_in_owner = true
+layout_mode = 2
 
 [node name="SettingsDialog" parent="." instance=ExtResource("2")]

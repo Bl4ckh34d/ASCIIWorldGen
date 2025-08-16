@@ -247,31 +247,32 @@ func _apply_checkpoint(cp: Dictionary) -> bool:
 		if typeof(legacy_h) == TYPE_PACKED_FLOAT32_ARRAY:
 			f32 = legacy_h
 	if f32.size() == w * h:
-		generator.last_height = f32.duplicate()
+		# OPTIMIZED: Avoid duplication - checkpoint data is immutable
+		generator.last_height = f32
 	# is_land
 	u8 = cp.get("is_land", PackedByteArray())
 	if u8.size() == w * h:
-		generator.last_is_land = u8.duplicate()
+		generator.last_is_land = u8
 	# temperature
 	f32 = cp.get("temperature", PackedFloat32Array())
 	if f32.size() == w * h:
-		generator.last_temperature = f32.duplicate()
+		generator.last_temperature = f32
 	# moisture
 	f32 = cp.get("moisture", PackedFloat32Array())
 	if f32.size() == w * h:
-		generator.last_moisture = f32.duplicate()
+		generator.last_moisture = f32
 	# biome_id
 	i32 = cp.get("biome_id", PackedInt32Array())
 	if i32.size() == w * h:
-		generator.last_biomes = i32.duplicate()
+		generator.last_biomes = i32
 	# lake
 	u8 = cp.get("lake", PackedByteArray())
 	if u8.size() == w * h:
-		generator.last_lake = u8.duplicate()
+		generator.last_lake = u8
 	# lake_id
 	i32 = cp.get("lake_id", PackedInt32Array())
 	if i32.size() == w * h:
-		generator.last_lake_id = i32.duplicate()
+		generator.last_lake_id = i32
 	# flow_dir
 	i32 = cp.get("flow_dir", PackedInt32Array())
 	if i32.size() == w * h:

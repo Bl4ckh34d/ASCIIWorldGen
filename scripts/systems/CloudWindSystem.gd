@@ -6,6 +6,7 @@ extends RefCounted
 
 var generator: Object = null
 var cloud_compute: Object = null
+var time_system: Object = null
 var coupling_enabled: bool = true
 var base_rain_strength: float = 0.08
 var base_evap_strength: float = 0.06
@@ -31,8 +32,9 @@ var _wind_shader: RDShaderFile = load("res://shaders/wind_field.glsl")
 var _wind_shader_rid: RID
 var _wind_pipeline: RID
 
-func initialize(gen: Object) -> void:
+func initialize(gen: Object, time_sys: Object = null) -> void:
 	generator = gen
+	time_system = time_sys
 	cloud_compute = load("res://scripts/systems/CloudOverlayCompute.gd").new()
 	_noise_u = FastNoiseLite.new()
 	_noise_v = FastNoiseLite.new()
@@ -70,13 +72,15 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var _prefer_gpu: bool = true
 	var sim_days: float = float(world.simulation_time_days)
 	var tod: float = fposmod(sim_days, 1.0)
-	var doy: float = fposmod(sim_days / 365.0, 1.0)
+	var days_per_year = time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else 365.0
+	var doy: float = fposmod(sim_days / days_per_year, 1.0)
 	var diurnal_factor: float = 0.5 - 0.5 * cos(6.28318 * tod) # 0 at midnight, 1 at midday
 	var seasonal_factor: float = cos(6.28318 * doy)
 	if _wind_pipeline.is_valid():
 		_update_wind_field_gpu(world, w, h)
 	# 2) Build humidity-driven source field via GPU overlay compute
-	var phase: float = fposmod(float(world.simulation_time_days) / 365.0, 1.0)
+	var days_per_year_phase = time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else 365.0
+	var phase: float = fposmod(float(world.simulation_time_days) / days_per_year_phase, 1.0)
 	var source: PackedFloat32Array = PackedFloat32Array()
 	if cloud_compute and "compute_clouds" in cloud_compute:
 		source = cloud_compute.compute_clouds(w, h, generator.last_temperature, generator.last_moisture, generator.last_is_land, phase)
@@ -155,7 +159,8 @@ func _update_wind_field(world: Object, w: int, h: int) -> void:
 			# Seasonal/diurnal scaling of band strength
 			var sim_days: float = float(world.simulation_time_days)
 			var tod: float = fposmod(sim_days, 1.0)
-			var doy: float = fposmod(sim_days / 365.0, 1.0)
+			var days_per_year = time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else 365.0
+			var doy: float = fposmod(sim_days / days_per_year, 1.0)
 			var diurnal_factor: float = 0.5 - 0.5 * cos(6.28318 * tod)
 			var seasonal_factor: float = cos(6.28318 * doy)
 			var wind_mult: float = 1.0 + seasonal_mod_amp * seasonal_factor * 0.2 + diurnal_mod_amp * (diurnal_factor - 0.5) * 0.1

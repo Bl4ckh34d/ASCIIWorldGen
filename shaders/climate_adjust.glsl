@@ -113,7 +113,11 @@ void main() {
     float amp_cont_d = land_px ? 1.0 : PC.diurnal_ocean_damp;
     float diurnal = amp_lat_d * amp_cont_d * cos(6.28318 * PC.time_of_day);
     t = clamp01(t + season + diurnal);
-    t = clamp01((t + PC.temp_base_offset - 0.5) * PC.temp_scale + 0.5);
+    // FIXED: Reduce extreme temperature scaling to prevent lava everywhere
+    // Apply gentler temperature transformation to avoid extreme artifacts
+    float temp_offset = clamp(PC.temp_base_offset, -0.3, 0.3);  // Limit offset
+    float temp_scale = clamp(PC.temp_scale, 0.6, 1.4);          // Limit scaling
+    t = clamp01((t + temp_offset - 0.5) * temp_scale + 0.5);
 
     // Shore temperature anchoring: for first ~2 cells into the ocean,
     // blend ocean temperature toward adjacent land temperature so polar
@@ -151,7 +155,10 @@ void main() {
                         phase_h2 = fract(phase_h2);
                         float season2 = amp_lat2 * amp_cont2 * cos(6.28318 * phase_h2);
                         t2 = clamp01(t2 + season2);
-                        t2 = clamp01((t2 + PC.temp_base_offset - 0.5) * PC.temp_scale + 0.5);
+                        // Apply same temperature bounds to shore calculations
+                        float temp_offset2 = clamp(PC.temp_base_offset, -0.3, 0.3);
+                        float temp_scale2 = clamp(PC.temp_scale, 0.6, 1.4);
+                        t2 = clamp01((t2 + temp_offset2 - 0.5) * temp_scale2 + 0.5);
                         t_land_sum += t2;
                         cnt++;
                     }

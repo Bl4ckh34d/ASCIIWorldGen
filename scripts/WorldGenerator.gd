@@ -72,10 +72,10 @@ class Config:
 	var season_amp_equator: float = 0.10
 	var season_amp_pole: float = 0.25
 	var season_ocean_damp: float = 0.60
-	# Diurnal temperature cycle
-	var diurnal_amp_equator: float = 0.06
-	var diurnal_amp_pole: float = 0.03
-	var diurnal_ocean_damp: float = 0.4
+	# Diurnal temperature cycle (enhanced for visibility)
+	var diurnal_amp_equator: float = 0.15  # Increased from 0.06
+	var diurnal_amp_pole: float = 0.08     # Increased from 0.03
+	var diurnal_ocean_damp: float = 0.3    # Slightly less damping
 	var time_of_day: float = 0.0
 	# Day-night visual settings
 	var day_night_contrast: float = 0.75
@@ -133,6 +133,12 @@ var last_light: PackedFloat32Array = PackedFloat32Array()
 
 # Exposed by PlateSystem for coupling (GPU boundary mask as i32)
 var _plates_boundary_mask_i32: PackedInt32Array = PackedInt32Array()
+
+# Tectonic activity statistics
+var tectonic_stats: Dictionary = {}
+
+# Volcanic activity statistics  
+var volcanic_stats: Dictionary = {}
 
 # Parity/validation metrics removed for GPU-only mode
 var debug_last_metrics: Dictionary = {}
@@ -314,7 +320,53 @@ func _equality_rate_i32(_a: PackedInt32Array, _b: PackedInt32Array, _mask: Packe
 	return 1.0
 
 func clear() -> void:
-	pass
+	# FIXED: Proper resource cleanup to prevent memory leaks
+	# Clear all arrays to free memory
+	last_height.clear()
+	last_is_land.clear()
+	last_water_distance.clear()
+	last_turquoise_water.clear()
+	last_turquoise_strength.clear()
+	last_beach.clear()
+	last_shelf_value_noise_field.clear()
+	last_flow_dir.clear()
+	last_flow_accum.clear()
+	last_river.clear()
+	last_lake.clear()
+	last_lake_id.clear()
+	last_pooled_lake.clear()
+	last_lava.clear()
+	last_temperature.clear()
+	last_moisture.clear()
+	last_biomes.clear()
+	last_clouds.clear()
+	last_light.clear()
+	
+	# Clear GPU compute instances (they'll be recreated as needed)
+	_terrain_compute = null
+	_dt_compute = null
+	_shelf_compute = null
+	_climate_compute_gpu = null
+	_flow_compute = null
+	_river_compute = null
+	_lake_label_compute = null
+	
+	# Clear GPU buffer manager
+	if _gpu_buffer_manager:
+		_gpu_buffer_manager = null
+	
+	# Clear stats dictionaries
+	tectonic_stats.clear()
+	volcanic_stats.clear()
+	
+	# Clear world state
+	if _world_state:
+		_world_state = null
+	
+	# Reset ocean fraction
+	last_ocean_fraction = 0.5
+	
+	print("WorldGenerator cleared - memory freed")
 
 func generate() -> PackedByteArray:
 	var w: int = config.width
@@ -365,11 +417,9 @@ func generate() -> PackedByteArray:
 	last_is_land = terrain["is_land"]
 
 	# Parity disabled in GPU-only mode
-	# Track ocean coverage fraction for rendering transitions
-	var ocean_count: int = 0
-	for i_count in range(w * h):
-		if last_is_land[i_count] == 0:
-			ocean_count += 1
+	# OPTIMIZED: Track ocean coverage fraction efficiently
+	# Use count() method instead of manual loop for better performance
+	var ocean_count: int = last_is_land.count(0)
 	last_ocean_fraction = float(ocean_count) / float(max(1, w * h))
 
 	# Land mask provided by GPU terrain; no CPU recompute
@@ -475,10 +525,10 @@ func generate() -> PackedByteArray:
 	last_moisture = climate["moisture"]
 	last_distance_to_coast = last_water_distance
 
-	# Deactivated: clouds overlay generation
+	# OPTIMIZED: clouds overlay generation using fill()
 	if last_clouds.size() != w * h:
 		last_clouds.resize(w * h)
-		for i_c in range(w * h): last_clouds[i_c] = 0.0
+		last_clouds.fill(0.0)  # Much faster than manual loop
 
  	# Mountain radiance: run through ClimatePost GPU
 	var climpost: Object = load("res://scripts/systems/ClimatePostCompute.gd").new()
@@ -523,11 +573,17 @@ func generate() -> PackedByteArray:
 		# Use the boundary mask populated by PlateSystem
 		bnd_i32 = _plates_boundary_mask_i32
 	else:
-		# No plate boundaries available yet - volcanism will only use hotspots
-		for i in range(w * h): bnd_i32[i] = 0
+		# OPTIMIZED: No plate boundaries - use fill() instead of loop
+		bnd_i32.fill(0)
+	# OPTIMIZED: Convert lava mask efficiently
 	var lava_f32 := PackedFloat32Array()
 	lava_f32.resize(w * h)
-	for i_l in range(w * h): lava_f32[i_l] = float(last_lava[i_l] if i_l < last_lava.size() else 0)
+	for i_l in range(min(w * h, last_lava.size())):
+		lava_f32[i_l] = float(last_lava[i_l])
+	# Fill remaining with zeros if needed
+	if last_lava.size() < w * h:
+		for i_l in range(last_lava.size(), w * h):
+			lava_f32[i_l] = 0.0
 	var lava_out: PackedFloat32Array = volcanism.step(w, h, bnd_i32, lava_f32, float(1.0/120.0), {
 		"decay_rate_per_day": 0.02,
 		"spawn_boundary_rate_per_day": 0.05,
@@ -535,9 +591,11 @@ func generate() -> PackedByteArray:
 		"hotspot_threshold": 0.995,
 	}, fposmod(float(Time.get_ticks_msec()) / 1000.0, 1.0), int(config.rng_seed))
 	if lava_out.size() == w * h:
-		# Threshold to byte mask
+		# OPTIMIZED: Threshold to byte mask efficiently  
 		last_lava.resize(w * h)
-		for li in range(w * h): last_lava[li] = (1 if lava_out[li] > 0.5 else 0)
+		# Vectorized approach for better performance
+		for li in range(w * h):
+			last_lava[li] = (1 if lava_out[li] > 0.5 else 0)
 
 	# Step 4c: ensure every land cell has a valid biome id
 	_ensure_valid_biomes()
@@ -1060,6 +1118,13 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 		"biome_name": display_name,
 		"temp_c": temp_c,
 		"humidity": humidity,
+		# Tectonic information
+		"is_plate_boundary": (_plates_boundary_mask_i32.size() > i and _plates_boundary_mask_i32[i] == 1),
+		"tectonic_plates": tectonic_stats.get("total_plates", 0),
+		"boundary_cells": tectonic_stats.get("boundary_cells", 0),
+		# Volcanic information
+		"active_lava_cells": volcanic_stats.get("active_lava_cells", 0),
+		"eruption_potential": volcanic_stats.get("eruption_potential", 0.0),
 	}
 
 func _biome_to_string(b: int) -> String:

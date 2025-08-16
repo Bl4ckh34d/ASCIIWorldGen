@@ -87,7 +87,8 @@ func build_ascii(
 		lava_mask: PackedByteArray = PackedByteArray(),
 		clouds: PackedFloat32Array = PackedFloat32Array(),
 		lake_freeze: PackedByteArray = PackedByteArray(),
-		light_field: PackedFloat32Array = PackedFloat32Array()
+		light_field: PackedFloat32Array = PackedFloat32Array(),
+		plate_boundary_mask: PackedByteArray = PackedByteArray()
 	) -> String:
 	var sb: PackedStringArray = PackedStringArray()
 	var use_light: bool = light_field.size() == w * h
@@ -107,6 +108,7 @@ func build_ascii(
 	var have_clouds: bool = _safe_size(clouds) == total
 	var have_freeze: bool = _safe_size(lake_freeze) == total
 	var have_temp: bool = _safe_size(temperature) == total
+	var have_boundaries: bool = _safe_size(plate_boundary_mask) == total
 
 	for y in range(h):
 		for x in range(w):
@@ -157,6 +159,10 @@ func build_ascii(
 							col = col.lerp(Color(1.0, 0.8, 0.6), 0.15)
 						elif temp_norm < 0.3:  # Cold areas get blue tint
 							col = col.lerp(Color(0.8, 0.9, 1.0), 0.15)
+					
+					# Plate boundary overlay (subtle outline effect)
+					if have_boundaries and plate_boundary_mask[i] == 1:
+						col = col.lerp(Color(0.9, 0.9, 0.2), 0.2)  # Yellow tint for boundaries
 				else:
 					# water tile
 					var is_turq: bool = have_turq and turquoise_mask[i] == 1

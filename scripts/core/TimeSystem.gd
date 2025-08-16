@@ -7,6 +7,7 @@ var running: bool = false
 var time_scale: float = 0.2  # Slower time progression
 var tick_days: float = 1.0 / 1440.0 # 1 minute per tick (much smaller time steps)
 var simulation_time_days: float = 0.0
+var days_per_year: float = 365.0  # Configurable year length
 
 var _accum_days: float = 0.0
 var _timer: Timer
@@ -23,13 +24,14 @@ func _on_timer_tick() -> void:
 		return
 	if time_scale <= 0.0 or tick_days <= 0.0:
 		return
-	# Calculate how much simulation time passes per timer tick
-	var sim_time_per_tick = tick_days * time_scale * 10.0  # 10 FPS timer
-	emit_signal("tick", tick_days)
-	simulation_time_days += tick_days
+	
+	# Apply time scale to simulation progression
+	var scaled_tick_days = tick_days * time_scale
+	emit_signal("tick", scaled_tick_days)
+	simulation_time_days += scaled_tick_days
 
-func _process(delta: float) -> void:
-	# Keep the old accumulation system as fallback but commented for reference
+func _process(_delta: float) -> void:
+	# Timer-based system handles all timing - process not needed
 	pass
 
 func start() -> void:
@@ -64,10 +66,16 @@ func set_tick_days(v: float) -> void:
 	tick_days = max(1e-6, v)
 
 func get_year_float() -> float:
-	return simulation_time_days / 365.0
+	return simulation_time_days / days_per_year
 
 func get_day_of_year() -> float:
-	return fposmod(simulation_time_days / 365.0, 1.0)
+	return fposmod(simulation_time_days / days_per_year, 1.0)
+
+func set_days_per_year(v: float) -> void:
+	days_per_year = max(1.0, v)
+
+func get_days_per_year() -> float:
+	return days_per_year
 
 func get_time_of_day() -> float:
 	return fposmod(simulation_time_days, 1.0)

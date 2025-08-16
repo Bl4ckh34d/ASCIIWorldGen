@@ -79,17 +79,22 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		# Fallback CPU path
 		_update_boundary_uplift(dt_days, w, h)
 	# Expose boundary mask to generator for volcanism coupling
+	var boundary_count = 0
 	if "_plates_boundary_mask_i32" in generator:
 		# build Int32 mask from ByteArray boundary_mask
 		var mask_i32 := PackedInt32Array(); mask_i32.resize(w * h)
-		var boundary_count = 0
 		for m in range(w * h): 
 			var val = (1 if boundary_mask[m] != 0 else 0)
 			mask_i32[m] = val
 			if val == 1: boundary_count += 1
 		generator._plates_boundary_mask_i32 = mask_i32
+		# Store boundary count for other systems to use
+		if "tectonic_stats" not in generator:
+			generator.tectonic_stats = {}
+		generator.tectonic_stats["boundary_cells"] = boundary_count
+		generator.tectonic_stats["total_plates"] = num_plates
 	_recompute_land_and_shelf(w, h)
-	return {"dirty_fields": PackedStringArray(["height", "is_land", "shelf"]) }
+	return {"dirty_fields": PackedStringArray(["height", "is_land", "shelf"]), "boundary_count": boundary_count}
 
 func _build_plates() -> void:
 	if generator == null:
@@ -262,5 +267,3 @@ func _recompute_land_and_shelf(w: int, h: int) -> void:
 		generator.last_turquoise_water = out_gpu.get("turquoise_water", generator.last_turquoise_water)
 		generator.last_beach = out_gpu.get("beach", generator.last_beach)
 		generator.last_turquoise_strength = out_gpu.get("turquoise_strength", generator.last_turquoise_strength)
-
-
