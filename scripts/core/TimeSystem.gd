@@ -13,9 +13,9 @@ var _accum_days: float = 0.0
 var _timer: Timer
 
 func _ready() -> void:
-	# Create a precise timer for 10 FPS simulation ticks
+	# Create a precise timer for 60 FPS simulation ticks
 	_timer = Timer.new()
-	_timer.wait_time = 0.1  # 10 FPS = 0.1 second intervals
+	_timer.wait_time = 1.0 / 60.0
 	_timer.timeout.connect(_on_timer_tick)
 	add_child(_timer)
 

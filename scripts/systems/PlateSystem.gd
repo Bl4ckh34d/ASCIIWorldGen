@@ -25,10 +25,12 @@ var plate_vel_u: PackedFloat32Array = PackedFloat32Array() # per-plate
 var plate_vel_v: PackedFloat32Array = PackedFloat32Array() # per-plate
 var cell_plate_id: PackedInt32Array = PackedInt32Array()
 var boundary_mask: PackedByteArray = PackedByteArray()
+var boundary_mask_render: PackedByteArray = PackedByteArray()
 
 var _dtc: Object = null
 var _shelf: Object = null
 var _noise: FastNoiseLite
+var _boundary_noise: FastNoiseLite
 var _gpu_update: Object = null
 var _land_mask_compute: Object = null
 
@@ -37,8 +39,12 @@ func initialize(gen: Object) -> void:
 	_noise = FastNoiseLite.new()
 	_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	_noise.frequency = 0.02
+	_boundary_noise = FastNoiseLite.new()
+	_boundary_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	_boundary_noise.frequency = 0.08
 	if "config" in generator:
 		_noise.seed = int(generator.config.rng_seed) ^ 0x517A
+		_boundary_noise.seed = int(generator.config.rng_seed) ^ 0xB16B00B5
 	_build_plates()
 	_dtc = DistanceTransformCompute.new()
 	_shelf = ContinentalShelfCompute.new()
@@ -123,13 +129,17 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	# Expose boundary mask to generator for volcanism coupling
 	var boundary_count = 0
 	if "_plates_boundary_mask_i32" in generator:
+		var mask_src: PackedByteArray = boundary_mask_render if boundary_mask_render.size() == w * h else boundary_mask
 		# build Int32 mask from ByteArray boundary_mask
 		var mask_i32 := PackedInt32Array(); mask_i32.resize(w * h)
 		for m in range(w * h): 
-			var val = (1 if boundary_mask[m] != 0 else 0)
+			var val = (1 if mask_src[m] != 0 else 0)
 			mask_i32[m] = val
 			if val == 1: boundary_count += 1
 		generator._plates_boundary_mask_i32 = mask_i32
+	# Provide a noisier boundary mask for rendering only
+	if "_plates_boundary_mask_render_u8" in generator:
+		generator._plates_boundary_mask_render_u8 = boundary_mask_render
 		# Store boundary count for other systems to use
 		if "tectonic_stats" not in generator:
 			generator.tectonic_stats = {}
@@ -184,22 +194,73 @@ func _build_plates() -> void:
 			boundary_mask.resize(size)
 			for k in range(size):
 				boundary_mask[k] = (1 if bnd[k] != 0 else 0)
+	_build_boundary_render_mask(w, h)
 	# Update GPU buffers for plates/boundaries
 	if generator and "_gpu_buffer_manager" in generator and generator._gpu_buffer_manager != null:
 		var size_bytes := size * 4
+		var mask_src: PackedByteArray = boundary_mask_render if boundary_mask_render.size() == size else boundary_mask
 		generator._gpu_buffer_manager.ensure_buffer("plate_id", size_bytes, cell_plate_id.to_byte_array())
-		generator._gpu_buffer_manager.ensure_buffer("plate_boundary", size_bytes, generator._pack_bytes_to_u32(boundary_mask).to_byte_array())
+		generator._gpu_buffer_manager.ensure_buffer("plate_boundary", size_bytes, generator._pack_bytes_to_u32(mask_src).to_byte_array())
+	if generator and "_plates_boundary_mask_render_u8" in generator:
+		generator._plates_boundary_mask_render_u8 = boundary_mask_render
+
+func _build_boundary_render_mask(w: int, h: int) -> void:
+	var size: int = w * h
+	if size <= 0 or boundary_mask.size() != size:
+		return
+	if _boundary_noise == null:
+		_boundary_noise = FastNoiseLite.new()
+		_boundary_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+		_boundary_noise.frequency = 0.12
+	if generator and "config" in generator:
+		_boundary_noise.seed = int(generator.config.rng_seed) ^ 0xB16B00B5
+	boundary_mask_render.resize(size)
+	var jitter: float = 1.0
+	for y in range(h):
+		for x in range(w):
+			var n: float = _boundary_noise.get_noise_2d(float(x), float(y))
+			var m: float = _boundary_noise.get_noise_2d(float(x) + 57.3, float(y) - 91.7)
+			var dx: int = int(round(clamp(n * jitter, -1.0, 1.0)))
+			var dy: int = int(round(clamp(m * jitter, -1.0, 1.0)))
+			var nx := x + dx
+			if nx < 0:
+				nx += w
+			elif nx >= w:
+				nx -= w
+			var ny: int = int(clamp(y + dy, 0, h - 1))
+			var src_i: int = nx + ny * w
+			var out_i: int = x + y * w
+			var v: int = (1 if boundary_mask[src_i] != 0 else 0)
+			boundary_mask_render[out_i] = v
+			if boundary_mask[out_i] != 0:
+				if n > 0.35:
+					var nx2 := x + 1
+					if nx2 >= w:
+						nx2 = 0
+					boundary_mask_render[nx2 + y * w] = 1
+				elif n < -0.35:
+					var nx3 := x - 1
+					if nx3 < 0:
+						nx3 = w - 1
+					boundary_mask_render[nx3 + y * w] = 1
+				if m > 0.35:
+					var ny2: int = int(min(h - 1, y + 1))
+					boundary_mask_render[x + ny2 * w] = 1
+				elif m < -0.35:
+					var ny3: int = int(max(0, y - 1))
+					boundary_mask_render[x + ny3 * w] = 1
 
 func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 	var size: int = w * h
 	if generator.last_height.size() != size:
 		return
 	var heights: PackedFloat32Array = generator.last_height
+	var mask_src: PackedByteArray = boundary_mask_render if boundary_mask_render.size() == size else boundary_mask
 	# Adjust along boundary band
 	for y in range(h):
 		for x in range(w):
 			var i: int = x + y * w
-			if boundary_mask[i] == 0:
+			if mask_src[i] == 0:
 				continue
 			var pid: int = cell_plate_id[i]
 			# Look at one neighbor of different plate to get boundary normal approx

@@ -317,7 +317,7 @@ func _setup_simulation_tab() -> void:
 	year_len_slider = year_len_result.slider
 	year_len_value = year_len_result.value_label
 	
-	fps_spin = _add_label_with_spinbox(simulation_vbox, "Simulation FPS:", 1.0, 60.0, 1.0, 10.0, func(v): _on_sim_fps_changed(v))
+	fps_spin = _add_label_with_spinbox(simulation_vbox, "Simulation FPS:", 1.0, 60.0, 1.0, 60.0, func(v): _on_sim_fps_changed(v))
 	speed_slider = _add_label_with_slider(simulation_vbox, "Speed:", 1.0, 1000.0, 1.0, 1.0, func(v): _on_speed_changed(v)).slider
 	
 	# Step controls
@@ -837,7 +837,7 @@ func _ready() -> void:
 		
 		# FPS Settings
 		var fps_lbl := Label.new(); fps_lbl.text = "Simulation FPS"; simulation_box.add_child(fps_lbl)
-		fps_spin = SpinBox.new(); fps_spin.min_value = 1.0; fps_spin.max_value = 60.0; fps_spin.step = 1.0; fps_spin.value = 10.0; fps_spin.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN; simulation_box.add_child(fps_spin)
+		fps_spin = SpinBox.new(); fps_spin.min_value = 1.0; fps_spin.max_value = 60.0; fps_spin.step = 1.0; fps_spin.value = 60.0; fps_spin.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN; simulation_box.add_child(fps_spin)
 		fps_spin.value_changed.connect(func(v: float) -> void:
 			if time_system and time_system._timer:
 				time_system._timer.wait_time = 1.0 / float(v)
@@ -2111,7 +2111,10 @@ func _initialize_gpu_renderer() -> void:
 func _get_plate_boundary_mask() -> PackedByteArray:
 	# Convert int32 boundary mask to byte mask for rendering
 	var mask := PackedByteArray()
-	if generator and generator._plates_boundary_mask_i32.size() > 0:
+	if generator and generator._plates_boundary_mask_render_u8.size() > 0:
+		var render_mask: PackedByteArray = generator._plates_boundary_mask_render_u8
+		mask = render_mask.duplicate()
+	elif generator and generator._plates_boundary_mask_i32.size() > 0:
 		var mask_size = generator._plates_boundary_mask_i32.size()
 		mask.resize(mask_size)
 		for i in range(mask_size):

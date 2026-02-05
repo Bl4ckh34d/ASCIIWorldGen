@@ -52,7 +52,7 @@ const DAY_NIGHT_BASE: float = 0.25
 # === PERFORMANCE CONSTANTS ===
 
 # Simulation timing
-const DEFAULT_SIMULATION_FPS: float = 10.0
+const DEFAULT_SIMULATION_FPS: float = 60.0
 const DEFAULT_TIME_SCALE: float = 0.2
 const TICK_DAYS_PER_MINUTE: float = 1.0 / 1440.0  # 1 minute = 1 day
 

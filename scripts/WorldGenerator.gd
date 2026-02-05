@@ -60,8 +60,8 @@ class Config:
 	var lava_temp_threshold_c: float = 120.0
 	# Rivers toggle
 	var rivers_enabled: bool = true
-	# River flow threshold (GPU path uses fixed threshold)
-	var river_threshold: float = 4.0
+	# River flow threshold (minimum); percentile-derived threshold uses this as floor.
+	var river_threshold: float = 1.0
 	# Percentile for river seed selection (0.0..1.0)
 	var river_seed_percentile: float = 0.99
 	# Multiplier on percentile-derived threshold
@@ -156,6 +156,7 @@ var biome_phase: float = 0.0
 
 # Exposed by PlateSystem for coupling (GPU boundary mask as i32)
 var _plates_boundary_mask_i32: PackedInt32Array = PackedInt32Array()
+var _plates_boundary_mask_render_u8: PackedByteArray = PackedByteArray()
 
 # Tectonic activity statistics
 var tectonic_stats: Dictionary = {}
