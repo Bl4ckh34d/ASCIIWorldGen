@@ -81,7 +81,7 @@ void main() {
     float lat_norm_signed = (float(y) / max(1.0, float(H) - 1.0)) - 0.5; // -0.5..+0.5
     float lat = abs(lat_norm_signed) * 2.0;
     // Apply elevation cooling only above sea level (temperature-neutral below sea level)
-    // Anchored baseline: approximate by median/mean land height pre-computed on CPU — here we use a neutral 0.0 and rely on CPU path for parity,
+    // Anchored baseline: approximate by median/mean land height pre-computed on CPU -- here we use a neutral 0.0 and rely on CPU path for parity,
     // but we clamp relative elevation to a narrow band to avoid global freezes when sea level changes.
     // For GPU parity, keep sensitivity smaller to reduce visual jumps.
     float rel_elev = max(0.0, Height.height_data[i] - 0.0);
@@ -174,13 +174,13 @@ void main() {
 
     float m_base = 0.5 + 0.3 * sin(6.28318 * float(y) / float(H) * 3.0);
     // Moisture base noise sampled with offset (x+100, y-50)
-    float m_noise = 0.3 * sample_bilinear_moist(W, H, float(x) * PC.noise_x_scale + 100.0, float(y) - 50.0);
+    float m_noise = 0.3 * sample_bilinear_moist(W, H, float(x) * PC.noise_x_scale + 100.0, float(y) * PC.noise_x_scale - 50.0);
     // Flow advection fields (already evaluated at scaled coords on CPU when built)
     float adv_u = FlowU.flow_u_data[i];
     float adv_v = FlowV.flow_v_data[i];
     float sx = clamp(float(x) + adv_u * 6.0, 0.0, float(W - 1));
     float sy = clamp(float(y) + adv_v * 6.0, 0.0, float(H - 1));
-    float m_adv = 0.2 * sample_bilinear_moist(W, H, sx * PC.noise_x_scale, sy);
+    float m_adv = 0.2 * sample_bilinear_moist(W, H, sx * PC.noise_x_scale, sy * PC.noise_x_scale);
     float polar_dry = 0.20 * lat;
     float m = m_base + m_noise + m_adv - polar_dry;
 

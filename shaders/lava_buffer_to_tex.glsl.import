@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bsij7smf6y0na"
+path="res://.godot/imported/lava_buffer_to_tex.glsl-cba9ebb439295fc9aea81de6e9e59075.res"
+
+[deps]
+
+source_file="res://shaders/lava_buffer_to_tex.glsl"
+dest_files=["res://.godot/imported/lava_buffer_to_tex.glsl-cba9ebb439295fc9aea81de6e9e59075.res"]
+
+[params]
+

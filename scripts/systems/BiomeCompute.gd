@@ -284,3 +284,86 @@ func classify(w: int, h: int,
 	_rd.free_rid(buf_river)
 
 	return biomes
+
+func classify_to_buffer(w: int, h: int,
+		height_buf: RID,
+		land_buf: RID,
+		temp_buf: RID,
+		moist_buf: RID,
+		beach_buf: RID,
+		desert_buf: RID,
+		params: Dictionary,
+		out_biome_buf: RID) -> bool:
+	_ensure()
+	if not _pipeline.is_valid():
+		return false
+	if not height_buf.is_valid() or not land_buf.is_valid() or not temp_buf.is_valid() or not moist_buf.is_valid() or not beach_buf.is_valid() or not out_biome_buf.is_valid():
+		return false
+	var size: int = max(0, w * h)
+	if size == 0:
+		return false
+	var use_desert: bool = desert_buf.is_valid()
+	var desert_buf_use: RID = desert_buf
+	if not use_desert:
+		var dummy_f := PackedFloat32Array(); dummy_f.resize(1)
+		desert_buf_use = _rd.storage_buffer_create(dummy_f.to_byte_array().size(), dummy_f.to_byte_array())
+	var uniforms: Array = []
+	var u: RDUniform
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(height_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(land_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(temp_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(moist_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(beach_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(desert_buf_use); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(out_biome_buf); uniforms.append(u)
+	# Bind dummy buffers for unused lake/river slots to satisfy layout (not used in shader)
+	var dummy := PackedInt32Array(); dummy.resize(1)
+	var dummy_buf := _rd.storage_buffer_create(dummy.to_byte_array().size(), dummy.to_byte_array())
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(dummy_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 8; u.add_id(dummy_buf); uniforms.append(u)
+	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h])
+	var freeze_norm: float = float(params.get("freeze_temp_threshold", 0.16))
+	var noise_c: float = float(params.get("biome_noise_strength_c", 0.8))
+	var moist_jitter: float = float(params.get("biome_moist_jitter", 0.06))
+	var phase: float = float(params.get("biome_phase", 0.0))
+	var floats := PackedFloat32Array([
+		float(params.get("temp_min_c", -40.0)),
+		float(params.get("temp_max_c", 70.0)),
+		float(params.get("height_scale_m", 6000.0)),
+		float(params.get("lapse_c_per_km", 5.5)),
+		freeze_norm,
+		noise_c,
+		moist_jitter,
+		phase,
+		float(params.get("biome_moist_jitter2", 0.03)),
+		float(params.get("biome_moist_islands", 0.35)),
+		float(params.get("biome_moist_elev_dry", 0.35)),
+	])
+	# min/max from params if supplied; else compute from CPU height not available in GPU-only path
+	var min_h: float = float(params.get("min_h", 0.0))
+	var max_h: float = float(params.get("max_h", 1.0))
+	var floats2 := PackedFloat32Array([min_h, max_h])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	pc.append_array(floats2.to_byte_array())
+	var tail := PackedInt32Array([ (1 if use_desert else 0) ])
+	pc.append_array(tail.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	var gx: int = int(ceil(float(w) / 16.0))
+	var gy: int = int(ceil(float(h) / 16.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, gx, gy, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+	_rd.free_rid(dummy_buf)
+	if not use_desert:
+		_rd.free_rid(desert_buf_use)
+	return true

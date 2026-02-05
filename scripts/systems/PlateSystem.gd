@@ -30,6 +30,7 @@ var _dtc: Object = null
 var _shelf: Object = null
 var _noise: FastNoiseLite
 var _gpu_update: Object = null
+var _land_mask_compute: Object = null
 
 func initialize(gen: Object) -> void:
 	generator = gen
@@ -41,6 +42,7 @@ func initialize(gen: Object) -> void:
 	_build_plates()
 	_dtc = DistanceTransformCompute.new()
 	_shelf = ContinentalShelfCompute.new()
+	_land_mask_compute = load("res://scripts/systems/LandMaskCompute.gd").new()
 
 func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null:
@@ -55,29 +57,69 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	# Prefer GPU update if pipeline available
 	if _gpu_update == null:
 		_gpu_update = PlateUpdateCompute.new()
-	var updated: PackedFloat32Array
-	updated = _gpu_update.apply(
-		w, h,
-		generator.last_height,
-		cell_plate_id,
-		boundary_mask,
-		plate_vel_u,
-		plate_vel_v,
-		dt_days,
-		{
-			"uplift_rate_per_day": uplift_rate_per_day,
-			"ridge_rate_per_day": ridge_rate_per_day,
-			"transform_roughness_per_day": transform_roughness_per_day,
-		},
-		boundary_band_cells,
-		float(Time.get_ticks_msec() % 100000) / 100000.0
-	)
-	if updated.size() == w * h:
-		generator.last_height = updated
-		generator.last_height_final = updated
-	else:
-		# Fallback CPU path
-		_update_boundary_uplift(dt_days, w, h)
+	var use_gpu_only: bool = ("config" in generator and generator.config.use_gpu_all)
+	var gpu_ok: bool = false
+	if use_gpu_only and "ensure_persistent_buffers" in generator:
+		generator.ensure_persistent_buffers(false)
+		var height_buf: RID = generator.get_persistent_buffer("height")
+		var height_tmp: RID = generator.get_persistent_buffer("height_tmp")
+		var plate_buf: RID = generator.get_persistent_buffer("plate_id")
+		var boundary_buf: RID = generator.get_persistent_buffer("plate_boundary")
+		if height_buf.is_valid() and height_tmp.is_valid() and plate_buf.is_valid() and boundary_buf.is_valid():
+			gpu_ok = _gpu_update.apply_gpu_buffers(
+				w, h,
+				height_buf,
+				plate_buf,
+				boundary_buf,
+				plate_vel_u,
+				plate_vel_v,
+				dt_days,
+				{
+					"uplift_rate_per_day": uplift_rate_per_day,
+					"ridge_rate_per_day": ridge_rate_per_day,
+					"transform_roughness_per_day": transform_roughness_per_day,
+				},
+				boundary_band_cells,
+				float(Time.get_ticks_msec() % 100000) / 100000.0,
+				height_tmp
+				)
+			if gpu_ok:
+				# Copy height_tmp -> height (reuse FlowCompute copy)
+				if generator._flow_compute == null:
+					generator._flow_compute = load("res://scripts/systems/FlowCompute.gd").new()
+				if "_ensure" in generator._flow_compute:
+					generator._flow_compute._ensure()
+				generator._flow_compute._dispatch_copy_u32(height_tmp, height_buf, w * h)
+				# Update land mask buffer from height
+				if _land_mask_compute:
+					var land_buf: RID = generator.get_persistent_buffer("is_land")
+					if land_buf.is_valid():
+						_land_mask_compute.update_from_height(w, h, height_buf, generator.config.sea_level, land_buf)
+	if not gpu_ok:
+		if use_gpu_only:
+			return {}
+		var updated: PackedFloat32Array = _gpu_update.apply(
+			w, h,
+			generator.last_height,
+			cell_plate_id,
+			boundary_mask,
+			plate_vel_u,
+			plate_vel_v,
+			dt_days,
+			{
+				"uplift_rate_per_day": uplift_rate_per_day,
+				"ridge_rate_per_day": ridge_rate_per_day,
+				"transform_roughness_per_day": transform_roughness_per_day,
+			},
+			boundary_band_cells,
+			float(Time.get_ticks_msec() % 100000) / 100000.0
+		)
+		if updated.size() == w * h:
+			generator.last_height = updated
+			generator.last_height_final = updated
+		else:
+			# Fallback CPU path
+			_update_boundary_uplift(dt_days, w, h)
 	# Expose boundary mask to generator for volcanism coupling
 	var boundary_count = 0
 	if "_plates_boundary_mask_i32" in generator:
@@ -93,7 +135,8 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			generator.tectonic_stats = {}
 		generator.tectonic_stats["boundary_cells"] = boundary_count
 		generator.tectonic_stats["total_plates"] = num_plates
-	_recompute_land_and_shelf(w, h)
+	if not gpu_ok:
+		_recompute_land_and_shelf(w, h)
 	return {"dirty_fields": PackedStringArray(["height", "is_land", "shelf"]), "boundary_count": boundary_count}
 
 func _build_plates() -> void:
@@ -141,6 +184,11 @@ func _build_plates() -> void:
 			boundary_mask.resize(size)
 			for k in range(size):
 				boundary_mask[k] = (1 if bnd[k] != 0 else 0)
+	# Update GPU buffers for plates/boundaries
+	if generator and "_gpu_buffer_manager" in generator and generator._gpu_buffer_manager != null:
+		var size_bytes := size * 4
+		generator._gpu_buffer_manager.ensure_buffer("plate_id", size_bytes, cell_plate_id.to_byte_array())
+		generator._gpu_buffer_manager.ensure_buffer("plate_boundary", size_bytes, generator._pack_bytes_to_u32(boundary_mask).to_byte_array())
 
 func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 	var size: int = w * h

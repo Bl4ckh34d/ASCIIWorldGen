@@ -80,7 +80,7 @@ func compute(w: int, h: int, _height: PackedFloat32Array, is_land: PackedByteArr
 			var idx: int = x2 + y2 * w
 			if water[idx] == 0 or boundary_conn[idx] != 0 or visited[idx] != 0:
 				continue
-			# New inland water component → lake
+			# New inland water component -> lake
 			var comp := []
 			q.clear()
 			q.append(idx)

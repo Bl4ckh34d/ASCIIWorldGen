@@ -86,134 +86,149 @@ text = "Settings"
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="AsciiMap" type="RichTextLabel" parent="RootVBox/MainContent"]
-unique_name_in_owner = true
+[node name="MapContainer" type="Control" parent="RootVBox/MainContent"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+
+[node name="AsciiMap" type="RichTextLabel" parent="RootVBox/MainContent/MapContainer"]
+unique_name_in_owner = true
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
 theme_override_font_sizes/normal_font_size = 10
 bbcode_enabled = true
 autowrap_mode = 0
+
+[node name="CursorOverlay" type="Control" parent="RootVBox/MainContent/MapContainer"]
+unique_name_in_owner = true
+anchors_preset = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("3")
 
 [node name="Info" type="Label" parent="RootVBox/MainContent"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Hover: -"
 
-[node name="CursorOverlay" type="Control" parent="RootVBox/MainContent"]
+[node name="BottomPanel" type="PanelContainer" parent="."]
 unique_name_in_owner = true
-layout_mode = 2
-script = ExtResource("3")
-
-[node name="BottomPanel" type="PanelContainer" parent="RootVBox"]
-unique_name_in_owner = true
+z_index = 2000
 custom_minimum_size = Vector2(0, 350)
+layout_mode = 0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -350.0
+mouse_filter = 2
+
+[node name="MainContainer" type="VBoxContainer" parent="BottomPanel"]
 layout_mode = 2
 
-[node name="MainContainer" type="VBoxContainer" parent="RootVBox/BottomPanel"]
+[node name="PanelHeader" type="HBoxContainer" parent="BottomPanel/MainContainer"]
 layout_mode = 2
 
-[node name="PanelHeader" type="HBoxContainer" parent="RootVBox/BottomPanel/MainContainer"]
-layout_mode = 2
-
-[node name="PanelTitle" type="Label" parent="RootVBox/BottomPanel/MainContainer/PanelHeader"]
+[node name="PanelTitle" type="Label" parent="BottomPanel/MainContainer/PanelHeader"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "World Generation Settings"
 
-[node name="Spacer" type="Control" parent="RootVBox/BottomPanel/MainContainer/PanelHeader"]
+[node name="Spacer" type="Control" parent="BottomPanel/MainContainer/PanelHeader"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="HideButton" type="Button" parent="RootVBox/BottomPanel/MainContainer/PanelHeader"]
+[node name="HideButton" type="Button" parent="BottomPanel/MainContainer/PanelHeader"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Hide Panel"
 
-[node name="ColumnsContainer" type="ScrollContainer" parent="RootVBox/BottomPanel/MainContainer"]
+[node name="ColumnsContainer" type="ScrollContainer" parent="BottomPanel/MainContainer"]
 layout_mode = 2
+size_flags_horizontal = 3
 size_flags_vertical = 3
+horizontal_scroll_mode = 2
 
-[node name="FiveColumns" type="HBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer"]
+[node name="FiveColumns" type="HBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="GenerationColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+[node name="GenerationColumn" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
 custom_minimum_size = Vector2(240, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="GenerationHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/GenerationColumn"]
+[node name="GenerationHeader" type="Label" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/GenerationColumn"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 12
 text = "Generation"
 horizontal_alignment = 1
 
-[node name="GenerationVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/GenerationColumn"]
+[node name="GenerationVBox" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/GenerationColumn"]
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="TerrainColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+[node name="TerrainColumn" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
 custom_minimum_size = Vector2(240, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="TerrainHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/TerrainColumn"]
+[node name="TerrainHeader" type="Label" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/TerrainColumn"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 12
 text = "Terrain"
 horizontal_alignment = 1
 
-[node name="TerrainVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/TerrainColumn"]
+[node name="TerrainVBox" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/TerrainColumn"]
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="ClimateColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+[node name="ClimateColumn" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
 custom_minimum_size = Vector2(240, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="ClimateHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/ClimateColumn"]
+[node name="ClimateHeader" type="Label" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/ClimateColumn"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 12
 text = "Climate"
 horizontal_alignment = 1
 
-[node name="ClimateVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/ClimateColumn"]
+[node name="ClimateVBox" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/ClimateColumn"]
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="HydroColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+[node name="HydroColumn" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
 custom_minimum_size = Vector2(240, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="HydroHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/HydroColumn"]
+[node name="HydroHeader" type="Label" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/HydroColumn"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 12
 text = "Hydro & Rivers"
 horizontal_alignment = 1
 
-[node name="HydroVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/HydroColumn"]
+[node name="HydroVBox" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/HydroColumn"]
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="SystemsColumn" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
+[node name="SystemsColumn" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns"]
 custom_minimum_size = Vector2(240, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="SystemsHeader" type="Label" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
+[node name="SystemsHeader" type="Label" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 12
 text = "Simulation & Systems"
 horizontal_alignment = 1
 
-[node name="SimulationVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
+[node name="SimulationVBox" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="SystemsVBox" type="VBoxContainer" parent="RootVBox/BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
+[node name="SystemsVBox" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
 unique_name_in_owner = true
 layout_mode = 2
 

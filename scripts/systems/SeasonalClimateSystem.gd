@@ -8,6 +8,7 @@ extends RefCounted
 var generator: Object = null
 var time_system: Object = null
 var _light_update_counter: int = 0
+var _light_tex: Object = null
 
 func initialize(gen: Object, time_sys: Object = null) -> void:
 	generator = gen
@@ -43,7 +44,8 @@ func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	# Climate refresh every tick (GPU-only); biomes handled by separate cadence system
 	if world != null:
 		if "quick_update_climate" in generator:
-			generator.quick_update_climate()
+			var skip_light: bool = ("config" in generator and generator.config.use_gpu_all)
+			generator.quick_update_climate(skip_light)
 		# Update day-night light field EVERY tick to ensure continuous movement
 		_light_update_counter += 1
 		_update_light_field(world)  # Always update for continuous day-night cycle
@@ -82,18 +84,28 @@ func _update_light_field(world: Object) -> void:
 		"day_night_base": generator.config.day_night_base if generator.config else 0.25,
 		"day_night_contrast": generator.config.day_night_contrast if generator.config else 0.75
 	}
-	
-	
-	
-	# Evaluate light field on GPU
+
+	# GPU-only: write directly into persistent buffer + texture override
+	if "config" in generator and generator.config.use_gpu_all:
+		if _light_tex == null:
+			_light_tex = load("res://scripts/systems/LightTextureCompute.gd").new()
+		if "ensure_persistent_buffers" in generator:
+			generator.ensure_persistent_buffers(false)
+		var light_buf: RID = generator.get_persistent_buffer("light") if "get_persistent_buffer" in generator else RID()
+		if light_buf.is_valid():
+			var ok_gpu: bool = generator._climate_compute_gpu.evaluate_light_field_gpu(w, h, light_params, light_buf)
+			if ok_gpu and _light_tex:
+				var tex: Texture2D = _light_tex.update_from_buffer(w, h, light_buf)
+				if tex and "set_light_texture_override" in generator:
+					generator.set_light_texture_override(tex)
+				return
+		# GPU-only: do not fall back to CPU light generation
+		return
+	# Fallback: evaluate light field on GPU with readback
 	var light_field = generator._climate_compute_gpu.evaluate_light_field(w, h, light_params)
-	
-	# Store light field in generator for ASCII rendering
 	if light_field.size() == w * h:
 		generator.last_light = light_field
 	else:
-		# GPU light field generation failed - create CPU fallback
-		# GPU light field generation failed - use CPU fallback
 		_create_cpu_light_field(w, h, day_of_year, time_of_day)
 
 func _create_cpu_light_field(w: int, h: int, day_of_year: float, time_of_day: float) -> void:

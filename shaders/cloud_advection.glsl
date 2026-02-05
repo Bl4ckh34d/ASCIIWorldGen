@@ -68,8 +68,14 @@ void main(){
 
     // Injection from humidity proxy (source)
     float injected = mix(diffused, Source.source[i], clamp01(PC.inj_alpha));
-
-    OutC.out_cloud[i] = clamp01(injected);
+    // Mild sharpening to preserve structure over time
+    float sharp = clamp01(injected + (injected - nbr) * 0.35);
+    float c = clamp01(sharp);
+    float src = clamp01(Source.source[i]);
+    // Preserve regeneration from source
+    c = max(c, src * 0.8);
+    // Contrast to avoid uniform haze
+    c = clamp01((c - 0.1) * 1.15);
+    c = max(c, 0.1);
+    OutC.out_cloud[i] = c;
 }
-
-

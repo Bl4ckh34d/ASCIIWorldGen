@@ -4,7 +4,7 @@ extends Node
 signal tick(dt_days)
 
 var running: bool = false
-var time_scale: float = 0.2  # Slower time progression
+var time_scale: float = 1.0  # Base speed (1x)
 var tick_days: float = 1.0 / 1440.0 # 1 minute per tick (much smaller time steps)
 var simulation_time_days: float = 0.0
 var days_per_year: float = 365.0  # Configurable year length

@@ -6,6 +6,7 @@ extends RefCounted
 var generator: Object = null
 var compute: Object = null
 var time_system: Object = null
+var _lava_tex: Object = null
 
 # Rates per simulated day
 var decay_rate_per_day: float = 0.02
@@ -27,6 +28,39 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var size: int = w * h
 	if size <= 0:
 		return {}
+	var use_gpu_only: bool = ("config" in generator and generator.config.use_gpu_all)
+	var phase: float = 0.0
+	if world != null and "simulation_time_days" in world:
+		var days_per_year = time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else 365.0
+		phase = fposmod(float(world.simulation_time_days) / days_per_year, 1.0)
+	if use_gpu_only:
+		if "ensure_persistent_buffers" in generator:
+			generator.ensure_persistent_buffers(false)
+		var lava_buf: RID = generator.get_persistent_buffer("lava") if "get_persistent_buffer" in generator else RID()
+		var bnd_buf: RID = generator.get_persistent_buffer("plate_boundary") if "get_persistent_buffer" in generator else RID()
+		# If boundary buffer isn't ready, try to seed it from CPU mask once
+		if not bnd_buf.is_valid() and "_gpu_buffer_manager" in generator and generator._gpu_buffer_manager != null:
+			if "_plates_boundary_mask_i32" in generator and generator._plates_boundary_mask_i32 is PackedInt32Array and generator._plates_boundary_mask_i32.size() == size:
+				generator._gpu_buffer_manager.ensure_buffer("plate_boundary", size * 4, generator._plates_boundary_mask_i32.to_byte_array())
+				bnd_buf = generator.get_persistent_buffer("plate_boundary")
+		if lava_buf.is_valid() and bnd_buf.is_valid():
+			var ok_gpu: bool = compute.step_gpu_buffers(w, h, bnd_buf, lava_buf, dt_days, {
+				"decay_rate_per_day": decay_rate_per_day,
+				"spawn_boundary_rate_per_day": spawn_boundary_rate_per_day,
+				"hotspot_rate_per_day": hotspot_rate_per_day,
+				"hotspot_threshold": hotspot_threshold,
+				"boundary_spawn_threshold": boundary_spawn_threshold,
+			}, phase, int(generator.config.rng_seed))
+			if ok_gpu:
+				if _lava_tex == null:
+					_lava_tex = load("res://scripts/systems/LavaTextureCompute.gd").new()
+				if _lava_tex:
+					var tex: Texture2D = _lava_tex.update_from_buffer(w, h, lava_buf)
+					if tex and "set_lava_texture_override" in generator:
+						generator.set_lava_texture_override(tex)
+				return {"dirty_fields": PackedStringArray(["lava"]) }
+		# GPU-only: do not fall back to CPU volcanism
+		return {}
 	# Boundary mask provided by PlateSystem when available
 	var bnd_i32 := PackedInt32Array(); bnd_i32.resize(size)
 	if "_plates_boundary_mask_i32" in generator and generator._plates_boundary_mask_i32 is PackedInt32Array and generator._plates_boundary_mask_i32.size() == size:
@@ -35,10 +69,6 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var lava_in := PackedFloat32Array(); lava_in.resize(size)
 	for i in range(size):
 		lava_in[i] = float(generator.last_lava[i] if i < generator.last_lava.size() else 0)
-	var phase: float = 0.0
-	if world != null and "simulation_time_days" in world:
-		var days_per_year = time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else 365.0
-		phase = fposmod(float(world.simulation_time_days) / days_per_year, 1.0)
 	var out: PackedFloat32Array = compute.step(w, h, bnd_i32, lava_in, dt_days, {
 		"decay_rate_per_day": decay_rate_per_day,
 		"spawn_boundary_rate_per_day": spawn_boundary_rate_per_day,

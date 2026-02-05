@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://drgd8bavhmhmt"
+path="res://.godot/imported/cloud_moisture_couple.glsl-f5313c9fa1a4f19574fc9f4aca5f2601.res"
+
+[deps]
+
+source_file="res://shaders/cloud_moisture_couple.glsl"
+dest_files=["res://.godot/imported/cloud_moisture_couple.glsl-f5313c9fa1a4f19574fc9f4aca5f2601.res"]
+
+[params]
+

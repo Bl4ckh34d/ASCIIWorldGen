@@ -25,8 +25,12 @@ func ensure_buffer(name: String, size_bytes: int, initial_data: PackedByteArray 
 	# Create new buffer or resize existing
 	if existing.has("rid") and existing.rid.is_valid():
 		_rd.free_rid(existing.rid)
-	
-	var buffer_rid = _rd.storage_buffer_create(size_bytes, initial_data)
+	var init_bytes: PackedByteArray = initial_data
+	if init_bytes.size() == 0:
+		init_bytes = PackedByteArray()
+		init_bytes.resize(size_bytes)
+		init_bytes.fill(0)
+	var buffer_rid = _rd.storage_buffer_create(size_bytes, init_bytes)
 	_buffers[name] = {
 		"rid": buffer_rid,
 		"size": size_bytes,

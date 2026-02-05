@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dtn3y3ufs7l43"
+path="res://.godot/imported/world_data2_from_buffers.glsl-b828791a14b8e5135ec67ad06aba6dec.res"
+
+[deps]
+
+source_file="res://shaders/world_data2_from_buffers.glsl"
+dest_files=["res://.godot/imported/world_data2_from_buffers.glsl-b828791a14b8e5135ec67ad06aba6dec.res"]
+
+[params]
+

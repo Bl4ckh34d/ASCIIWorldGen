@@ -34,6 +34,7 @@ var _flow_compute: Object = null
 var _river_compute: Object = null
 var _lake_label_compute: Object = null
 var _gpu_buffer_manager: Object = null
+var _land_mask_compute: Object = null
 
 class Config:
 	var rng_seed: int = 0
@@ -56,9 +57,17 @@ class Config:
 	# Temperature extremes per seed (for Celsius scaling and lava)
 	var temp_min_c: float = -40.0
 	var temp_max_c: float = 70.0
-	var lava_temp_threshold_c: float = 75.0
+	var lava_temp_threshold_c: float = 120.0
 	# Rivers toggle
 	var rivers_enabled: bool = true
+	# River flow threshold (GPU path uses fixed threshold)
+	var river_threshold: float = 4.0
+	# Percentile for river seed selection (0.0..1.0)
+	var river_seed_percentile: float = 0.99
+	# Multiplier on percentile-derived threshold
+	var river_threshold_factor: float = 1.0
+	# Widen river deltas near coast
+	var river_delta_widening: bool = true
 	# Lakes toggle
 	var lakes_enabled: bool = true
 	# Climate jitter and continentality
@@ -100,6 +109,10 @@ class Config:
 	var prob_outflow_3: float = 0.05
 	# Horizontal noise stretch for ASCII aspect compensation (x multiplier applied to noise samples)
 	var noise_x_scale: float = 0.5
+	# Guardrails: prevent near-zero oceans when sea level is too low (0 disables clamp)
+	var min_ocean_fraction: float = 0.0
+	# Lakes shrink as oceans recede; when ocean_fraction == lake_fill_ocean_ref, lakes are full.
+	var lake_fill_ocean_ref: float = 1.0
 
 var config := Config.new()
 var debug_parity: bool = false
@@ -122,6 +135,7 @@ var last_distance_to_coast: PackedFloat32Array = PackedFloat32Array()
 var last_lava: PackedByteArray = PackedByteArray()
 var last_ocean_fraction: float = 0.0
 var last_shelf_value_noise_field: PackedFloat32Array = PackedFloat32Array()
+var last_desert_noise_field: PackedFloat32Array = PackedFloat32Array()
 var last_lake: PackedByteArray = PackedByteArray()
 var last_lake_id: PackedInt32Array = PackedInt32Array()
 var last_flow_dir: PackedInt32Array = PackedInt32Array()
@@ -129,7 +143,16 @@ var last_flow_accum: PackedFloat32Array = PackedFloat32Array()
 var last_river: PackedByteArray = PackedByteArray()
 var last_pooled_lake: PackedByteArray = PackedByteArray()
 var last_clouds: PackedFloat32Array = PackedFloat32Array()
+var last_river_seed_threshold: float = 4.0
+var cloud_texture_override: Texture2D = null
+var light_texture_override: Texture2D = null
+var river_texture_override: Texture2D = null
+var biome_texture_override: Texture2D = null
+var lava_texture_override: Texture2D = null
+var world_data_1_override: Texture2D = null
+var world_data_2_override: Texture2D = null
 var last_light: PackedFloat32Array = PackedFloat32Array()
+var biome_phase: float = 0.0
 
 # Exposed by PlateSystem for coupling (GPU boundary mask as i32)
 var _plates_boundary_mask_i32: PackedInt32Array = PackedInt32Array()
@@ -147,10 +170,15 @@ var debug_last_metrics: Dictionary = {}
 var _world_state: Object = null
 var _feature_noise_cache: Object = null
 var _climate_base: Dictionary = {}
+var _world_data1_tex_compute: Object = null
+var _world_data2_tex_compute: Object = null
+var _buffers_seeded: bool = false
+var _buffer_seed_size: int = 0
 
 func _init() -> void:
 	randomize()
 	config.rng_seed = randi()
+	biome_phase = _compute_biome_phase(config.rng_seed)
 	_setup_noises()
 	_setup_temperature_extremes()
 	# Initialize refactor scaffolding (kept unused in behavior for now)
@@ -165,6 +193,7 @@ func _init() -> void:
 	_gpu_buffer_manager = GPUBufferManager.new()
 
 func apply_config(dict: Dictionary) -> void:
+	var seed_changed: bool = dict.has("seed")
 	if dict.has("seed"):
 		var s: String = str(dict["seed"]) if typeof(dict["seed"]) != TYPE_NIL else ""
 		config.rng_seed = s.hash() if s.length() > 0 else randi()
@@ -184,6 +213,10 @@ func apply_config(dict: Dictionary) -> void:
 		config.warp = float(dict["warp"]) 
 	if dict.has("sea_level"):
 		config.sea_level = float(dict["sea_level"]) 
+	if dict.has("min_ocean_fraction"):
+		config.min_ocean_fraction = clamp(float(dict["min_ocean_fraction"]), 0.0, 0.95)
+	if dict.has("lake_fill_ocean_ref"):
+		config.lake_fill_ocean_ref = clamp(float(dict["lake_fill_ocean_ref"]), 0.05, 1.0)
 	if dict.has("shallow_threshold"):
 		config.shallow_threshold = float(dict["shallow_threshold"]) 
 	if dict.has("shore_band"):
@@ -204,7 +237,15 @@ func apply_config(dict: Dictionary) -> void:
 	if dict.has("temp_scale"):
 		config.temp_scale = float(dict["temp_scale"])
 	if dict.has("lava_temp_threshold_c"):
-		config.lava_temp_threshold_c = float(dict["lava_temp_threshold_c"]) 
+		config.lava_temp_threshold_c = max(120.0, float(dict["lava_temp_threshold_c"]))
+	if dict.has("river_threshold"):
+		config.river_threshold = max(0.0, float(dict["river_threshold"]))
+	if dict.has("river_seed_percentile"):
+		config.river_seed_percentile = clamp(float(dict["river_seed_percentile"]), 0.5, 0.9999)
+	if dict.has("river_threshold_factor"):
+		config.river_threshold_factor = clamp(float(dict["river_threshold_factor"]), 0.1, 5.0)
+	if dict.has("river_delta_widening"):
+		config.river_delta_widening = bool(dict["river_delta_widening"])
 	if dict.has("temp_base_offset"):
 		config.temp_base_offset = float(dict["temp_base_offset"]) 
 	if dict.has("temp_scale"):
@@ -257,6 +298,8 @@ func apply_config(dict: Dictionary) -> void:
 		config.prob_outflow_2 = float(dict["prob_outflow_2"])
 	if dict.has("prob_outflow_3"):
 		config.prob_outflow_3 = float(dict["prob_outflow_3"])
+	if seed_changed:
+		biome_phase = _compute_biome_phase(config.rng_seed)
 	_setup_noises()
 	# Only randomize temperature extremes if caller didn't override both
 	var override_extremes: bool = dict.has("temp_min_c") and dict.has("temp_max_c")
@@ -303,8 +346,81 @@ func _setup_temperature_extremes() -> void:
 	rng.seed = int(config.rng_seed) ^ 0x1234ABCD
 	config.temp_min_c = lerp(-50.0, -15.0, rng.randf())
 	config.temp_max_c = lerp(35.0, 85.0, rng.randf())
-	# Keep lava threshold independent of current extremes; enforce a hard minimum of 75°C
-	config.lava_temp_threshold_c = max(75.0, config.lava_temp_threshold_c)
+	# Keep lava threshold independent of current extremes; enforce a hard minimum of 120°C
+	config.lava_temp_threshold_c = max(120.0, config.lava_temp_threshold_c)
+
+func _compute_biome_phase(seed: int) -> float:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(seed) ^ 0xB16B00B5
+	return rng.randf()
+
+func _lake_fill_iterations(w: int, h: int, ocean_frac: float) -> int:
+	# More iterations for larger maps and low-ocean cases to avoid giant "lake blocks".
+	var base: int = max(96, int(ceil(float(max(w, h)) * 0.75)))
+	var scale: float = 1.0
+	if ocean_frac < 0.25:
+		scale = 1.25
+	if ocean_frac < 0.10:
+		scale = 1.5
+	return int(ceil(float(base) * scale))
+
+func _height_quantile(height_values: PackedFloat32Array, fraction: float) -> float:
+	var size: int = height_values.size()
+	if size <= 0:
+		return 0.0
+	var target: float = clamp(fraction, 0.0, 1.0)
+	var bins: int = 512
+	var counts := PackedInt32Array()
+	counts.resize(bins)
+	for h in height_values:
+		var t: float = clamp((h + 1.0) * 0.5, 0.0, 1.0)
+		var idx: int = int(t * float(bins - 1))
+		counts[idx] += 1
+	var threshold: int = int(ceil(target * float(size)))
+	var cumulative: int = 0
+	for i in range(bins):
+		cumulative += counts[i]
+		if cumulative >= threshold:
+			var bin_t: float = (float(i) + 0.5) / float(bins)
+			return lerp(-1.0, 1.0, bin_t)
+	return 1.0
+
+func _clamp_sea_level_for_min_ocean(height_values: PackedFloat32Array, desired_sea_level: float) -> float:
+	var result: float = desired_sea_level
+	if config.min_ocean_fraction <= 0.0 or height_values.size() == 0:
+		return result
+	var min_level: float = _height_quantile(height_values, config.min_ocean_fraction)
+	if result < min_level:
+		result = min_level
+	return result
+
+func _lake_fill_strength(ocean_frac: float) -> float:
+	var ref: float = max(0.0001, config.lake_fill_ocean_ref)
+	return clamp(ocean_frac / ref, 0.0, 1.0)
+
+func _compute_river_seed_threshold(
+		flow_accum: PackedFloat32Array,
+		is_land: PackedByteArray,
+		percentile: float,
+		min_threshold: float,
+		factor: float
+	) -> float:
+	var size: int = min(flow_accum.size(), is_land.size())
+	if size <= 0:
+		return min_threshold
+	var acc_vals: Array = []
+	acc_vals.resize(0)
+	for i in range(size):
+		if is_land[i] != 0:
+			acc_vals.append(flow_accum[i])
+	if acc_vals.is_empty():
+		return min_threshold
+	acc_vals.sort()
+	var frac: float = clamp(percentile, 0.5, 0.9999)
+	var idx_thr: int = clamp(int(floor(float(acc_vals.size() - 1) * frac)), 0, acc_vals.size() - 1)
+	var thr: float = float(acc_vals[idx_thr])
+	thr = max(min_threshold, thr * max(0.1, factor))
+	return thr
 
 func _rmse_f32(_a: PackedFloat32Array, _b: PackedFloat32Array, _mask: PackedByteArray = PackedByteArray()) -> float:
 	return 0.0
@@ -341,6 +457,15 @@ func clear() -> void:
 	last_biomes.clear()
 	last_clouds.clear()
 	last_light.clear()
+	world_data_1_override = null
+	world_data_2_override = null
+	cloud_texture_override = null
+	light_texture_override = null
+	river_texture_override = null
+	biome_texture_override = null
+	lava_texture_override = null
+	_buffers_seeded = false
+	_buffer_seed_size = 0
 	
 	# Clear GPU compute instances (they'll be recreated as needed)
 	_terrain_compute = null
@@ -353,7 +478,10 @@ func clear() -> void:
 	
 	# Clear GPU buffer manager
 	if _gpu_buffer_manager:
+		_gpu_buffer_manager.cleanup()
 		_gpu_buffer_manager = null
+	_buffers_seeded = false
+	_buffer_seed_size = 0
 	
 	# Clear stats dictionaries
 	tectonic_stats.clear()
@@ -415,6 +543,15 @@ func generate() -> PackedByteArray:
 	# Final surface height used for sea-level classification (after erosion). Initialized to base height.
 	last_height_final = last_height
 	last_is_land = terrain["is_land"]
+	# Clamp sea level if it would eliminate nearly all oceans, then recompute land mask.
+	var effective_sea_level: float = _clamp_sea_level_for_min_ocean(last_height_final, config.sea_level)
+	if abs(effective_sea_level - config.sea_level) > 0.000001:
+		config.sea_level = effective_sea_level
+	var size_init: int = w * h
+	if last_is_land.size() != size_init:
+		last_is_land.resize(size_init)
+	for i_init in range(size_init):
+		last_is_land[i_init] = 1 if last_height_final[i_init] > config.sea_level else 0
 
 	# Parity disabled in GPU-only mode
 	# OPTIMIZED: Track ocean coverage fraction efficiently
@@ -430,23 +567,35 @@ func generate() -> PackedByteArray:
 		_lake_label_compute = load("res://scripts/systems/LakeLabelCompute.gd").new()
 	# Strict GPU pooling path: compute E on GPU -> lake mask -> GPU labels
 	if config.realistic_pooling_enabled and config.use_gpu_pooling:
-		var E_out: Dictionary = DepressionFillCompute.new().compute_E(w, h, last_height, last_is_land, true, 96)
+		var iters: int = _lake_fill_iterations(w, h, last_ocean_fraction)
+		var E_out: Dictionary = DepressionFillCompute.new().compute_E(w, h, last_height, last_is_land, true, iters)
 		var lake_mask_gpu: PackedByteArray = E_out.get("lake", PackedByteArray())
+		# Guard against non-converged fills creating giant lake blocks
+		if lake_mask_gpu.size() == w * h and last_is_land.size() == w * h:
+			var land_ct: int = 0
+			var lake_ct: int = 0
+			for i_guard in range(w * h):
+				if last_is_land[i_guard] != 0:
+					land_ct += 1
+					if lake_mask_gpu[i_guard] != 0:
+						lake_ct += 1
+			var lake_ratio: float = float(lake_ct) / float(max(1, land_ct))
+			if lake_ratio > 0.45 and last_ocean_fraction < 0.15:
+				# Treat as invalid lake mask when oceans are tiny
+				lake_mask_gpu.fill(0)
 		var lake_mask_for_label: PackedByteArray = lake_mask_gpu
 		var E_gpu: PackedFloat32Array = E_out.get("E", PackedFloat32Array())
 		var size_gpu: int = w * h
 		if E_gpu.size() == size_gpu and lake_mask_gpu.size() == size_gpu:
-			var d: float = clamp(-config.sea_level, 0.0, 1.0)
-			if d > 0.0:
+			var lake_strength: float = _lake_fill_strength(last_ocean_fraction)
+			if lake_strength < 0.999:
 				lake_mask_for_label = lake_mask_gpu.duplicate()
 				for ii_d in range(size_gpu):
 					if last_is_land[ii_d] == 0:
 						lake_mask_for_label[ii_d] = 0
 						continue
 					var spill: float = E_gpu[ii_d]
-					var eff: float = spill
-					if config.sea_level < spill:
-						eff = spill - d * (spill - config.sea_level)
+					var eff: float = lerp(config.sea_level, spill, lake_strength)
 					var thresh: float = eff
 					if last_temperature.size() == w * h:
 						var t_norm_l: float = last_temperature[ii_d]
@@ -458,12 +607,7 @@ func generate() -> PackedByteArray:
 		if lake_mask_for_label.size() == w * h:
 			var lab: Dictionary = LakeLabelFromMaskCompute.new().label_from_mask(w, h, lake_mask_for_label, true)
 			if not lab.is_empty() and lab.has("lake") and lab.has("lake_id"):
-				var boundary_marked: PackedInt32Array = PourPointReduceCompute.new().mark_candidates(w, h, lake_mask_for_label, last_is_land, true)
-				var cand_lake_id: PackedInt32Array = lab["lake_id"]
-				if boundary_marked.size() == w * h:
-					for ii in range(w * h):
-						if boundary_marked[ii] == 0: cand_lake_id[ii] = 0
-				# For now, keep GPU labels; pour points selection TBD for full GPU
+				# Keep full lake_id labels for rendering; pour point selection TBD for full GPU.
 				pool_gpu = {"lake": lab["lake"], "lake_id": lab["lake_id"], "outflow_seeds": PackedInt32Array()}
 		if pool_gpu.has("lake") and pool_gpu.has("lake_id"):
 			last_lake = pool_gpu["lake"]
@@ -481,6 +625,7 @@ func generate() -> PackedByteArray:
 		}
 		_feature_noise_cache.build(cache_params)
 		last_shelf_value_noise_field = _feature_noise_cache.shelf_value_noise_field
+		last_desert_noise_field = _feature_noise_cache.desert_noise_field
 
 	# Step 2: shoreline features
 	var size: int = w * h
@@ -498,8 +643,11 @@ func generate() -> PackedByteArray:
 		for y in range(h):
 			for x in range(w):
 				var i2: int = x + y * w
-				shore_noise_field[i2] = _shore_noise.get_noise_2d(float(x) * sx_mul, float(y)) * 0.5 + 0.5
- 	# GPU distance-to-coast
+				var t: float = float(x) / float(max(1, w))
+				var n0: float = _shore_noise.get_noise_2d(float(x) * sx_mul, float(y))
+				var n1: float = _shore_noise.get_noise_2d((float(x) + float(w)) * sx_mul, float(y))
+				shore_noise_field[i2] = lerp(n0, n1, t) * 0.5 + 0.5
+	# GPU distance-to-coast
 	if _dt_compute == null:
 		_dt_compute = DistanceTransformCompute.new()
 	var d_gpu: PackedFloat32Array = _dt_compute.ocean_distance_to_land(w, h, last_is_land, true)
@@ -514,7 +662,7 @@ func generate() -> PackedByteArray:
 		last_beach = out_gpu.get("beach", last_beach)
 		last_turquoise_strength = out_gpu.get("turquoise_strength", last_turquoise_strength)
 
- 	# Step 3: climate via GPU
+	# Step 3: climate via GPU
 	params["distance_to_coast"] = last_water_distance
 	var climate: Dictionary
 	if _climate_compute_gpu == null:
@@ -525,19 +673,30 @@ func generate() -> PackedByteArray:
 	last_moisture = climate["moisture"]
 	last_distance_to_coast = last_water_distance
 
-	# OPTIMIZED: clouds overlay generation using fill()
-	if last_clouds.size() != w * h:
-		last_clouds.resize(w * h)
-		last_clouds.fill(0.0)  # Much faster than manual loop
+	# Initialize clouds overlay (GPU compute if available)
+	if config.use_gpu_clouds:
+		var cloud_compute: Object = load("res://scripts/systems/CloudOverlayCompute.gd").new()
+		var phase0: float = fposmod(config.season_phase, 1.0)
+		var clouds_init: PackedFloat32Array = cloud_compute.compute_clouds(w, h, last_temperature, last_moisture, last_is_land, phase0, int(config.rng_seed))
+		if clouds_init.size() == w * h:
+			last_clouds = clouds_init
+		else:
+			if last_clouds.size() != w * h:
+				last_clouds.resize(w * h)
+			last_clouds.fill(0.0)
+	else:
+		if last_clouds.size() != w * h:
+			last_clouds.resize(w * h)
+		last_clouds.fill(0.0)
 
- 	# Mountain radiance: run through ClimatePost GPU
+	# Mountain radiance: run through ClimatePost GPU
 	var climpost: Object = load("res://scripts/systems/ClimatePostCompute.gd").new()
 	var post: Dictionary = climpost.apply_mountain_radiance(w, h, last_biomes, last_temperature, last_moisture, config.mountain_cool_amp, config.mountain_wet_amp, max(0, config.mountain_radiance_passes))
 	if not post.is_empty():
 		last_temperature = post["temperature"]
 		last_moisture = post["moisture"]
 
- 	# Step 4: biomes — GPU compute
+	# Step 4: biomes -- GPU compute
 	var params2 := params.duplicate()
 	params2["freeze_temp_threshold"] = 0.16
 	params2["height_scale_m"] = config.height_scale_m
@@ -545,7 +704,7 @@ func generate() -> PackedByteArray:
 	# Animated biome jitter to avoid banding and allow evolution
 	params2["biome_noise_strength_c"] = 0.8
 	params2["biome_moist_jitter"] = 0.06
-	params2["biome_phase"] = float(Time.get_ticks_msec() % 60000) / 60000.0
+	params2["biome_phase"] = biome_phase
 	params2["biome_moist_jitter2"] = 0.03
 	params2["biome_moist_islands"] = 0.35
 	params2["biome_moist_elev_dry"] = 0.35
@@ -633,14 +792,18 @@ func generate() -> PackedByteArray:
 		if _river_compute == null:
 			_river_compute = RiverCompute.new()
 		var forced: PackedInt32Array = hydro2.get("outflow_seeds", PackedInt32Array())
-		var river_gpu: PackedByteArray = _river_compute.trace_rivers_roi(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, Rect2i(0,0,0,0), forced)
+		var thr_seed: float = _compute_river_seed_threshold(last_flow_accum, last_is_land, config.river_seed_percentile, config.river_threshold, config.river_threshold_factor)
+		last_river_seed_threshold = thr_seed
+		var river_gpu: PackedByteArray = _river_compute.trace_rivers_roi(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, thr_seed, 5, Rect2i(0,0,0,0), forced)
 		if river_gpu.size() == w * h:
 			last_river = river_gpu
 		# GPU river delta widening (post)
-		var rpost: Object = load("res://scripts/systems/RiverPostCompute.gd").new()
-		var widened: PackedByteArray = rpost.widen_deltas(w, h, last_river, last_is_land, last_water_distance, config.shore_band + config.shallow_threshold)
-		if widened.size() == w * h:
-			last_river = widened
+		if config.river_delta_widening:
+			var rpost: Object = load("res://scripts/systems/RiverPostCompute.gd").new()
+			var delta_shore_dist: float = min(config.shore_band, 2.0)
+			var widened: PackedByteArray = rpost.widen_deltas(w, h, last_river, last_is_land, last_water_distance, delta_shore_dist)
+			if widened.size() == w * h:
+				last_river = widened
 		# River meander (GPU): subtle lateral shifts
 		var meander: Object = load("res://scripts/systems/RiverMeanderCompute.gd").new()
 		var meandered: PackedByteArray = meander.step(w, h, last_flow_dir, last_flow_accum, last_river, float(1.0/120.0), 0.3, 0.2, fposmod(float(Time.get_ticks_msec()) / 1000.0, 1.0))
@@ -675,13 +838,32 @@ func generate() -> PackedByteArray:
 func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	# Fast path: only recompute artifacts depending on sea level.
 	# Requires that base terrain (last_height) already exists.
-	config.sea_level = new_sea_level
+	var prev_sea_level: float = config.sea_level
 	var w: int = config.width
 	var h: int = config.height
 	var size: int = w * h
 	if last_height.size() != size:
 		# No terrain yet; do full generate
 		return generate()
+	# If GPU systems have modified height, pull the latest height from GPU buffers
+	# so sea-level classification reflects the current terrain.
+	if config.use_gpu_all and _gpu_buffer_manager != null:
+		ensure_persistent_buffers(false)
+		var hbuf: RID = get_persistent_buffer("height")
+		if hbuf.is_valid():
+			var hbytes: PackedByteArray = PackedByteArray()
+			hbytes = _gpu_buffer_manager.read_buffer("height", "height") as PackedByteArray
+			var hvals: PackedFloat32Array = PackedFloat32Array()
+			hvals = hbytes.to_float32_array()
+			if hvals.size() == size:
+				last_height = hvals
+				last_height_final = hvals
+	if last_height_final.size() != size:
+		last_height_final = last_height
+	var desired_sea_level: float = new_sea_level
+	if last_height_final.size() == size:
+		desired_sea_level = _clamp_sea_level_for_min_ocean(last_height_final, desired_sea_level)
+	config.sea_level = desired_sea_level
 	# 1) Recompute land mask
 	if last_is_land.size() != size:
 		last_is_land.resize(size)
@@ -689,8 +871,28 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	prev_is_land.resize(size)
 	for i in range(size):
 		prev_is_land[i] = last_is_land[i] if i < last_is_land.size() else 0
-	for i in range(size):
-		last_is_land[i] = 1 if last_height_final[i] > config.sea_level else 0
+	var land_updated_gpu: bool = false
+	if config.use_gpu_all and _gpu_buffer_manager != null:
+		var land_buf: RID = get_persistent_buffer("is_land")
+		var hbuf2: RID = get_persistent_buffer("height")
+		if land_buf.is_valid() and hbuf2.is_valid():
+			if _land_mask_compute == null:
+				_land_mask_compute = load("res://scripts/systems/LandMaskCompute.gd").new()
+			land_updated_gpu = _land_mask_compute.update_from_height(w, h, hbuf2, config.sea_level, land_buf)
+			if land_updated_gpu:
+				var lbytes: PackedByteArray = PackedByteArray()
+				lbytes = _gpu_buffer_manager.read_buffer("is_land", "is_land") as PackedByteArray
+				var lvals: PackedInt32Array = PackedInt32Array()
+				lvals = lbytes.to_int32_array()
+				if lvals.size() == size:
+					for i in range(size):
+						last_is_land[i] = 1 if lvals[i] != 0 else 0
+	if not land_updated_gpu:
+		for i in range(size):
+			last_is_land[i] = 1 if last_height_final[i] > config.sea_level else 0
+		# Sync GPU land buffer immediately so rendering reflects new sea level
+		if config.use_gpu_all and _gpu_buffer_manager != null:
+			update_persistent_buffer("is_land", _pack_bytes_to_u32(last_is_land).to_byte_array())
 	# Update ocean fraction
 	var ocean_ct: int = 0
 	for ii in range(size):
@@ -715,13 +917,18 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		for yy in range(h):
 			for xx in range(w):
 				var ii: int = xx + yy * w
-				shore_noise_field[ii] = _shore_noise.get_noise_2d(float(xx), float(yy)) * 0.5 + 0.5
+				var t2: float = float(xx) / float(max(1, w))
+				var n0b: float = _shore_noise.get_noise_2d(float(xx) * config.noise_x_scale, float(yy))
+				var n1b: float = _shore_noise.get_noise_2d((float(xx) + float(w)) * config.noise_x_scale, float(yy))
+				shore_noise_field[ii] = lerp(n0b, n1b, t2) * 0.5 + 0.5
 	# Distance to coast on GPU
 	if _dt_compute == null:
 		_dt_compute = DistanceTransformCompute.new()
 	var d_gpu2: PackedFloat32Array = _dt_compute.ocean_distance_to_land(w, h, last_is_land, true)
 	if d_gpu2.size() == w * h:
 		last_water_distance = d_gpu2
+		if config.use_gpu_all and _gpu_buffer_manager != null:
+			update_persistent_buffer("distance", last_water_distance.to_byte_array())
 	# Shelf features on GPU using finalized distance
 	if _shelf_compute == null:
 		_shelf_compute = ContinentalShelfCompute.new()
@@ -730,6 +937,8 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_turquoise_water = out_gpu2.get("turquoise_water", last_turquoise_water)
 		last_beach = out_gpu2.get("beach", last_beach)
 		last_turquoise_strength = out_gpu2.get("turquoise_strength", last_turquoise_strength)
+		if config.use_gpu_all and _gpu_buffer_manager != null:
+			update_persistent_buffer("beach", _pack_bytes_to_u32(last_beach).to_byte_array())
 	# 3) Recompute climate fields to reflect new coastline and sea coverage
 	var params := {
 		"width": w,
@@ -753,6 +962,10 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		"season_amp_equator": config.season_amp_equator,
 		"season_amp_pole": config.season_amp_pole,
 		"season_ocean_damp": config.season_ocean_damp,
+		"diurnal_amp_equator": config.diurnal_amp_equator,
+		"diurnal_amp_pole": config.diurnal_amp_pole,
+		"diurnal_ocean_damp": config.diurnal_ocean_damp,
+		"time_of_day": config.time_of_day,
 	}
 	params["distance_to_coast"] = last_water_distance
 	var climate: Dictionary
@@ -762,6 +975,11 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	last_temperature = climate["temperature"]
 	last_moisture = climate["moisture"]
 	last_distance_to_coast = last_water_distance
+	if config.use_gpu_all and _gpu_buffer_manager != null:
+		update_persistent_buffer("temperature", last_temperature.to_byte_array())
+		update_persistent_buffer("moisture", last_moisture.to_byte_array())
+		update_persistent_buffer("biome_temp", last_temperature.to_byte_array())
+		update_persistent_buffer("biome_moist", last_moisture.to_byte_array())
 
 	# 5) Reclassify biomes using updated climate (band-limited near coastline)
 	var params2 := params.duplicate()
@@ -769,6 +987,13 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	params2["height_scale_m"] = config.height_scale_m
 	params2["lapse_c_per_km"] = 5.5
 	params2["continentality_scale"] = config.continentality_scale
+	# Keep biome jitter parameters consistent with initial generation
+	params2["biome_noise_strength_c"] = 0.8
+	params2["biome_moist_jitter"] = 0.06
+	params2["biome_phase"] = biome_phase
+	params2["biome_moist_jitter2"] = 0.03
+	params2["biome_moist_islands"] = 0.35
+	params2["biome_moist_elev_dry"] = 0.35
 	var new_biomes := PackedInt32Array()
 	if config.use_gpu_all:
 		var desert_field2 := PackedFloat32Array()
@@ -796,7 +1021,8 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		if in_band:
 			band_count += 1
 	var frac: float = float(band_count) / float(max(1, size))
-	var merge_partial: bool = frac < 0.25
+	var allow_full_replace: bool = abs(config.sea_level - prev_sea_level) > 0.12
+	var merge_partial: bool = not allow_full_replace
 	if last_biomes.size() != size:
 		last_biomes.resize(size)
 	if merge_partial:
@@ -807,9 +1033,13 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_biomes = new_biomes
 	_ensure_valid_biomes()
 	# Centralized hot/cold/lava application
-	var post2: Dictionary = BiomePost.new().apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c, last_lake, last_pooled_lake)
-	last_biomes = post2["biomes"]
-	last_lava = post2["lava"]
+	var bp2: Object = load("res://scripts/systems/BiomePostCompute.gd").new()
+	var post2: Dictionary = bp2.apply_overrides_and_lava(w, h, last_is_land, last_temperature, last_moisture, last_biomes, config.temp_min_c, config.temp_max_c, config.lava_temp_threshold_c, last_lake, 0.0)
+	if not post2.is_empty():
+		last_biomes = post2.get("biomes", last_biomes)
+		last_lava = post2.get("lava", last_lava)
+	if config.use_gpu_all and _gpu_buffer_manager != null:
+		update_persistent_buffer("biome_id", last_biomes.to_byte_array())
 
 	# 6) Lakes and rivers recompute on sea-level change (order: lakes, then rivers)
 	if config.use_gpu_all:
@@ -820,25 +1050,36 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		var pool2: Dictionary
 		if config.realistic_pooling_enabled and config.lakes_enabled:
 			# Sea-level quick path: prefer GPU fill+label, fallback to CPU strict pooling
-			var E2: Dictionary = DepressionFillCompute.new().compute_E(w, h, last_height, last_is_land, true, 64)
+			var iters2: int = _lake_fill_iterations(w, h, last_ocean_fraction)
+			var E2: Dictionary = DepressionFillCompute.new().compute_E(w, h, last_height, last_is_land, true, iters2)
 			var lake_mask2: PackedByteArray = E2.get("lake", PackedByteArray())
 			# Drying coupling during quick sea-level updates (GPU)
 			var lake_mask2_adj: PackedByteArray = lake_mask2
 			var E2f: PackedFloat32Array = E2.get("E", PackedFloat32Array())
 			var size_q: int = w * h
 			if E2f.size() == size_q and lake_mask2.size() == size_q:
-				var d2: float = clamp(-config.sea_level, 0.0, 1.0)
-				if d2 > 0.0:
+				var lake_strength2: float = _lake_fill_strength(last_ocean_fraction)
+				if lake_strength2 < 0.999:
 					lake_mask2_adj = lake_mask2.duplicate()
 					for qi in range(size_q):
 						if last_is_land[qi] == 0:
 							lake_mask2_adj[qi] = 0
 							continue
 						var spill_q: float = E2f[qi]
-						var eff_q: float = spill_q
-						if config.sea_level < spill_q:
-							eff_q = spill_q - d2 * (spill_q - config.sea_level)
+						var eff_q: float = lerp(config.sea_level, spill_q, lake_strength2)
 						lake_mask2_adj[qi] = (1 if last_height[qi] < eff_q else 0)
+			# Guard against non-converged fills creating giant lake blocks
+			if lake_mask2_adj.size() == size_q and last_is_land.size() == size_q:
+				var land_ct2: int = 0
+				var lake_ct2: int = 0
+				for gi in range(size_q):
+					if last_is_land[gi] != 0:
+						land_ct2 += 1
+						if lake_mask2_adj[gi] != 0:
+							lake_ct2 += 1
+				var lake_ratio2: float = float(lake_ct2) / float(max(1, land_ct2))
+				if lake_ratio2 > 0.45 and last_ocean_fraction < 0.15:
+					lake_mask2_adj.fill(0)
 			var pool2_gpu := {}
 			if lake_mask2_adj.size() == w * h:
 				var lab2: Dictionary = LakeLabelFromMaskCompute.new().label_from_mask(w, h, lake_mask2_adj, true)
@@ -871,14 +1112,18 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		if _river_compute == null:
 			_river_compute = RiverCompute.new()
 		var forced2: PackedInt32Array = pool2.get("outflow_seeds", PackedInt32Array())
-		var river_gpu: PackedByteArray = _river_compute.trace_rivers_roi(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, Rect2i(0,0,0,0), forced2)
+		var thr_seed2: float = _compute_river_seed_threshold(last_flow_accum, last_is_land, config.river_seed_percentile, config.river_threshold, config.river_threshold_factor)
+		last_river_seed_threshold = thr_seed2
+		var river_gpu: PackedByteArray = _river_compute.trace_rivers_roi(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, thr_seed2, 5, Rect2i(0,0,0,0), forced2)
 		if river_gpu.size() == w * h:
 			last_river = river_gpu
 		# Delta widening (GPU/CPU)
-		var rpost: Object = load("res://scripts/systems/RiverPostCompute.gd").new()
-		var widened: PackedByteArray = rpost.widen_deltas(w, h, last_river, last_is_land, last_water_distance, config.shore_band + config.shallow_threshold)
-		if widened.size() == w * h:
-			last_river = widened
+		if config.river_delta_widening:
+			var rpost: Object = load("res://scripts/systems/RiverPostCompute.gd").new()
+			var delta_shore_dist2: float = min(config.shore_band, 2.0)
+			var widened: PackedByteArray = rpost.widen_deltas(w, h, last_river, last_is_land, last_water_distance, delta_shore_dist2)
+			if widened.size() == w * h:
+				last_river = widened
 		# Freeze gating
 		for gi2 in range(size):
 			if last_is_land[gi2] == 0:
@@ -900,10 +1145,14 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 			last_river[kk] = 0
 
 	# Lava mask computed in BiomePost
+	if config.use_gpu_all and _gpu_buffer_manager != null:
+		ensure_persistent_buffers(true)
+	if config.use_gpu_all and _gpu_buffer_manager != null:
+		ensure_persistent_buffers(true)
 	return last_is_land
 
 
-func quick_update_climate() -> void:
+func quick_update_climate(skip_light: bool = false) -> void:
 	# Recompute only climate (temperature/moisture/precip) using existing terrain, land mask,
 	# water distance, and seasonal parameters. Also re-apply mountain radiance.
 	var w: int = config.width
@@ -911,6 +1160,8 @@ func quick_update_climate() -> void:
 	var size: int = w * h
 	if last_height.size() != size or last_is_land.size() != size:
 		return
+	if config.use_gpu_all and _gpu_buffer_manager != null:
+		ensure_persistent_buffers(false)
 	# Build climate params from current config and state
 	var params := {
 		"width": w,
@@ -950,9 +1201,20 @@ func quick_update_climate() -> void:
 	# Fast path: if only seasonal/diurnal phases changed, use cycle_apply_only
 	# This is a simplification - in a full implementation you'd track what changed
 	var use_fast_path = last_temperature.size() == size
-	
-	if use_fast_path:
-		# Apply only cycles to existing temperature
+	var gpu_only: bool = config.use_gpu_all and _gpu_buffer_manager != null
+	var used_gpu_fast: bool = false
+	var updated_moisture: bool = false
+	if use_fast_path and gpu_only:
+		var temp_buf := get_persistent_buffer("temperature")
+		var land_buf := get_persistent_buffer("is_land")
+		var dist_buf := get_persistent_buffer("distance")
+		if temp_buf.is_valid() and land_buf.is_valid() and dist_buf.is_valid():
+			used_gpu_fast = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_buf, land_buf, dist_buf, params, temp_buf)
+	if gpu_only and not used_gpu_fast:
+		# GPU-only: do not fall back to CPU climate updates
+		return
+	if use_fast_path and not used_gpu_fast:
+		# Apply only cycles to existing temperature (CPU readback path)
 		last_temperature = _climate_compute_gpu.apply_cycles_only(w, h, last_temperature, last_is_land, last_water_distance, params)
 	else:
 		# Full climate recompute
@@ -960,19 +1222,31 @@ func quick_update_climate() -> void:
 		if climate.size() > 0:
 			last_temperature = climate.get("temperature", last_temperature)
 			last_moisture = climate.get("moisture", last_moisture)
+			updated_moisture = true
 			# Apply mountain radiance smoothing on updated climate (GPU)
 			var climpost: Object = load("res://scripts/systems/ClimatePostCompute.gd").new()
 			var post: Dictionary = climpost.apply_mountain_radiance(w, h, last_biomes, last_temperature, last_moisture, config.mountain_cool_amp, config.mountain_wet_amp, max(0, config.mountain_radiance_passes))
 			if not post.is_empty():
 				last_temperature = post["temperature"]
 				last_moisture = post["moisture"]
+				updated_moisture = true
 	
-	# Always update light field (cheap)
-	last_light = _climate_compute_gpu.evaluate_light_field(w, h, params)
-	# Fallback if light field evaluation failed
-	if last_light.size() != w * h:
-		last_light.resize(w * h)
-		last_light.fill(1.0)  # Default to full brightness
+	# Always update light field unless caller skips (GPU light override path)
+	if not skip_light and not gpu_only:
+		last_light = _climate_compute_gpu.evaluate_light_field(w, h, params)
+		# Fallback if light field evaluation failed
+		if last_light.size() != w * h:
+			last_light.resize(w * h)
+			last_light.fill(1.0)  # Default to full brightness
+	# Keep GPU persistent buffers in sync for GPU-only simulation
+	if config.use_gpu_all and _gpu_buffer_manager != null:
+		# Only update GPU buffers from CPU arrays when CPU arrays are current.
+		if not used_gpu_fast:
+			update_persistent_buffer("temperature", last_temperature.to_byte_array())
+		if updated_moisture:
+			update_persistent_buffer("moisture", last_moisture.to_byte_array())
+		if not skip_light and last_light.size() == w * h:
+			update_persistent_buffer("light", last_light.to_byte_array())
 
 func quick_update_biomes() -> void:
 	# Reclassify biomes using current climate (temperature/moisture) and height/land/beach.
@@ -995,7 +1269,7 @@ func quick_update_biomes() -> void:
 	# Animated biome jitter to avoid banding and allow evolution
 	params2["biome_noise_strength_c"] = 0.8
 	params2["biome_moist_jitter"] = 0.06
-	params2["biome_phase"] = float(Time.get_ticks_msec() % 60000) / 60000.0
+	params2["biome_phase"] = biome_phase
 	params2["biome_moist_jitter2"] = 0.03
 	params2["biome_moist_islands"] = 0.35
 	params2["biome_moist_elev_dry"] = 0.35
@@ -1033,13 +1307,17 @@ func quick_update_flow_rivers() -> void:
 		if _river_compute == null:
 			_river_compute = RiverCompute.new()
 		var forced: PackedInt32Array = fc_out.get("outflow_seeds", PackedInt32Array())
-		var river_gpu: PackedByteArray = _river_compute.trace_rivers_roi(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, 0.97, 5, Rect2i(0,0,0,0), forced)
+		var thr_seed3: float = _compute_river_seed_threshold(last_flow_accum, last_is_land, config.river_seed_percentile, config.river_threshold, config.river_threshold_factor)
+		last_river_seed_threshold = thr_seed3
+		var river_gpu: PackedByteArray = _river_compute.trace_rivers_roi(w, h, last_is_land, last_lake, last_flow_dir, last_flow_accum, thr_seed3, 5, Rect2i(0,0,0,0), forced)
 		if river_gpu.size() == size:
 			last_river = river_gpu
-			var rpost: Object = load("res://scripts/systems/RiverPostCompute.gd").new()
-			var widened: PackedByteArray = rpost.widen_deltas(w, h, last_river, last_is_land, last_water_distance, config.shore_band + config.shallow_threshold)
-			if widened.size() == size:
-				last_river = widened
+			if config.river_delta_widening:
+				var rpost: Object = load("res://scripts/systems/RiverPostCompute.gd").new()
+				var delta_shore_dist3: float = min(config.shore_band, 2.0)
+				var widened: PackedByteArray = rpost.widen_deltas(w, h, last_river, last_is_land, last_water_distance, delta_shore_dist3)
+				if widened.size() == size:
+					last_river = widened
 
 func get_width() -> int:
 	return config.width
@@ -1299,7 +1577,7 @@ func _apply_hot_temperature_override(w: int, h: int) -> void:
 			if t_c >= t_c_threshold and t_c < config.lava_temp_threshold_c:
 				var m: float = (last_moisture[i] if i < last_moisture.size() else 0.5)
 				var b: int = last_biomes[i]
-				# Very dry → deserts
+				# Very dry -> deserts
 				if m < 0.40:
 					var hot: float = clamp((t_norm - 0.60) * 2.4, 0.0, 1.0)
 					var noise_val: float = n.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
@@ -1331,30 +1609,57 @@ func _apply_cold_temperature_override(w: int, h: int) -> void:
 					last_biomes[i] = BiomeClassifier.Biome.WASTELAND
 
 # GPU Buffer Management for Persistent SSBOs
-func ensure_persistent_buffers() -> void:
+func ensure_persistent_buffers(refresh: bool = true) -> void:
 	"""Allocate persistent GPU buffers for all major world data"""
 	if _gpu_buffer_manager == null:
-		return
+		_gpu_buffer_manager = GPUBufferManager.new()
 	
 	var size = config.width * config.height
 	var float_size = size * 4  # 4 bytes per float32
 	var _byte_size = size      # 1 byte per byte
 	var int_size = size * 4   # 4 bytes per int32
+	if refresh:
+		_buffers_seeded = true
+		_buffer_seed_size = size
+	if refresh and last_light.size() != size:
+		last_light.resize(size)
+		last_light.fill(1.0)
 	
 	# Allocate persistent buffers for common data
-	_gpu_buffer_manager.ensure_buffer("height", float_size, last_height.to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("is_land", int_size, _pack_bytes_to_u32(last_is_land).to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("temperature", float_size, last_temperature.to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("moisture", float_size, last_moisture.to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("flow_dir", int_size, last_flow_dir.to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("flow_accum", float_size, last_flow_accum.to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("biome_id", int_size, last_biomes.to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("river", int_size, _pack_bytes_to_u32(last_river).to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("lake", int_size, _pack_bytes_to_u32(last_lake).to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("lake_id", int_size, last_lake_id.to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("distance", float_size, last_distance_to_coast.to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("clouds", float_size, last_clouds.to_byte_array())
-	_gpu_buffer_manager.ensure_buffer("light", float_size, last_light.to_byte_array())
+	_gpu_buffer_manager.ensure_buffer("height", float_size, last_height.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("height_tmp", float_size)
+	_gpu_buffer_manager.ensure_buffer("is_land", int_size, _pack_bytes_to_u32(last_is_land).to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("temperature", float_size, last_temperature.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("moisture", float_size, last_moisture.to_byte_array() if refresh else PackedByteArray())
+	# Slow-moving climate buffers for biome evolution
+	_gpu_buffer_manager.ensure_buffer("biome_temp", float_size, last_temperature.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("biome_moist", float_size, last_moisture.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("flow_dir", int_size, last_flow_dir.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("flow_accum", float_size, last_flow_accum.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("biome_id", int_size, last_biomes.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("biome_tmp", int_size)
+	_gpu_buffer_manager.ensure_buffer("beach", int_size, _pack_bytes_to_u32(last_beach).to_byte_array() if refresh else PackedByteArray())
+	if last_desert_noise_field.size() == size:
+		_gpu_buffer_manager.ensure_buffer("desert_noise", float_size, last_desert_noise_field.to_byte_array() if refresh else PackedByteArray())
+	else:
+		_gpu_buffer_manager.ensure_buffer("desert_noise", float_size)
+	_gpu_buffer_manager.ensure_buffer("river", int_size, _pack_bytes_to_u32(last_river).to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("lake", int_size, _pack_bytes_to_u32(last_lake).to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("lake_id", int_size, last_lake_id.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("distance", float_size, last_distance_to_coast.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("clouds", float_size, last_clouds.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("light", float_size, last_light.to_byte_array() if refresh else PackedByteArray())
+	var lava_bytes := PackedByteArray()
+	if refresh:
+		var lava_f32 := PackedFloat32Array()
+		lava_f32.resize(size)
+		for i in range(size):
+			lava_f32[i] = 1.0 if (i < last_lava.size() and last_lava[i] != 0) else 0.0
+		lava_bytes = lava_f32.to_byte_array()
+	_gpu_buffer_manager.ensure_buffer("lava", float_size, lava_bytes)
+	_gpu_buffer_manager.ensure_buffer("wind_u", float_size)
+	_gpu_buffer_manager.ensure_buffer("wind_v", float_size)
+	_gpu_buffer_manager.ensure_buffer("cloud_source", float_size)
 
 func _pack_bytes_to_u32(byte_array: PackedByteArray) -> PackedInt32Array:
 	"""Convert PackedByteArray to PackedInt32Array for GPU use"""
@@ -1388,7 +1693,65 @@ func get_buffer_memory_stats() -> Dictionary:
 		return {"error": "Buffer manager not initialized"}
 	return _gpu_buffer_manager.get_buffer_stats()
 
+func update_base_textures_gpu() -> void:
+	"""Update base world textures (data1/data2) directly from GPU buffers."""
+	if not config.use_gpu_all or _gpu_buffer_manager == null:
+		return
+	var size: int = config.width * config.height
+	var seed_needed: bool = (not _buffers_seeded) or (_buffer_seed_size != size)
+	ensure_persistent_buffers(seed_needed)
+	if _world_data1_tex_compute == null:
+		_world_data1_tex_compute = load("res://scripts/systems/WorldData1TextureCompute.gd").new()
+	if _world_data2_tex_compute == null:
+		_world_data2_tex_compute = load("res://scripts/systems/WorldData2TextureCompute.gd").new()
+	var w: int = config.width
+	var h: int = config.height
+	var height_buf := get_persistent_buffer("height")
+	var temp_buf := get_persistent_buffer("temperature")
+	var moist_buf := get_persistent_buffer("moisture")
+	var light_buf := get_persistent_buffer("light")
+	var biome_buf := get_persistent_buffer("biome_id")
+	var land_buf := get_persistent_buffer("is_land")
+	var beach_buf := get_persistent_buffer("beach")
+	if height_buf.is_valid() and temp_buf.is_valid() and moist_buf.is_valid() and light_buf.is_valid():
+		var tex1: Texture2D = _world_data1_tex_compute.update_from_buffers(w, h, height_buf, temp_buf, moist_buf, light_buf)
+		if tex1:
+			world_data_1_override = tex1
+		else:
+			world_data_1_override = null
+	else:
+		world_data_1_override = null
+	if biome_buf.is_valid() and land_buf.is_valid() and beach_buf.is_valid():
+		var tex2: Texture2D = _world_data2_tex_compute.update_from_buffers(w, h, biome_buf, land_buf, beach_buf)
+		if tex2:
+			world_data_2_override = tex2
+		else:
+			world_data_2_override = null
+	else:
+		world_data_2_override = null
+
 func cleanup_gpu_resources() -> void:
 	"""Clean up GPU resources when shutting down"""
 	if _gpu_buffer_manager != null:
 		_gpu_buffer_manager.cleanup()
+
+func set_cloud_texture_override(tex: Texture2D) -> void:
+	cloud_texture_override = tex
+
+func set_light_texture_override(tex: Texture2D) -> void:
+	light_texture_override = tex
+
+func set_river_texture_override(tex: Texture2D) -> void:
+	river_texture_override = tex
+
+func set_biome_texture_override(tex: Texture2D) -> void:
+	biome_texture_override = tex
+
+func set_lava_texture_override(tex: Texture2D) -> void:
+	lava_texture_override = tex
+
+func set_world_data_1_override(tex: Texture2D) -> void:
+	world_data_1_override = tex
+
+func set_world_data_2_override(tex: Texture2D) -> void:
+	world_data_2_override = tex

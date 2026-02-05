@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bgwk5wptuqyj4"
+path="res://.godot/imported/light_buffer_to_tex.glsl-d4ebc0a266843e7c134ec23af5fe9189.res"
+
+[deps]
+
+source_file="res://shaders/light_buffer_to_tex.glsl"
+dest_files=["res://.godot/imported/light_buffer_to_tex.glsl-d4ebc0a266843e7c134ec23af5fe9189.res"]
+
+[params]
+

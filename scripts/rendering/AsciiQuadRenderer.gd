@@ -12,7 +12,16 @@ var viewport: SubViewport
 var mesh_instance: MeshInstance2D
 var quad_material: Material
 var quad_mesh: QuadMesh
-var display_rect: TextureRect
+var display_rect: ColorRect
+var cloud_rect: ColorRect
+var cloud_material: Material
+var cloud_texture_override: Texture2D
+var light_texture_override: Texture2D
+var river_texture_override: Texture2D
+var biome_texture_override: Texture2D
+var lava_texture_override: Texture2D
+var world_data_1_override: Texture2D
+var world_data_2_override: Texture2D
 
 # Data managers
 var font_atlas_generator: Object
@@ -32,13 +41,23 @@ var needs_mesh_update: bool = false
 func _init():
 	# Create and configure viewport
 	viewport = SubViewport.new()
+	viewport.disable_3d = true
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
 	add_child(viewport)
-	# Present the SubViewport via a TextureRect so it is visible in the scene
-	display_rect = TextureRect.new()
+	# Present the output via a ColorRect (shader-driven)
+	display_rect = ColorRect.new()
 	display_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	display_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	display_rect.color = Color(1, 1, 1, 1)
 	add_child(display_rect)
+	# Cloud overlay (separate tile layer)
+	cloud_rect = ColorRect.new()
+	cloud_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cloud_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cloud_rect.color = Color(1, 1, 1, 1)
+	cloud_rect.z_index = 50
+	add_child(cloud_rect)
 	
 	# Create data managers
 	var WorldDataTextureManagerClass = load("res://scripts/rendering/WorldDataTextureManager.gd")
@@ -59,7 +78,10 @@ func initialize_rendering(font: Font, font_size: int, width: int, height: int) -
 	var viewport_width = width * cell_size.x
 	var viewport_height = height * cell_size.y
 	viewport.size = Vector2i(int(viewport_width), int(viewport_height))
-	size = Vector2(viewport_width, viewport_height)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var parent_ctrl := get_parent() as Control
+	if parent_ctrl:
+		size = parent_ctrl.size
 	
 	# Create rendering components
 	_create_quad_mesh()
@@ -69,8 +91,7 @@ func initialize_rendering(font: Font, font_size: int, width: int, height: int) -
 	is_initialized = true
 	needs_mesh_update = true
 	
-	# Bind the viewport texture for display
-	display_rect.texture = viewport.get_texture()
+	# display_rect is shader-driven; no texture binding needed
 	
 	# debug removed
 
@@ -83,6 +104,7 @@ func _create_material() -> void:
 	"""Create shader material for ASCII rendering"""
 	# Try to load the ASCII rendering shader
 	var shader = load("res://shaders/rendering/ascii_quad_render.gdshader")
+	var cloud_shader = load("res://shaders/rendering/cloud_overlay.gdshader")
 	
 	if shader:
 		quad_material = ShaderMaterial.new()
@@ -97,6 +119,16 @@ func _create_material() -> void:
 		quad_material.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
 		quad_material.set_shader_parameter("cell_size", cell_size)
 		quad_material.set_shader_parameter("atlas_uv_size", Vector2(1.0/16.0, 1.0/6.0))
+		quad_material.set_shader_parameter("sea_level", 0.0)
+		quad_material.set_shader_parameter("cloud_shadow_strength", 0.25)
+		quad_material.set_shader_parameter("cloud_light_strength", 0.25)
+		quad_material.set_shader_parameter("cloud_shadow_offset", Vector2(1.5, 1.0))
+		quad_material.set_shader_parameter("use_glyphs", 0)
+		quad_material.set_shader_parameter("use_cloud_texture", 0)
+		quad_material.set_shader_parameter("use_light_texture", 0)
+		quad_material.set_shader_parameter("use_river_texture", 0)
+		quad_material.set_shader_parameter("use_biome_texture", 0)
+		quad_material.set_shader_parameter("use_lava_texture", 0)
 
 		# Provide safe default textures to avoid null uniforms before first update
 		var black_img := Image.create(1, 1, false, Image.FORMAT_RGBA8)
@@ -107,7 +139,49 @@ func _create_material() -> void:
 		var tex_white := ImageTexture.new(); tex_white.set_image(white_img)
 		quad_material.set_shader_parameter("world_data_1", tex_black)
 		quad_material.set_shader_parameter("world_data_2", tex_black)
+		quad_material.set_shader_parameter("world_data_3", tex_black)
+		quad_material.set_shader_parameter("world_data_4", tex_black)
 		quad_material.set_shader_parameter("color_palette", tex_white)
+		quad_material.set_shader_parameter("light_texture", tex_black)
+		quad_material.set_shader_parameter("river_texture", tex_black)
+		quad_material.set_shader_parameter("biome_texture", tex_black)
+		quad_material.set_shader_parameter("lava_texture", tex_black)
+		
+		# Render directly on the display rect to avoid SubViewport black-screen issues
+		if display_rect:
+			display_rect.material = quad_material
+			# Default to normal rendering
+			if quad_material is ShaderMaterial:
+				var shader_mat = quad_material as ShaderMaterial
+				shader_mat.set_shader_parameter("debug_mode", 0)
+		# Cloud overlay material
+		if cloud_shader:
+			cloud_material = ShaderMaterial.new()
+			cloud_material.shader = cloud_shader
+			if cloud_rect:
+				cloud_rect.material = cloud_material
+				cloud_rect.visible = true
+			# Default uniforms to safe textures
+			var black_img2 := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+			black_img2.fill(Color(0, 0, 0, 1))
+			var tex_black2 := ImageTexture.new(); tex_black2.set_image(black_img2)
+			if cloud_material is ShaderMaterial:
+				var cloud_mat := cloud_material as ShaderMaterial
+				cloud_mat.set_shader_parameter("world_data_1", tex_black2)
+				cloud_mat.set_shader_parameter("world_data_3", tex_black2)
+				cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
+				cloud_mat.set_shader_parameter("cloud_opacity", 1.0)
+				cloud_mat.set_shader_parameter("cloud_min", 0.08)
+				cloud_mat.set_shader_parameter("cloud_levels", 5.0)
+				cloud_mat.set_shader_parameter("cloud_power", 0.7)
+				cloud_mat.set_shader_parameter("cloud_brightness", 1.1)
+				cloud_mat.set_shader_parameter("cloud_night_alpha", 0.35)
+				cloud_mat.set_shader_parameter("light_texture", tex_black2)
+				cloud_mat.set_shader_parameter("use_cloud_texture", 0)
+				cloud_mat.set_shader_parameter("use_light_texture", 0)
+		else:
+			if cloud_rect:
+				cloud_rect.visible = false
 		
 		pass
 	else:
@@ -130,7 +204,18 @@ func update_world_data(
 	biome_data: PackedInt32Array,
 	is_land_data: PackedByteArray,
 	beach_mask: PackedByteArray,
-	rng_seed: int
+	rng_seed: int,
+	turquoise_strength: PackedFloat32Array = PackedFloat32Array(),
+	shelf_noise: PackedFloat32Array = PackedFloat32Array(),
+	clouds: PackedFloat32Array = PackedFloat32Array(),
+	plate_boundary_mask: PackedByteArray = PackedByteArray(),
+	lake_mask: PackedByteArray = PackedByteArray(),
+	river_mask: PackedByteArray = PackedByteArray(),
+	lava_mask: PackedByteArray = PackedByteArray(),
+	pooled_lake_mask: PackedByteArray = PackedByteArray(),
+	lake_id: PackedInt32Array = PackedInt32Array(),
+	sea_level: float = 0.0,
+	skip_base_textures: bool = false
 ) -> void:
 	"""Update world data for rendering"""
 	
@@ -142,11 +227,21 @@ func update_world_data(
 	texture_manager.update_world_data(
 		map_width, map_height,
 		height_data, temperature_data, moisture_data, light_data,
-		biome_data, is_land_data, beach_mask, rng_seed
+		biome_data, is_land_data, beach_mask, rng_seed,
+		turquoise_strength, shelf_noise, clouds, plate_boundary_mask,
+		lake_mask, river_mask, lava_mask, pooled_lake_mask, lake_id, sea_level,
+		skip_base_textures
 	)
 	
 	# Update material uniforms
 	_update_material_uniforms()
+	if quad_material and quad_material is ShaderMaterial:
+		var shader_mat2 = quad_material as ShaderMaterial
+		shader_mat2.set_shader_parameter("sea_level", sea_level)
+	# Disable debug gradient once real data is bound
+	if quad_material and quad_material is ShaderMaterial:
+		var shader_mat = quad_material as ShaderMaterial
+		shader_mat.set_shader_parameter("debug_mode", 0)
 
 func update_light_data_only(light_data: PackedFloat32Array) -> void:
 	"""Fast update for just lighting (day-night cycle)"""
@@ -155,6 +250,18 @@ func update_light_data_only(light_data: PackedFloat32Array) -> void:
 	
 	texture_manager.update_light_data_only(light_data)
 	_update_light_uniform()
+
+func update_clouds_only(
+	turquoise_strength: PackedFloat32Array,
+	shelf_noise: PackedFloat32Array,
+	clouds: PackedFloat32Array,
+	plate_boundary_mask: PackedByteArray
+) -> void:
+	"""Fast update for just clouds/shelf/turquoise data (texture 3)."""
+	if not is_initialized:
+		return
+	texture_manager.update_clouds_only(map_width, map_height, turquoise_strength, shelf_noise, clouds, plate_boundary_mask)
+	_update_cloud_uniforms()
 
 func set_hover_cell(x: int, y: int) -> void:
 	"""Set the hovered tile coordinate for overlay rendering on the shader."""
@@ -187,11 +294,21 @@ func _update_material_uniforms() -> void:
 		# Set world data textures
 		var t1 = texture_manager.get_data_texture_1()
 		var t2 = texture_manager.get_data_texture_2()
+		var t3 = texture_manager.get_data_texture_3()
+		var t4 = texture_manager.get_data_texture_4()
 		var pal = texture_manager.get_color_palette_texture()
-		if t1:
+		if world_data_1_override:
+			shader_mat.set_shader_parameter("world_data_1", world_data_1_override)
+		elif t1:
 			shader_mat.set_shader_parameter("world_data_1", t1)
-		if t2:
+		if world_data_2_override:
+			shader_mat.set_shader_parameter("world_data_2", world_data_2_override)
+		elif t2:
 			shader_mat.set_shader_parameter("world_data_2", t2)
+		if t3:
+			shader_mat.set_shader_parameter("world_data_3", t3)
+		if t4:
+			shader_mat.set_shader_parameter("world_data_4", t4)
 		if pal:
 			shader_mat.set_shader_parameter("color_palette", pal)
 		
@@ -202,14 +319,133 @@ func _update_material_uniforms() -> void:
 		# Set atlas parameters
 		var atlas_uv_size = font_atlas_generator.get_uv_dimensions()
 		shader_mat.set_shader_parameter("atlas_uv_size", atlas_uv_size)
+		# Optional cloud texture override
+		if cloud_texture_override:
+			shader_mat.set_shader_parameter("cloud_texture", cloud_texture_override)
+			shader_mat.set_shader_parameter("use_cloud_texture", 1)
+		else:
+			shader_mat.set_shader_parameter("use_cloud_texture", 0)
+		# Optional light texture override
+		if light_texture_override:
+			shader_mat.set_shader_parameter("light_texture", light_texture_override)
+			shader_mat.set_shader_parameter("use_light_texture", 1)
+		else:
+			shader_mat.set_shader_parameter("use_light_texture", 0)
+		# Optional river texture override
+		if river_texture_override:
+			shader_mat.set_shader_parameter("river_texture", river_texture_override)
+			shader_mat.set_shader_parameter("use_river_texture", 1)
+		else:
+			shader_mat.set_shader_parameter("use_river_texture", 0)
+		# Optional biome texture override
+		if biome_texture_override:
+			shader_mat.set_shader_parameter("biome_texture", biome_texture_override)
+			shader_mat.set_shader_parameter("use_biome_texture", 1)
+		else:
+			shader_mat.set_shader_parameter("use_biome_texture", 0)
+		# Optional lava texture override
+		if lava_texture_override:
+			shader_mat.set_shader_parameter("lava_texture", lava_texture_override)
+			shader_mat.set_shader_parameter("use_lava_texture", 1)
+		else:
+			shader_mat.set_shader_parameter("use_lava_texture", 0)
 	else:
 		pass
+	_update_cloud_uniforms()
+
+func _update_cloud_uniforms() -> void:
+	if cloud_material and cloud_material is ShaderMaterial:
+		var cloud_mat := cloud_material as ShaderMaterial
+		var t1 = world_data_1_override if world_data_1_override else texture_manager.get_data_texture_1()
+		var t3 = texture_manager.get_data_texture_3()
+		if t1:
+			cloud_mat.set_shader_parameter("world_data_1", t1)
+		if t3:
+			cloud_mat.set_shader_parameter("world_data_3", t3)
+		if cloud_texture_override:
+			cloud_mat.set_shader_parameter("cloud_texture", cloud_texture_override)
+			cloud_mat.set_shader_parameter("use_cloud_texture", 1)
+		else:
+			cloud_mat.set_shader_parameter("use_cloud_texture", 0)
+		if light_texture_override:
+			cloud_mat.set_shader_parameter("light_texture", light_texture_override)
+			cloud_mat.set_shader_parameter("use_light_texture", 1)
+		else:
+			cloud_mat.set_shader_parameter("use_light_texture", 0)
+		if cloud_rect:
+			cloud_rect.visible = (t3 != null) or (cloud_texture_override != null)
+		cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
 
 func _update_light_uniform() -> void:
 	"""Update only the light texture uniform"""
 	if quad_material and quad_material is ShaderMaterial:
 		var shader_mat = quad_material as ShaderMaterial
-		shader_mat.set_shader_parameter("world_data_1", texture_manager.get_data_texture_1())
+		var t1 = world_data_1_override if world_data_1_override else texture_manager.get_data_texture_1()
+		if t1:
+			shader_mat.set_shader_parameter("world_data_1", t1)
+		if light_texture_override:
+			shader_mat.set_shader_parameter("light_texture", light_texture_override)
+			shader_mat.set_shader_parameter("use_light_texture", 1)
+		else:
+			shader_mat.set_shader_parameter("use_light_texture", 0)
+		if river_texture_override:
+			shader_mat.set_shader_parameter("river_texture", river_texture_override)
+			shader_mat.set_shader_parameter("use_river_texture", 1)
+		else:
+			shader_mat.set_shader_parameter("use_river_texture", 0)
+		if biome_texture_override:
+			shader_mat.set_shader_parameter("biome_texture", biome_texture_override)
+			shader_mat.set_shader_parameter("use_biome_texture", 1)
+		else:
+			shader_mat.set_shader_parameter("use_biome_texture", 0)
+		if lava_texture_override:
+			shader_mat.set_shader_parameter("lava_texture", lava_texture_override)
+			shader_mat.set_shader_parameter("use_lava_texture", 1)
+		else:
+			shader_mat.set_shader_parameter("use_lava_texture", 0)
+	if cloud_material and cloud_material is ShaderMaterial:
+		var cloud_mat := cloud_material as ShaderMaterial
+		var t1c = world_data_1_override if world_data_1_override else texture_manager.get_data_texture_1()
+		if t1c:
+			cloud_mat.set_shader_parameter("world_data_1", t1c)
+		if light_texture_override:
+			cloud_mat.set_shader_parameter("light_texture", light_texture_override)
+			cloud_mat.set_shader_parameter("use_light_texture", 1)
+		else:
+			cloud_mat.set_shader_parameter("use_light_texture", 0)
+	if quad_material and quad_material is ShaderMaterial:
+		var shader_mat3 := quad_material as ShaderMaterial
+		if cloud_texture_override:
+			shader_mat3.set_shader_parameter("cloud_texture", cloud_texture_override)
+			shader_mat3.set_shader_parameter("use_cloud_texture", 1)
+		else:
+			shader_mat3.set_shader_parameter("use_cloud_texture", 0)
+
+func set_cloud_texture_override(tex: Texture2D) -> void:
+	cloud_texture_override = tex
+	_update_cloud_uniforms()
+
+func set_light_texture_override(tex: Texture2D) -> void:
+	light_texture_override = tex
+	_update_light_uniform()
+
+func set_river_texture_override(tex: Texture2D) -> void:
+	river_texture_override = tex
+	_update_light_uniform()
+
+func set_biome_texture_override(tex: Texture2D) -> void:
+	biome_texture_override = tex
+	_update_light_uniform()
+
+func set_lava_texture_override(tex: Texture2D) -> void:
+	lava_texture_override = tex
+
+func set_world_data_1_override(tex: Texture2D) -> void:
+	world_data_1_override = tex
+
+func set_world_data_2_override(tex: Texture2D) -> void:
+	world_data_2_override = tex
+	_update_light_uniform()
 
 func _ready() -> void:
 	if needs_mesh_update:
@@ -275,12 +511,17 @@ func resize_map(new_width: int, new_height: int) -> void:
 	var viewport_height = new_height * cell_size.y
 	if viewport:
 		viewport.size = Vector2i(int(viewport_width), int(viewport_height))
-	size = Vector2(viewport_width, viewport_height)
+	var parent_ctrl := get_parent() as Control
+	if parent_ctrl:
+		size = parent_ctrl.size
 	
 	# Update material uniforms
 	if quad_material and quad_material is ShaderMaterial:
 		var shader_mat = quad_material as ShaderMaterial
 		shader_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
+	if cloud_material and cloud_material is ShaderMaterial:
+		var cloud_mat := cloud_material as ShaderMaterial
+		cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
 	
 	needs_mesh_update = true
 

@@ -1,4 +1,4 @@
-# WorldGen Refactor Plan — Incremental, File‑wise To‑Do
+# WorldGen Refactor Plan -- Incremental, File‑wise To‑Do
 
 <!-- File: docs/REFACTOR_PLAN.md -->
 
@@ -12,32 +12,32 @@
 
 ## Milestones and Sequencing (each is its own PR or small PR stack)
 
-1) **M0 — Baseline & Observability (P0)**
+1) **M0 -- Baseline & Observability (P0)**
    - Establish logging, metrics, perf baselines before refactors.
-2) **M1 — RD Safety + Shader Loading + Buffer Pooling (P0)**
+2) **M1 -- RD Safety + Shader Loading + Buffer Pooling (P0)**
    - Guard RD acquisition, centralize shader loading, adopt `GPUBufferManager` in top-impact systems.
-3) **M2 — Hot‑Path Algorithms (P0/P1)**
+3) **M2 -- Hot‑Path Algorithms (P0/P1)**
    - Shore temperature simplification via distance‑to‑coast; remove CPU BFS in `ClimateNoise.gd`.
-4) **M3 — Biomes, Plates, Rivers (P0/P1)**
+4) **M3 -- Biomes, Plates, Rivers (P0/P1)**
    - Reduce passes; fix O(n²) plate boundary/velocity; early‑out for iterative GPU.
-5) **M4 — Architecture & UI (P1)**
+5) **M4 -- Architecture & UI (P1)**
    - Decompose `Main.gd` into controllers and scene‑based UI.
-6) **M5 — Array Memory Pooling & CPU Cleanup (P1)**
+6) **M5 -- Array Memory Pooling & CPU Cleanup (P1)**
    - Pool large PackedArrays; remove placeholder validation; vectorize hotspots.
-7) **M6 — Async/Threading & Simulation Scheduling (P2)**
+7) **M6 -- Async/Threading & Simulation Scheduling (P2)**
    - Remove blocking barriers in prod builds; improve `Simulation.gd` budgeting.
 
 ## Measurement Baseline (do before M1)
 
 - Add basic timers and counters (frame time percentiles, dispatch counts, readbacks, VRAM estimate) to `Logger.gd` and dev HUD.
 - Log: RD acquired?, shader version used, pipelines created, buffer allocations (size, purpose), readbacks.
-- Capture a reference run: new world → full cycle (terrain, climate, biomes, rivers) on 275x62; record peak VRAM and frame timings.
+- Capture a reference run: new world -> full cycle (terrain, climate, biomes, rivers) on 275x62; record peak VRAM and frame timings.
 
 ---
 
 ## Milestone Details and Acceptance Criteria
 
-### M0 — Baseline & Observability (P0)
+### M0 -- Baseline & Observability (P0)
 
 - [ ] Add structured JSON logs in `scripts/systems/Logger.gd` (level, context, device status, buffer stats).
 - [ ] Add on‑screen dev HUD toggle (basic stats) via `HUD.gd` (new) and integrate with `Main.gd`.
@@ -48,7 +48,7 @@
 - [ ] Logs include RD availability, shader backend, pipeline creation success/failure, buffer alloc/reuse, readbacks.
 - [ ] Baseline doc checked in with reproducible settings.
 
-### M1 — RD Safety + Shader Loading + Buffer Pooling (P0)
+### M1 -- RD Safety + Shader Loading + Buffer Pooling (P0)
 
 - [ ] Centralize RD acquisition in `scripts/systems/ComputeShaderBase.gd`; early return on null with clear error.
 - [ ] Enforce explicit SPIR‑V selection in `scripts/systems/ShaderLoader.gd` (e.g., "vulkan"); validate non‑null spirv.
@@ -61,7 +61,7 @@
 - [ ] No raw `storage_buffer_create` outside `GPUBufferManager` in the targeted systems.
 - [ ] Peak VRAM reduced ≥60% in the baseline scenario after pooling.
 
-### M2 — Hot‑Path Algorithms (P0/P1)
+### M2 -- Hot‑Path Algorithms (P0/P1)
 
 - [ ] Compute and cache `distance_to_coast` using `DistanceTransformCompute.gd` (GPU) when ocean/land changes.
 - [ ] Simplify `shaders/climate_adjust.glsl` shore logic: remove 8‑neighbor heavy code; use `distance_to_coast` + simple function.
@@ -72,7 +72,7 @@
 - [ ] Climate pass time improves ≥70% on shore‑heavy maps vs baseline.
 - [ ] No CPU BFS code remains in `ClimateNoise.gd`.
 
-### M3 — Biomes, Plates, Rivers (P0/P1)
+### M3 -- Biomes, Plates, Rivers (P0/P1)
 
 - [ ] `BiomeClassifier.gd`: split monolith; cache noise generators; reduce to single main pass (+ optional separable smoothing).
 - [ ] `PlateSystem.gd`: GPU label/boundary detection; remove O(n²) neighbor searches; parameterize velocity model.
@@ -85,7 +85,7 @@
 - [ ] No nested O(n²) loops in plate boundary detection hot path.
 - [ ] Average iterations reduced for lake/river iterative steps without correctness loss.
 
-### M4 — Architecture & UI (P1)
+### M4 -- Architecture & UI (P1)
 
 - [ ] Decompose `scripts/Main.gd` into controllers; move programmatic UI into scenes.
 - [ ] Harden `SettingsDialog.gd` with validation/sanitization and safe node access.
@@ -94,7 +94,7 @@
 
 - [ ] `scripts/Main.gd` shrinks substantially; UI is scene‑based; no leaks on exit.
 
-### M5 — Array Memory Pooling & CPU Cleanup (P1)
+### M5 -- Array Memory Pooling & CPU Cleanup (P1)
 
 - [ ] Introduce `scripts/core/ArrayPool.gd` (new) to manage large `Packed*Array` lifecycles.
 - [ ] Refactor `WorldGenerator.gd` to use array pool; remove placeholder validations; vectorize array ops.
@@ -103,7 +103,7 @@
 
 - [ ] RAM footprint stable across regenerations; no unbounded growth.
 
-### M6 — Async/Threading & Simulation Scheduling (P2)
+### M6 -- Async/Threading & Simulation Scheduling (P2)
 
 - [ ] Gate `measure_gpu_time()` behind debug; avoid blocking barriers in prod.
 - [ ] Improve `Simulation.gd` budgeting: priorities, emergency overrides, less aggressive auto‑tuning.

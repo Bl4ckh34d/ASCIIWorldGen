@@ -124,7 +124,10 @@ func _fill_desert_noise(s: int) -> void:
 	for y in range(height):
 		for x in range(width):
 			var i: int = x + y * width
-			desert_noise_field[i] = n.get_noise_2d(float(x) * xscale, float(y)) * 0.5 + 0.5
+			var t: float = float(x) / float(max(1, width))
+			var n0: float = n.get_noise_2d(float(x) * xscale, float(y))
+			var n1: float = n.get_noise_2d((float(x) + float(width)) * xscale, float(y))
+			desert_noise_field[i] = lerp(n0, n1, t) * 0.5 + 0.5
 
 func _fill_ice_wiggle(s: int) -> void:
 	var n := FastNoiseLite.new()
@@ -135,7 +138,10 @@ func _fill_ice_wiggle(s: int) -> void:
 	for y in range(height):
 		for x in range(width):
 			var i: int = x + y * width
-			ice_wiggle_field[i] = n.get_noise_2d(float(x) * xscale2, float(y)) # -1..1
+			var t: float = float(x) / float(max(1, width))
+			var n0: float = n.get_noise_2d(float(x) * xscale2, float(y))
+			var n1: float = n.get_noise_2d((float(x) + float(width)) * xscale2, float(y))
+			ice_wiggle_field[i] = lerp(n0, n1, t) # -1..1
 
 func _fill_shore_noise(s: int, freq: float) -> void:
 	var n := FastNoiseLite.new()
@@ -150,7 +156,10 @@ func _fill_shore_noise(s: int, freq: float) -> void:
 	for y in range(height):
 		for x in range(width):
 			var i: int = x + y * width
-			shore_noise_field[i] = n.get_noise_2d(float(x) * xscale3, float(y)) * 0.5 + 0.5
+			var t: float = float(x) / float(max(1, width))
+			var n0: float = n.get_noise_2d(float(x) * xscale3, float(y))
+			var n1: float = n.get_noise_2d((float(x) + float(width)) * xscale3, float(y))
+			shore_noise_field[i] = lerp(n0, n1, t) * 0.5 + 0.5
 
 func _fill_shelf_value_noise(s: int) -> void:
 	# Coarse value-like noise as used by AsciiStyler for shelf variation.
@@ -159,19 +168,25 @@ func _fill_shelf_value_noise(s: int) -> void:
 	for y in range(height):
 		for x in range(width):
 			var i: int = x + y * width
-			var sx: float = float(x) / max(0.0001, scale)
-			var sy: float = float(y) / max(0.0001, scale)
-			var xi: int = int(floor(sx))
-			var yi: int = int(floor(sy))
-			var tx: float = sx - float(xi)
-			var ty: float = sy - float(yi)
-			var h00: float = float(_hash(xi + 0, yi + 0, s) % 1000) / 1000.0
-			var h10: float = float(_hash(xi + 1, yi + 0, s) % 1000) / 1000.0
-			var h01: float = float(_hash(xi + 0, yi + 1, s) % 1000) / 1000.0
-			var h11: float = float(_hash(xi + 1, yi + 1, s) % 1000) / 1000.0
-			var nx0: float = lerp(h00, h10, tx)
-			var nx1: float = lerp(h01, h11, tx)
-			shelf_value_noise_field[i] = lerp(nx0, nx1, ty)
+			var t: float = float(x) / float(max(1, width))
+			var sv0: float = _value_noise(float(x), float(y), scale, s)
+			var sv1: float = _value_noise(float(x + width), float(y), scale, s)
+			shelf_value_noise_field[i] = lerp(sv0, sv1, t)
+
+func _value_noise(px: float, py: float, scale: float, s: int) -> float:
+	var sx: float = px / max(0.0001, scale)
+	var sy: float = py / max(0.0001, scale)
+	var xi: int = int(floor(sx))
+	var yi: int = int(floor(sy))
+	var tx: float = sx - float(xi)
+	var ty: float = sy - float(yi)
+	var h00: float = float(_hash(xi + 0, yi + 0, s) % 1000) / 1000.0
+	var h10: float = float(_hash(xi + 1, yi + 0, s) % 1000) / 1000.0
+	var h01: float = float(_hash(xi + 0, yi + 1, s) % 1000) / 1000.0
+	var h11: float = float(_hash(xi + 1, yi + 1, s) % 1000) / 1000.0
+	var nx0: float = lerp(h00, h10, tx)
+	var nx1: float = lerp(h01, h11, tx)
+	return lerp(nx0, nx1, ty)
 
 static func _hash(x: int, y: int, s: int) -> int:
 	return abs(int(x) * 73856093 ^ int(y) * 19349663 ^ int(s) * 83492791)

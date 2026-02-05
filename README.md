@@ -21,7 +21,7 @@ This document is a step-by-step "engineering playbook" to build a **Dwarf Fortre
 
 We store each field on a 2D grid `W x H`, flattened to 1D for speed (index `i = x + y*W`). Core layers:
 
-- **Topography**: `height` (meters-ish, normalized — `-1.0` deep ocean to `+1.0` high mountains), `base_rock` (enum), `soil_depth`.
+- **Topography**: `height` (meters-ish, normalized -- `-1.0` deep ocean to `+1.0` high mountains), `base_rock` (enum), `soil_depth`.
 - **Tectonics**: `plate_id`, `plate_vx`, `plate_vy`, `plate_age`, `boundary_type` (derived each step near edges).
 - **Climate**: `temperature` (°C approx), `moisture` (0–1), `precip` (mm), `winds_u/v` (zonal/meridional).
 - **Hydro**: `flow_dir` (8-neighbor index), `flow_accum`, `river` (bool/intensity), `water` (surface water), `lake_id`.
@@ -62,7 +62,7 @@ We store each field on a 2D grid `W x H`, flattened to 1D for speed (index `i = 
 
 6. **Hydrology scaffolding**
    - Compute **flow direction** (D8 steepest descent or MFD) from `height`.
-   - Priority-Flood or simple depression fill to route rivers to outlets. Mark `flow_accum`; where above a threshold → rivers. Carve gentle channels (local height -= k * log(flow)).
+   - Priority-Flood or simple depression fill to route rivers to outlets. Mark `flow_accum`; where above a threshold -> rivers. Carve gentle channels (local height -= k * log(flow)).
 
 7. **Climate (annually averaged first)**
    - Temperature from latitude (sine falloff) + lapse rate with height + noise.
@@ -132,7 +132,7 @@ We store each field on a 2D grid `W x H`, flattened to 1D for speed (index `i = 
 - Use **double buffers** for fields you advect/update each tick.
 - Avoid per-frame allocations; reuse arrays.
 - Expensive recomputations (e.g., full rivers) can run every N frames.
-- Draw via an **ImageTexture** (fast); ASCII mode uses a single `RichTextLabel` — fine at small sizes.
+- Draw via an **ImageTexture** (fast); ASCII mode uses a single `RichTextLabel` -- fine at small sizes.
 
 ---
 
@@ -153,6 +153,6 @@ We store each field on a 2D grid `W x H`, flattened to 1D for speed (index `i = 
 2. Open this project folder.
 3. Open and run `res://scenes/Main.tscn`.
 4. Use the top bar to **Play/Pause**, **Reset**, **Settings**, **ASCII/Color**.
-5. Hover the map to inspect a tile. Change settings → **Apply** to regenerate.
+5. Hover the map to inspect a tile. Change settings -> **Apply** to regenerate.
 
 Happy world building!

@@ -15,7 +15,7 @@ var rng_seed: int = 0
 var height_scale_m: float = 6000.0
 var temp_min_c: float = -40.0
 var temp_max_c: float = 70.0
-var lava_temp_threshold_c: float = 55.0
+var lava_temp_threshold_c: float = 120.0
 var ocean_fraction: float = 0.0
 
 # Topography

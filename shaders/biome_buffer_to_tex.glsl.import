@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ddbp0amsxjgf0"
+path="res://.godot/imported/biome_buffer_to_tex.glsl-521dfd648177c7037b25f81e247bdf1d.res"
+
+[deps]
+
+source_file="res://shaders/biome_buffer_to_tex.glsl"
+dest_files=["res://.godot/imported/biome_buffer_to_tex.glsl-521dfd648177c7037b25f81e247bdf1d.res"]
+
+[params]
+

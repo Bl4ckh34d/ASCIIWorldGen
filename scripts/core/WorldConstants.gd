@@ -28,7 +28,7 @@ const SHORE_NOISE_MULTIPLIER: float = 4.0
 # Temperature ranges (Celsius)
 const DEFAULT_TEMP_MIN_C: float = -40.0
 const DEFAULT_TEMP_MAX_C: float = 70.0
-const LAVA_TEMP_THRESHOLD_C: float = 75.0
+const LAVA_TEMP_THRESHOLD_C: float = 120.0
 
 # Climate scaling
 const TEMP_BASE_OFFSET: float = 0.25
@@ -81,7 +81,7 @@ const ARRAY_PROCESSING_CHUNK_SIZE: int = 10000  # 10k elements per chunk
 const CADENCE_CLIMATE: int = 1        # Climate: every day (real-time changes)
 const CADENCE_HYDRO: int = 30         # Hydro: monthly changes
 const CADENCE_CLOUDS: int = 7         # Clouds: weekly weather patterns
-const CADENCE_BIOMES: int = 90        # Biomes: seasonal ecosystem shifts
+const CADENCE_BIOMES: int = 30        # Biomes: very slow evolution (smoothed climate input)
 const CADENCE_PLATES: int = 365       # Plates: yearly geological changes
 const CADENCE_VOLCANISM: int = 3      # Volcanism: rapid geological events
 

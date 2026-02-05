@@ -12,7 +12,7 @@ layout(std430, set = 0, binding = 3) buffer MoistBuf { float moist_norm[]; } Moi
 
 // Outputs
 layout(std430, set = 0, binding = 4) buffer OutBiomeBuf { int out_biomes[]; } OutB;
-layout(std430, set = 0, binding = 5) buffer LavaBuf { uint lava_mask[]; } Lava;
+layout(std430, set = 0, binding = 5) buffer LavaBuf { float lava_mask[]; } Lava;
 layout(std430, set = 0, binding = 6) buffer LakeBuf { uint lake_mask[]; } Lake; // optional for salt flats
 
 layout(push_constant) uniform Params {
@@ -21,9 +21,10 @@ layout(push_constant) uniform Params {
     float temp_min_c;
     float temp_max_c;
     float lava_temp_threshold_c;
+    float update_lava;
 } PC;
 
-// Biome IDs (subset used here) — must match BiomeClassifier.gd
+// Biome IDs (subset used here) -- must match BiomeClassifier.gd
 const int BIOME_DESERT_SAND = 3;
 const int BIOME_WASTELAND = 4;
 const int BIOME_DESERT_ICE = 5;
@@ -77,7 +78,7 @@ void main() {
     float t_c = PC.temp_min_c + t_norm * (PC.temp_max_c - PC.temp_min_c);
 
     int out_b = b;
-    uint lava = 0u;
+    float lava = Lava.lava_mask[i];
     if (land) {
         // Hot override: at high temps, remove forests/grass and move to dry biomes
         if (t_c >= 45.0 && t_c < PC.lava_temp_threshold_c) {
@@ -95,8 +96,8 @@ void main() {
             }
         }
         // Extreme hot: above lava threshold, but only on land
-        if (t_c >= PC.lava_temp_threshold_c) {
-            lava = 1u;
+        if (PC.update_lava > 0.5 && t_c >= PC.lava_temp_threshold_c) {
+            lava = 1.0;
         }
         // Cold handling: assign frozen variants (prefer variants over DESERT_ICE except very dry cases)
         if (t_c <= -5.0) {
@@ -125,7 +126,7 @@ void main() {
     if (land) {
         uint was_lake = Lake.lake_mask[i];
         if (was_lake != 0u) {
-            // Dry lake → salt flats when sufficiently hot and not lava
+            // Dry lake -> salt flats when sufficiently hot and not lava
             if (t_c >= 53.0 && t_c < PC.lava_temp_threshold_c) {
                 out_b = BIOME_SALT_DESERT;
             }
@@ -135,6 +136,4 @@ void main() {
     OutB.out_biomes[i] = out_b;
     Lava.lava_mask[i] = lava;
 }
-
-
 

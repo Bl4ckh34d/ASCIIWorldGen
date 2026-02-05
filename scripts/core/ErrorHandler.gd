@@ -149,7 +149,7 @@ static func log_error(err: ErrorResult) -> void:
 	
 	# Log recovery suggestion if available
 	if err.recovery_suggested:
-		push_warning("  → Recovery: " + err.recovery_message)
+		push_warning("  -> Recovery: " + err.recovery_message)
 
 # Validation functions
 static func validate_world_dimensions(width: int, height: int) -> ErrorResult:

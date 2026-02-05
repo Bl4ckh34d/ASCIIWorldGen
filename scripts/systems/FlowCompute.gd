@@ -5,6 +5,8 @@ const FLOW_DIR_SHADER := preload("res://shaders/flow_dir.glsl")
 const FLOW_ACCUM_SHADER := preload("res://shaders/flow_accum.glsl")
 const FLOW_PUSH_SHADER := preload("res://shaders/flow_push.glsl")
 var CLEAR_U32_SHADER_FILE: RDShaderFile = load("res://shaders/clear_u32.glsl")
+const COPY_U32_SHADER := preload("res://shaders/copy_u32.glsl")
+const U32_TO_F32_SHADER := preload("res://shaders/u32_to_f32.glsl")
 
 var _rd: RenderingDevice
 var _dir_shader: RID
@@ -15,6 +17,10 @@ var _push_shader: RID
 var _push_pipeline: RID
 var _clear_shader: RID
 var _clear_pipeline: RID
+var _copy_shader: RID
+var _copy_pipeline: RID
+var _u32_to_f32_shader: RID
+var _u32_to_f32_pipeline: RID
 
 func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 	if file == null:
@@ -60,6 +66,183 @@ func _ensure() -> void:
 		_clear_shader = _rd.shader_create_from_spirv(sc)
 	if not _clear_pipeline.is_valid() and _clear_shader.is_valid():
 		_clear_pipeline = _rd.compute_pipeline_create(_clear_shader)
+	if not _copy_shader.is_valid():
+		var scp: RDShaderSPIRV = _get_spirv(COPY_U32_SHADER)
+		if scp != null:
+			_copy_shader = _rd.shader_create_from_spirv(scp)
+	if not _copy_pipeline.is_valid() and _copy_shader.is_valid():
+		_copy_pipeline = _rd.compute_pipeline_create(_copy_shader)
+	if not _u32_to_f32_shader.is_valid():
+		var sconv: RDShaderSPIRV = _get_spirv(U32_TO_F32_SHADER)
+		if sconv != null:
+			_u32_to_f32_shader = _rd.shader_create_from_spirv(sconv)
+	if not _u32_to_f32_pipeline.is_valid() and _u32_to_f32_shader.is_valid():
+		_u32_to_f32_pipeline = _rd.compute_pipeline_create(_u32_to_f32_shader)
+
+func _dispatch_copy_u32(src: RID, dst: RID, count: int) -> void:
+	if not _copy_pipeline.is_valid():
+		return
+	var uniforms: Array = []
+	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(src); uniforms.append(u0)
+	var u1 := RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(dst); uniforms.append(u1)
+	var u_set := _rd.uniform_set_create(uniforms, _copy_shader, 0)
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([count])
+	pc.append_array(ints.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	var g1d: int = int(ceil(float(count) / 256.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _copy_pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, g1d, 1, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+
+func _dispatch_clear_u32(buf: RID, count: int) -> void:
+	if not _clear_pipeline.is_valid():
+		return
+	var uniforms: Array = []
+	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(buf); uniforms.append(u0)
+	var u_set := _rd.uniform_set_create(uniforms, _clear_shader, 0)
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([count])
+	pc.append_array(ints.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	var g1d: int = int(ceil(float(count) / 256.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _clear_pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, g1d, 1, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+
+func _dispatch_u32_to_f32(src: RID, dst: RID, count: int) -> void:
+	if not _u32_to_f32_pipeline.is_valid():
+		return
+	var uniforms: Array = []
+	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(src); uniforms.append(u0)
+	var u1 := RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(dst); uniforms.append(u1)
+	var u_set := _rd.uniform_set_create(uniforms, _u32_to_f32_shader, 0)
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([count])
+	pc.append_array(ints.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	var g1d: int = int(ceil(float(count) / 256.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _u32_to_f32_pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, g1d, 1, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+
+func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wrap_x: bool, out_dir_buf: RID, out_acc_buf: RID, roi: Rect2i = Rect2i(0,0,0,0), buffer_manager: Object = null) -> bool:
+	_ensure()
+	if not _dir_pipeline.is_valid() or not _push_pipeline.is_valid() or not _u32_to_f32_pipeline.is_valid():
+		return false
+	if not height_buf.is_valid() or not land_buf.is_valid() or not out_dir_buf.is_valid() or not out_acc_buf.is_valid():
+		return false
+	var size: int = max(0, w * h)
+	# Flow direction pass
+	var uniforms: Array = []
+	var u: RDUniform
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(height_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(land_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(out_dir_buf); uniforms.append(u)
+	var u_set := _rd.uniform_set_create(uniforms, _dir_shader, 0)
+	var rx0: int = 0; var ry0: int = 0; var rx1: int = w; var ry1: int = h
+	if roi.size.x > 0 and roi.size.y > 0:
+		rx0 = clamp(roi.position.x, 0, max(0, w))
+		ry0 = clamp(roi.position.y, 0, max(0, h))
+		rx1 = clamp(roi.position.x + roi.size.x, 0, max(0, w))
+		ry1 = clamp(roi.position.y + roi.size.y, 0, max(0, h))
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h, (1 if wrap_x else 0), rx0, ry0, rx1, ry1])
+	pc.append_array(ints.to_byte_array())
+	var pad0 := (16 - (pc.size() % 16)) % 16
+	if pad0 > 0:
+		var zeros0 := PackedByteArray(); zeros0.resize(pad0)
+		pc.append_array(zeros0)
+	var gx: int = int(ceil(float(w) / 16.0)); var gy: int = int(ceil(float(h) / 16.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _dir_pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, gx, gy, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+	# Accumulation buffers
+	var total_buf: RID
+	var front_in_buf: RID
+	var front_out_buf: RID
+	var bytes: int = size * 4
+	if buffer_manager:
+		total_buf = buffer_manager.ensure_buffer("flow_total_u32", bytes)
+		front_in_buf = buffer_manager.ensure_buffer("flow_front_in", bytes)
+		front_out_buf = buffer_manager.ensure_buffer("flow_front_out", bytes)
+	else:
+		total_buf = _rd.storage_buffer_create(bytes)
+		front_in_buf = _rd.storage_buffer_create(bytes)
+		front_out_buf = _rd.storage_buffer_create(bytes)
+	# total = land, frontier_in = land, frontier_out = 0
+	_dispatch_copy_u32(land_buf, total_buf, size)
+	_dispatch_copy_u32(land_buf, front_in_buf, size)
+	_dispatch_clear_u32(front_out_buf, size)
+	# Push pass
+	uniforms.clear()
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(out_dir_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(front_in_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(total_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(front_out_buf); uniforms.append(u)
+	u_set = _rd.uniform_set_create(uniforms, _push_shader, 0)
+	pc = PackedByteArray()
+	var push_consts := PackedInt32Array([size, rx0, ry0, rx1, ry1, w])
+	pc.append_array(push_consts.to_byte_array())
+	var pad_p := (16 - (pc.size() % 16)) % 16
+	if pad_p > 0:
+		var zeros_p := PackedByteArray(); zeros_p.resize(pad_p)
+		pc.append_array(zeros_p)
+	var g1d: int = int(ceil(float(size) / 256.0))
+	var max_iters: int = 4
+	for _pass in range(max_iters):
+		cl = _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(cl, _push_pipeline)
+		_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+		_rd.compute_list_set_push_constant(cl, pc, pc.size())
+		_rd.compute_list_dispatch(cl, g1d, 1, 1)
+		_rd.compute_list_end()
+		# swap frontier buffers and clear new out
+		var tmp_buf := front_in_buf
+		front_in_buf = front_out_buf
+		front_out_buf = tmp_buf
+		_dispatch_clear_u32(front_out_buf, size)
+		# rebuild uniform set for swapped frontiers
+		uniforms.clear()
+		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(out_dir_buf); uniforms.append(u)
+		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(front_in_buf); uniforms.append(u)
+		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(total_buf); uniforms.append(u)
+		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(front_out_buf); uniforms.append(u)
+		_rd.free_rid(u_set)
+		u_set = _rd.uniform_set_create(uniforms, _push_shader, 0)
+	_rd.free_rid(u_set)
+	# Convert total u32 -> float accumulation
+	_dispatch_u32_to_f32(total_buf, out_acc_buf, size)
+	if buffer_manager == null:
+		_rd.free_rid(total_buf)
+		_rd.free_rid(front_in_buf)
+		_rd.free_rid(front_out_buf)
+	return true
 
 func compute_flow(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, wrap_x: bool, roi: Rect2i = Rect2i(0,0,0,0)) -> Dictionary:
 	_ensure()

@@ -98,22 +98,33 @@ void main(){
 
     float nx = float(x) * PC.noise_x_scale;
     float ny = float(y);
+    float t = float(x) / float(max(1, W));
+    float period = float(W) * PC.noise_x_scale;
 
     // Desert split (0..1)
-    float d = fbm2(vec2(nx, ny), max(0.001, PC.base_freq), 5) * 0.5 + 0.5;
+    float d0 = fbm2(vec2(nx, ny), max(0.001, PC.base_freq), 5);
+    float d1 = fbm2(vec2(nx + period, ny), max(0.001, PC.base_freq), 5);
+    float d = mix(d0, d1, t) * 0.5 + 0.5;
     Desert.desert[i] = clamp(d, 0.0, 1.0);
 
     // Ice wiggle (-1..1)
-    float ice = perlin2(vec2(nx * 1.1 + 37.0, ny * 1.1 - 13.0));
+    float ice_x = nx * 1.1 + 37.0;
+    float ice_period = period * 1.1;
+    float ice0 = perlin2(vec2(ice_x, ny * 1.1 - 13.0));
+    float ice1 = perlin2(vec2(ice_x + ice_period, ny * 1.1 - 13.0));
+    float ice = mix(ice0, ice1, t);
     Ice.ice_wiggle[i] = clamp(ice, -1.0, 1.0);
 
     // Shore value noise (0..1), higher frequency
-    float s = fbm2(vec2(nx, ny), max(0.002, PC.shore_freq), 3) * 0.5 + 0.5;
+    float s0 = fbm2(vec2(nx, ny), max(0.002, PC.shore_freq), 3);
+    float s1 = fbm2(vec2(nx + period, ny), max(0.002, PC.shore_freq), 3);
+    float s = mix(s0, s1, t) * 0.5 + 0.5;
     Shore.shore_noise[i] = clamp(s, 0.0, 1.0);
 
     // Shelf coarse value noise (0..1)
-    float sv = value2(vec2(float(x), float(y)) / 20.0);
+    float sv0 = value2(vec2(float(x), float(y)) / 20.0);
+    float sv1 = value2(vec2(float(x + uint(W)), float(y)) / 20.0);
+    float sv = mix(sv0, sv1, t);
     Shelf.shelf_value[i] = clamp(sv, 0.0, 1.0);
 }
-
 

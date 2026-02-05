@@ -192,4 +192,63 @@ func apply(
 	_rd.free_rid(buf_height_out)
 	return out_arr
 
+func apply_gpu_buffers(
+		w: int,
+		h: int,
+		height_in_buf: RID,
+		plate_id_buf: RID,
+		boundary_buf: RID,
+		plate_vel_u: PackedFloat32Array,
+		plate_vel_v: PackedFloat32Array,
+		dt_days: float,
+		rates: Dictionary,
+		boundary_band_cells: int,
+		seed_phase: float,
+		height_out_buf: RID
+	) -> bool:
+	_ensure()
+	if not _pipeline.is_valid():
+		return false
+	if not height_in_buf.is_valid() or not plate_id_buf.is_valid() or not boundary_buf.is_valid() or not height_out_buf.is_valid():
+		return false
+	var size: int = max(0, w * h)
+	if size == 0:
+		return false
+	var buf_pu := _rd.storage_buffer_create(plate_vel_u.to_byte_array().size(), plate_vel_u.to_byte_array())
+	var buf_pv := _rd.storage_buffer_create(plate_vel_v.to_byte_array().size(), plate_vel_v.to_byte_array())
+	var uniforms: Array = []
+	var u: RDUniform
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(height_in_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(plate_id_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(boundary_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_pu); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_pv); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(height_out_buf); uniforms.append(u)
+	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	var upl: float = float(rates.get("uplift_rate_per_day", 0.002))
+	var ridge: float = float(rates.get("ridge_rate_per_day", 0.0008))
+	var rough: float = float(rates.get("transform_roughness_per_day", 0.0004))
+	var num_plates: int = int(max(0, plate_vel_u.size()))
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h, num_plates, max(0, boundary_band_cells)])
+	var floats := PackedFloat32Array([dt_days, upl, ridge, rough, seed_phase])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	var gx: int = int(ceil(float(w) / 16.0))
+	var gy: int = int(ceil(float(h) / 16.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, gx, gy, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+	_rd.free_rid(buf_pu)
+	_rd.free_rid(buf_pv)
+	return true
+
 

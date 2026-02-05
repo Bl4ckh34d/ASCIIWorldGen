@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dqsv8xkv2i4q2"
+path="res://.godot/imported/u32_to_f32.glsl-2328ba2a03be6f1c912bbb4d0a352530.res"
+
+[deps]
+
+source_file="res://shaders/u32_to_f32.glsl"
+dest_files=["res://.godot/imported/u32_to_f32.glsl-2328ba2a03be6f1c912bbb4d0a352530.res"]
+
+[params]
+

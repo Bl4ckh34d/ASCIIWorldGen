@@ -374,6 +374,50 @@ func apply_cycles_only(w: int, h: int,
 	
 	return temp_result
 
+# GPU-only fast path: apply cycles in-place or into provided output buffer (no readback).
+func apply_cycles_only_gpu(w: int, h: int, temp_buf: RID, land_buf: RID, dist_buf: RID, params: Dictionary, out_buf: RID) -> bool:
+	_ensure_device_and_pipeline()
+	var size: int = max(0, w * h)
+	if size == 0 or not _cycle_pipeline.is_valid():
+		return false
+	if not temp_buf.is_valid() or not land_buf.is_valid() or not dist_buf.is_valid() or not out_buf.is_valid():
+		return false
+	var uniforms: Array = []
+	var u0: RDUniform = RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(temp_buf); uniforms.append(u0)
+	var u1: RDUniform = RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(land_buf); uniforms.append(u1)
+	var u2: RDUniform = RDUniform.new(); u2.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u2.binding = 2; u2.add_id(dist_buf); uniforms.append(u2)
+	var u3: RDUniform = RDUniform.new(); u3.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u3.binding = 3; u3.add_id(out_buf); uniforms.append(u3)
+	var uniform_set: RID = _rd.uniform_set_create(uniforms, _cycle_shader, 0)
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h])
+	var floats := PackedFloat32Array([
+		float(params.get("season_phase", 0.0)),
+		float(params.get("season_amp_equator", 0.0)),
+		float(params.get("season_amp_pole", 0.0)),
+		float(params.get("season_ocean_damp", 0.0)),
+		float(params.get("diurnal_amp_equator", 0.0)),
+		float(params.get("diurnal_amp_pole", 0.0)),
+		float(params.get("diurnal_ocean_damp", 0.0)),
+		float(params.get("time_of_day", 0.0)),
+		float(params.get("continentality_scale", 1.0)),
+	])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	var groups_x: int = int(ceil(float(w) / 16.0))
+	var groups_y: int = int(ceil(float(h) / 16.0))
+	var cl_id: int = _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl_id, _cycle_pipeline)
+	_rd.compute_list_bind_uniform_set(cl_id, uniform_set, 0)
+	_rd.compute_list_set_push_constant(cl_id, pc, pc.size())
+	_rd.compute_list_dispatch(cl_id, groups_x, groups_y, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(uniform_set)
+	return true
+
 # Evaluate day-night light field
 func evaluate_light_field(w: int, h: int, params: Dictionary) -> PackedFloat32Array:
 	_ensure_device_and_pipeline()
@@ -429,3 +473,43 @@ func evaluate_light_field(w: int, h: int, params: Dictionary) -> PackedFloat32Ar
 	_rd.free_rid(buf_light)
 	
 	return light_result
+
+# GPU-only path: write light field into a provided buffer (no readback).
+func evaluate_light_field_gpu(w: int, h: int, params: Dictionary, out_buf: RID) -> bool:
+	_ensure_device_and_pipeline()
+	var size: int = max(0, w * h)
+	if size == 0 or not _light_pipeline.is_valid():
+		return false
+	if not out_buf.is_valid():
+		return false
+	var uniforms: Array = []
+	var u0: RDUniform = RDUniform.new()
+	u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u0.binding = 0
+	u0.add_id(out_buf)
+	uniforms.append(u0)
+	var uniform_set: RID = _rd.uniform_set_create(uniforms, _light_shader, 0)
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h])
+	var floats := PackedFloat32Array([
+		float(params.get("day_of_year", 0.0)),
+		float(params.get("time_of_day", 0.0)),
+		float(params.get("day_night_base", 0.25)),
+		float(params.get("day_night_contrast", 0.75)),
+	])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	var groups_x: int = int(ceil(float(w) / 16.0))
+	var groups_y: int = int(ceil(float(h) / 16.0))
+	var cl_id: int = _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl_id, _light_pipeline)
+	_rd.compute_list_bind_uniform_set(cl_id, uniform_set, 0)
+	_rd.compute_list_set_push_constant(cl_id, pc, pc.size())
+	_rd.compute_list_dispatch(cl_id, groups_x, groups_y, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(uniform_set)
+	return true

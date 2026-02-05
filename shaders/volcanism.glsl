@@ -6,8 +6,7 @@
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) buffer BoundaryBuf { int boundary_mask[]; } Bnd;
-layout(std430, set = 0, binding = 1) buffer LavaIn { float lava_in[]; } LavaInBuf;
-layout(std430, set = 0, binding = 2) buffer LavaOut { float lava_out[]; } LavaOutBuf;
+layout(std430, set = 0, binding = 1) buffer LavaBuf { float lava[]; } Lava;
 
 layout(push_constant) uniform Params {
     int width;
@@ -34,7 +33,7 @@ void main() {
     uint y = gl_GlobalInvocationID.y;
     if (x >= uint(PC.width) || y >= uint(PC.height)) return;
     int i = int(x) + int(y) * PC.width;
-    float prev = LavaInBuf.lava_in[i];
+    float prev = Lava.lava[i];
     float dt = max(0.0, PC.dt_days);
     // Decay
     float decay = clamp(1.0 - PC.decay_rate_per_day * dt, 0.0, 1.0);
@@ -53,7 +52,5 @@ void main() {
     }
     // Clamp
     val = clamp(val, 0.0, 1.0);
-    LavaOutBuf.lava_out[i] = val;
+    Lava.lava[i] = val;
 }
-
-

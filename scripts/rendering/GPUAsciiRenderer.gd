@@ -60,9 +60,7 @@ func _create_gpu_renderer(font: Font, font_size: int, width: int, height: int) -
 	quad_renderer.initialize_rendering(font, font_size, width, height)
 	
 	# Set up viewport to fill this control and ensure it's behind overlays
-	quad_renderer.size = size
-	quad_renderer.anchors_preset = Control.PRESET_FULL_RECT
-	quad_renderer.z_index = -1
+	quad_renderer.z_index = 0
 	
 	return true
 
@@ -87,17 +85,33 @@ func update_ascii_display(
 	is_land_data: PackedByteArray,
 	beach_mask: PackedByteArray,
 	rng_seed: int,
-	fallback_ascii_string: String = ""
+	turquoise_strength: PackedFloat32Array = PackedFloat32Array(),
+	shelf_noise: PackedFloat32Array = PackedFloat32Array(),
+	clouds: PackedFloat32Array = PackedFloat32Array(),
+	plate_boundary_mask: PackedByteArray = PackedByteArray(),
+	lake_mask: PackedByteArray = PackedByteArray(),
+	river_mask: PackedByteArray = PackedByteArray(),
+	lava_mask: PackedByteArray = PackedByteArray(),
+	pooled_lake_mask: PackedByteArray = PackedByteArray(),
+	lake_id: PackedInt32Array = PackedInt32Array(),
+	sea_level: float = 0.0,
+	fallback_ascii_string: String = "",
+	skip_base_textures: bool = false
 ) -> void:
 	"""Update the ASCII display using GPU or fallback rendering"""
 	
 	var start_time = Time.get_ticks_usec()
 	
 	if is_gpu_rendering_enabled and quad_renderer:
+		if quad_renderer.map_width != _width or quad_renderer.map_height != _height:
+			quad_renderer.resize_map(_width, _height)
 		# Use GPU rendering
 		quad_renderer.update_world_data(
 			height_data, temperature_data, moisture_data, light_data,
-			biome_data, is_land_data, beach_mask, rng_seed
+			biome_data, is_land_data, beach_mask, rng_seed,
+			turquoise_strength, shelf_noise, clouds, plate_boundary_mask,
+			lake_mask, river_mask, lava_mask, pooled_lake_mask, lake_id, sea_level,
+			skip_base_textures
 		)
 		
 	else:
@@ -117,6 +131,16 @@ func update_light_only(light_data: PackedFloat32Array) -> void:
 	if is_gpu_rendering_enabled and quad_renderer:
 		quad_renderer.update_light_data_only(light_data)
 
+func update_clouds_only(
+	turquoise_strength: PackedFloat32Array,
+	shelf_noise: PackedFloat32Array,
+	clouds: PackedFloat32Array,
+	plate_boundary_mask: PackedByteArray
+) -> void:
+	"""Fast update for just clouds/shelf/turquoise data."""
+	if is_gpu_rendering_enabled and quad_renderer:
+		quad_renderer.update_clouds_only(turquoise_strength, shelf_noise, clouds, plate_boundary_mask)
+
 func resize_display(new_width: int, new_height: int) -> void:
 	"""Resize the display for new map dimensions"""
 	
@@ -134,6 +158,38 @@ func get_render_texture() -> Texture2D:
 func is_using_gpu_rendering() -> bool:
 	"""Check if GPU rendering is active"""
 	return is_gpu_rendering_enabled
+
+func is_ready() -> bool:
+	"""Heuristic: returns true when GPU renderer has all required resources."""
+	if not is_gpu_rendering_enabled or quad_renderer == null:
+		return false
+	if "is_initialized" in quad_renderer and not quad_renderer.is_initialized:
+		return false
+	# Ensure textures exist
+	if quad_renderer and "texture_manager" in quad_renderer:
+		if quad_renderer.texture_manager == null:
+			return false
+		if quad_renderer.texture_manager.get_data_texture_1() == null:
+			return false
+		if quad_renderer.texture_manager.get_data_texture_2() == null:
+			return false
+		if quad_renderer.texture_manager.get_data_texture_3() == null:
+			return false
+		if quad_renderer.texture_manager.get_data_texture_4() == null:
+			return false
+		if quad_renderer.texture_manager.get_color_palette_texture() == null:
+			return false
+	return true
+
+func set_hover_cell(x: int, y: int) -> void:
+	"""Forward hovered tile coordinate to the GPU shader."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_hover_cell"):
+		quad_renderer.set_hover_cell(x, y)
+
+func clear_hover_cell() -> void:
+	"""Disable hover overlay in the GPU shader."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("clear_hover_cell"):
+		quad_renderer.clear_hover_cell()
 
 func get_performance_stats() -> Dictionary:
 	"""Get rendering performance statistics"""
@@ -174,6 +230,41 @@ func get_cell_size_screen() -> Vector2:
 		)
 	return Vector2.ZERO
 
+func set_cloud_texture_override(tex: Texture2D) -> void:
+	"""Provide a GPU-updated cloud texture (Texture2DRD) to the renderer."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_cloud_texture_override"):
+		quad_renderer.set_cloud_texture_override(tex)
+
+func set_light_texture_override(tex: Texture2D) -> void:
+	"""Provide a GPU-updated light texture (Texture2DRD) to the renderer."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_light_texture_override"):
+		quad_renderer.set_light_texture_override(tex)
+
+func set_river_texture_override(tex: Texture2D) -> void:
+	"""Provide a GPU-updated river texture (Texture2DRD) to the renderer."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_river_texture_override"):
+		quad_renderer.set_river_texture_override(tex)
+
+func set_biome_texture_override(tex: Texture2D) -> void:
+	"""Provide a GPU-updated biome texture (Texture2DRD) to the renderer."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_biome_texture_override"):
+		quad_renderer.set_biome_texture_override(tex)
+
+func set_lava_texture_override(tex: Texture2D) -> void:
+	"""Provide a GPU-updated lava texture (Texture2DRD) to the renderer."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_lava_texture_override"):
+		quad_renderer.set_lava_texture_override(tex)
+
+func set_world_data_1_override(tex: Texture2D) -> void:
+	"""Provide a GPU-packed world_data_1 texture to the renderer."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_world_data_1_override"):
+		quad_renderer.set_world_data_1_override(tex)
+
+func set_world_data_2_override(tex: Texture2D) -> void:
+	"""Provide a GPU-packed world_data_2 texture to the renderer."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_world_data_2_override"):
+		quad_renderer.set_world_data_2_override(tex)
+
 func force_fallback_rendering() -> void:
 	"""Force switch to fallback rendering"""
 	
@@ -209,7 +300,8 @@ func save_debug_data(prefix: String) -> void:
 func _on_resized() -> void:
 	"""Handle control resize"""
 	
-	if quad_renderer:
+	if quad_renderer and size.x > 0.0 and size.y > 0.0:
+		quad_renderer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		quad_renderer.size = size
 
 func _ready() -> void:

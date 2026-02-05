@@ -75,7 +75,7 @@ void main(){
     int W = PC.width; int H = PC.height; int i = int(x) + int(y) * W;
 
     float nx = float(x) * PC.noise_x_scale;
-    float ny = float(y);
+    float ny = float(y) * PC.noise_x_scale;
 
     // Base noises
     float t_noise = perlin2(vec2(nx, ny));
@@ -92,5 +92,4 @@ void main(){
     OutU.flow_u[i] = clamp(u, -1.0, 1.0);
     OutV.flow_v[i] = clamp(v, -1.0, 1.0);
 }
-
 

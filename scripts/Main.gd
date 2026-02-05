@@ -3,6 +3,17 @@ extends Control
 
 const WorldConstants = preload("res://scripts/core/WorldConstants.gd")
 
+# --- Performance toggles (turn off heavy systems for faster world map) ---
+const ENABLE_SEASONAL_CLIMATE: bool = true
+const ENABLE_HYDRO: bool = true
+const ENABLE_CLOUDS: bool = true
+const ENABLE_PLATES: bool = true
+const ENABLE_BIOMES_TICK: bool = true
+const ENABLE_VOLCANISM: bool = true
+const GPU_SQUARE_TILES: bool = true
+const GPU_AUTO_FIT_TILES: bool = true
+const GPU_TILE_SCALE: float = 2.0
+
 # UI References - will be set in _initialize_ui_nodes()
 var play_button: Button
 var reset_button: Button
@@ -66,22 +77,23 @@ var generator: Object
 var time_system: Node
 var simulation: Node
 var _checkpoint_sys: Node
-var AsciiStyler = load("res://scripts/style/AsciiStyler.gd")
 const RandomizeService = preload("res://scripts/ui/RandomizeService.gd")
 # Load GPU renderer dynamically to avoid preload issues
-var cloud_map: RichTextLabel
 var last_ascii_text: String = ""
-var styler_single: Object
 var char_w_cached: float = 0.0
 var char_h_cached: float = 0.0
 var sea_debounce_timer: Timer
 var sea_update_pending: bool = false
 var sea_signal_blocked: bool = false
+var sea_last_applied: float = 0.0
+var sea_pending_value: float = 0.0
 var map_scale: int = 1
 var base_width: int = 0
 var base_height: int = 0
 var tile_cols: int = 0
 var tile_rows: int = 0
+var desired_tile_px: float = 0.0
+var tile_fit_timer: Timer
 var lock_aspect: bool = true
 var tiles_across_spin: SpinBox
 var tiles_down_spin: SpinBox
@@ -104,7 +116,7 @@ var plates_cad: SpinBox
 
 # GPU rendering system
 var gpu_ascii_renderer: Control
-var use_gpu_rendering: bool = false
+var use_gpu_rendering: bool = true
 var gpu_rendering_toggle: CheckBox
 
 # Bottom panel controls  
@@ -176,12 +188,17 @@ func _initialize_ui_nodes() -> void:
 	if hide_button and not hide_button.pressed.is_connected(_on_hide_panel_pressed):
 		hide_button.pressed.connect(_on_hide_panel_pressed)
 	if speed_slider:
+		speed_slider.min_value = 1.0
+		speed_slider.max_value = 1000.0
+		speed_slider.step = 1.0
+		if speed_slider.value < 1.0:
+			speed_slider.value = 1.0
 		if not speed_slider.value_changed.is_connected(_on_speed_changed):
 			speed_slider.value_changed.connect(_on_speed_changed)
 		# Update label using a type-safe branch (avoid incompatible ternary types)
 		speed_slider.value_changed.connect(func(v):
 			if speed_value_label:
-				speed_value_label.text = "%.1fx" % v
+				speed_value_label.text = "%.0fx" % v
 		)
 	
 	# Setup all tab content
@@ -229,6 +246,10 @@ func _setup_terrain_tab() -> void:
 	var sea_result = _add_label_with_slider(terrain_vbox, "Sea Level:", -1.0, 1.0, 0.01, 0.0, func(v): _on_sea_level_changed(v))
 	sea_slider = sea_result.slider
 	sea_value_label = sea_result.value_label
+	if sea_slider and sea_slider.has_signal("drag_ended"):
+		var cb = Callable(self, "_on_sea_drag_ended")
+		if not sea_slider.is_connected("drag_ended", cb):
+			sea_slider.connect("drag_ended", cb)
 	
 	# Continental parameters
 	_add_section_header(terrain_vbox, "Continental Shape")
@@ -297,7 +318,7 @@ func _setup_simulation_tab() -> void:
 	year_len_value = year_len_result.value_label
 	
 	fps_spin = _add_label_with_spinbox(simulation_vbox, "Simulation FPS:", 1.0, 60.0, 1.0, 10.0, func(v): _on_sim_fps_changed(v))
-	speed_slider = _add_label_with_slider(simulation_vbox, "Speed:", 0.0, 2.0, 0.01, 0.2, func(v): _on_speed_changed(v)).slider
+	speed_slider = _add_label_with_slider(simulation_vbox, "Speed:", 1.0, 1000.0, 1.0, 1.0, func(v): _on_speed_changed(v)).slider
 	
 	# Step controls
 	_add_section_header(simulation_vbox, "Manual Stepping")
@@ -318,6 +339,9 @@ func _setup_simulation_tab() -> void:
 	# GPU rendering
 	_add_section_header(simulation_vbox, "Rendering")
 	gpu_rendering_toggle = _add_checkbox(simulation_vbox, "GPU Rendering", use_gpu_rendering, func(v): _on_gpu_rendering_toggled(v))
+	if gpu_rendering_toggle:
+		gpu_rendering_toggle.disabled = true
+		gpu_rendering_toggle.tooltip_text = "GPU-only rendering is required."
 	
 	# Checkpoints
 	_add_section_header(simulation_vbox, "Checkpoints")
@@ -603,17 +627,8 @@ func _on_cloud_coupling_changed(enabled: bool) -> void:
 
 func _force_initial_generation() -> void:
 	# debug removed
-	if ascii_map:
-		generator.generate()
-		var w = generator.config.width
-		var h = generator.config.height
-		var styler = AsciiStyler.new()
-		# Simplified call with minimal required parameters
-		var ascii_str = styler.build_ascii(w, h, generator.last_height, generator.last_is_land)
-		ascii_map.clear()
-		ascii_map.append_text(ascii_str)
-	else:
-		pass
+	generator.generate()
+	_redraw_ascii_from_current_state()
 
 func _print_node_tree(node: Node, depth: int) -> void:
 	var _indent = ""
@@ -627,6 +642,7 @@ func _ready() -> void:
 	# debug removed
 	# Initialize UI node references
 	_initialize_ui_nodes()
+	call_deferred("_ensure_window_visible")
 	generator = load("res://scripts/WorldGenerator.gd").new()
 	# Create time and simulation nodes
 	time_system = load("res://scripts/core/TimeSystem.gd").new()
@@ -643,43 +659,49 @@ func _ready() -> void:
 		_checkpoint_sys.initialize(generator)
 	if "set_interval_days" in _checkpoint_sys:
 		_checkpoint_sys.set_interval_days(5.0)
-	# Register seasonal climate param updater
-	_seasonal_sys = load("res://scripts/systems/SeasonalClimateSystem.gd").new()
-	if "initialize" in _seasonal_sys:
-		_seasonal_sys.initialize(generator, time_system)
-	# NOTE: SeasonalClimateSystem now runs directly in _on_sim_tick() to ensure it's never skipped due to frame budgeting
+	# Register seasonal climate param updater (optional)
+	if ENABLE_SEASONAL_CLIMATE:
+		_seasonal_sys = load("res://scripts/systems/SeasonalClimateSystem.gd").new()
+		if "initialize" in _seasonal_sys:
+			_seasonal_sys.initialize(generator, time_system)
+		# NOTE: SeasonalClimateSystem runs directly in _on_sim_tick()
 	# Register hydro updater at a much slower cadence (most expensive system)
-	_hydro_sys = load("res://scripts/systems/HydroUpdateSystem.gd").new()
-	if "initialize" in _hydro_sys:
-		_hydro_sys.initialize(generator)
-		# Reduce tiles per tick for hydro system performance
-		_hydro_sys.tiles_per_tick = 1  # Process 1 tile per tick instead of 2
-	if "register_system" in simulation:
-		simulation.register_system(_hydro_sys, 30, 0)  # Hydro: seasonal changes (monthly)
+	if ENABLE_HYDRO:
+		_hydro_sys = load("res://scripts/systems/HydroUpdateSystem.gd").new()
+		if "initialize" in _hydro_sys:
+			_hydro_sys.initialize(generator)
+			# Reduce tiles per tick for hydro system performance
+			_hydro_sys.tiles_per_tick = 1  # Process 1 tile per tick instead of 2
+		if "register_system" in simulation:
+			simulation.register_system(_hydro_sys, 30, 0)  # Hydro: seasonal changes (monthly)
 	# Register cloud/wind overlay updater (visual only for now)
-	_clouds_sys = load("res://scripts/systems/CloudWindSystem.gd").new()
-	if "initialize" in _clouds_sys:
-		_clouds_sys.initialize(generator, time_system)
-	if "register_system" in simulation:
-		simulation.register_system(_clouds_sys, 7, 0)  # Clouds: weekly weather patterns
+	if ENABLE_CLOUDS:
+		_clouds_sys = load("res://scripts/systems/CloudWindSystem.gd").new()
+		if "initialize" in _clouds_sys:
+			_clouds_sys.initialize(generator, time_system)
+		if "register_system" in simulation:
+			simulation.register_system(_clouds_sys, 2, 0)  # Clouds: update frequently for visible motion
 	# Register biome reclassify system (cadence separate from climate)
-	_biome_sys = load("res://scripts/systems/BiomeUpdateSystem.gd").new()
+	if ENABLE_BIOMES_TICK:
+		_biome_sys = load("res://scripts/systems/BiomeUpdateSystem.gd").new()
+		if "initialize" in _biome_sys:
+			_biome_sys.initialize(generator)
+		if "register_system" in simulation:
+			simulation.register_system(_biome_sys, WorldConstants.CADENCE_BIOMES, 0)  # Biomes: slow evolution
 	# Register plates prototype at a very slow cadence
-	_plates_sys = load("res://scripts/systems/PlateSystem.gd").new()
-	if "initialize" in _plates_sys:
-		_plates_sys.initialize(generator)
-	if "register_system" in simulation:
-		simulation.register_system(_plates_sys, int(time_system.get_days_per_year()), 0)  # Plate tectonics: once per simulated year
-	if "initialize" in _biome_sys:
-		_biome_sys.initialize(generator)
-	if "register_system" in simulation:
-		simulation.register_system(_biome_sys, 90, 0)  # Biomes: seasonal ecosystem shifts
+	if ENABLE_PLATES:
+		_plates_sys = load("res://scripts/systems/PlateSystem.gd").new()
+		if "initialize" in _plates_sys:
+			_plates_sys.initialize(generator)
+		if "register_system" in simulation:
+			simulation.register_system(_plates_sys, int(time_system.get_days_per_year()), 0)  # Plate tectonics: once per simulated year
 	# Register volcanism system at slower cadence
-	var _volc_sys: Object = load("res://scripts/systems/VolcanismSystem.gd").new()
-	if "initialize" in _volc_sys:
-		_volc_sys.initialize(generator, time_system)
-	if "register_system" in simulation:
-		simulation.register_system(_volc_sys, 3, 0)  # Volcanism: rapid geological events
+	if ENABLE_VOLCANISM:
+		var _volc_sys: Object = load("res://scripts/systems/VolcanismSystem.gd").new()
+		if "initialize" in _volc_sys:
+			_volc_sys.initialize(generator, time_system)
+		if "register_system" in simulation:
+			simulation.register_system(_volc_sys, 3, 0)  # Volcanism: rapid geological events
 	# Forward ticks to simulation (world state lives in generator)
 	if time_system.has_signal("tick"):
 		time_system.connect("tick", Callable(self, "_on_sim_tick"))
@@ -691,35 +713,24 @@ func _ready() -> void:
 	_apply_monospace_font()
 	_connect_cursor_overlay()
 	_setup_panel_controls()
-	# Ensure ASCII map is visible
+	# Hide the CPU ASCII map (GPU-only rendering)
 	if ascii_map:
-		ascii_map.modulate.a = 1.0
-	# Create cloud overlay label above the ASCII map
-	cloud_map = RichTextLabel.new()
-	cloud_map.bbcode_enabled = true
-	cloud_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	cloud_map.z_index = 2000
-	cloud_map.fit_content = false
-	cloud_map.scroll_active = false
-	cloud_map.clip_contents = false
-	cloud_map.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cloud_map.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	cloud_map.anchors_preset = Control.PRESET_FULL_RECT
-	ascii_map.add_child(cloud_map)
+		ascii_map.modulate.a = 0.0
+		ascii_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	
 	# Initialize GPU ASCII renderer if toggled on
 	if use_gpu_rendering:
 		_initialize_gpu_renderer()
 	
-	styler_single = AsciiStyler.new()
 	if ascii_map:
 		ascii_map.resized.connect(_on_map_resized)
 	# Init tile grid from current generator config
 	tile_cols = int(generator.config.width)
 	tile_rows = int(generator.config.height)
 	if sea_slider and sea_value_label:
-		sea_slider.value_changed.connect(_on_sea_changed)
 		_update_sea_label()
+		sea_last_applied = float(generator.config.sea_level)
+		sea_pending_value = sea_last_applied
 	else:
 		pass
 	# Build left panel tabs UI; if legacy boxes are missing, continue gracefully
@@ -760,7 +771,7 @@ func _ready() -> void:
 				simulation.update_cadence(_clouds_sys, int(v))
 		)
 		var biome_cad_lbl := Label.new(); biome_cad_lbl.text = "Biome"; systems_box.add_child(biome_cad_lbl)
-		var biome_cad := SpinBox.new(); biome_cad.min_value = 1; biome_cad.max_value = 200; biome_cad.step = 1; biome_cad.value = 90; systems_box.add_child(biome_cad)
+		var biome_cad := SpinBox.new(); biome_cad.min_value = 1; biome_cad.max_value = 200; biome_cad.step = 1; biome_cad.value = WorldConstants.CADENCE_BIOMES; systems_box.add_child(biome_cad)
 		biome_cad.value_changed.connect(func(v: float) -> void:
 			if simulation and _biome_sys and "update_cadence" in simulation:
 				simulation.update_cadence(_biome_sys, int(v))
@@ -804,6 +815,8 @@ func _ready() -> void:
 		var gpu_lbl := Label.new(); gpu_lbl.text = "GPU Rendering"; simulation_box.add_child(gpu_lbl)
 		gpu_rendering_toggle = CheckBox.new(); gpu_rendering_toggle.text = "Enabled"; gpu_rendering_toggle.button_pressed = use_gpu_rendering; simulation_box.add_child(gpu_rendering_toggle)
 		gpu_rendering_toggle.toggled.connect(_on_gpu_rendering_toggled)
+		gpu_rendering_toggle.disabled = true
+		gpu_rendering_toggle.tooltip_text = "GPU-only rendering is required."
 		year_label = Label.new(); year_label.text = "Year: 0.00"; simulation_box.add_child(year_label)
 		
 		# Year length controls
@@ -831,7 +844,7 @@ func _ready() -> void:
 		)
 		
 		var speed_lbl := Label.new(); speed_lbl.text = "Speed"; simulation_box.add_child(speed_lbl)
-		speed_slider = HSlider.new(); speed_slider.min_value = 0.0; speed_slider.max_value = 2.0; speed_slider.step = 0.01; speed_slider.value = 0.2; speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; simulation_box.add_child(speed_slider)
+		speed_slider = HSlider.new(); speed_slider.min_value = 1.0; speed_slider.max_value = 1000.0; speed_slider.step = 1.0; speed_slider.value = 1.0; speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; simulation_box.add_child(speed_slider)
 		speed_slider.value_changed.connect(_on_speed_changed)
 		var step_lbl := Label.new(); step_lbl.text = "Step (min)"; simulation_box.add_child(step_lbl)
 		step_spin = SpinBox.new(); step_spin.min_value = 1.0; step_spin.max_value = 1440.0; step_spin.step = 1.0; step_spin.value = 1.0; step_spin.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN; simulation_box.add_child(step_spin)
@@ -958,6 +971,12 @@ func _ready() -> void:
 	temp_timer.wait_time = 0.12
 	add_child(temp_timer)
 	(temp_timer as Timer).timeout.connect(_on_temp_debounce_timeout)
+	# Debounce for GPU tile fit on resize
+	tile_fit_timer = Timer.new()
+	tile_fit_timer.one_shot = true
+	tile_fit_timer.wait_time = 0.12
+	add_child(tile_fit_timer)
+	tile_fit_timer.timeout.connect(_on_tile_fit_timeout)
 	if settings_dialog and settings_dialog.has_signal("settings_applied"):
 		settings_dialog.connect("settings_applied", Callable(self, "_on_settings_applied"))
 	_reset_view()
@@ -996,9 +1015,36 @@ func _ready() -> void:
 	# capture base dimensions for scaling
 	base_width = generator.config.width
 	base_height = generator.config.height
+	if use_gpu_rendering and GPU_AUTO_FIT_TILES:
+		call_deferred("_schedule_tile_fit")
 	
 	# Connect viewport resize to reposition floating button
 	get_viewport().size_changed.connect(_on_viewport_resized)
+
+func _ensure_window_visible() -> void:
+	# Only adjust standalone game windows (avoid moving the editor window)
+	if DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_WINDOWED:
+		return
+	var screen: int = DisplayServer.window_get_current_screen()
+	var usable: Rect2i = DisplayServer.screen_get_usable_rect(screen)
+	if usable.size.x <= 0 or usable.size.y <= 0:
+		return
+	var size: Vector2i = DisplayServer.window_get_size()
+	var new_size := size
+	if new_size.x > usable.size.x:
+		new_size.x = usable.size.x
+	if new_size.y > usable.size.y:
+		new_size.y = usable.size.y
+	if new_size != size:
+		DisplayServer.window_set_size(new_size)
+	var pos: Vector2i = DisplayServer.window_get_position()
+	var max_pos := usable.position + usable.size - new_size
+	var new_pos := Vector2i(
+		clamp(pos.x, usable.position.x, max_pos.x),
+		clamp(pos.y, usable.position.y, max_pos.y)
+	)
+	if new_pos != pos:
+		DisplayServer.window_set_position(new_pos)
 
 
 func _on_settings_applied(config: Dictionary) -> void:
@@ -1017,21 +1063,9 @@ func _generate_and_draw() -> void:
 		"height": max(1, base_height * map_scale),
 	}
 	generator.apply_config(scaled_cfg)
-	var grid: PackedByteArray = generator.generate()
-	var w: int = generator.config.width
-	var h: int = generator.config.height
-	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()), generator.last_light, _get_plate_boundary_mask())
-	# Cloud overlay disabled for now
-	var clouds_text: String = AsciiStyler.new().build_cloud_overlay(w, h, generator.last_clouds)
-	ascii_map.clear()
-	ascii_map.append_text(ascii_str)
-	# debug removed
-	cloud_map.clear()
-	cloud_map.append_text(clouds_text)
-	cloud_map.visible = true
-	last_ascii_text = ascii_str
-	_update_char_size_cache()
+	generator.generate()
+	_sync_sea_slider_to_generator()
+	_redraw_ascii_from_current_state()
 	_update_cursor_dimensions()
 	_refresh_hover_info()
 	_refresh_hover_info()
@@ -1061,8 +1095,11 @@ func _on_sim_tick(_dt_days: float) -> void:
 		if year_label:
 			year_label.text = "Year: %.2f" % float(time_system.get_year_float())
 		# Always update GPU light when available
-		if gpu_ascii_renderer and gpu_ascii_renderer.has_method("update_light_only"):
-			gpu_ascii_renderer.update_light_only(generator.last_light)
+		if gpu_ascii_renderer:
+			if "light_texture_override" in generator and generator.light_texture_override:
+				gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
+			elif gpu_ascii_renderer.has_method("update_light_only"):
+				gpu_ascii_renderer.update_light_only(generator.last_light)
 		
 	
 	# Check frame time budget before heavy simulation work
@@ -1078,10 +1115,35 @@ func _on_sim_tick(_dt_days: float) -> void:
 	_sim_tick_counter += 1
 	
 	# Only do full simulation work if we have frame time budget left
+	var simulation_ran: bool = false
 	if elapsed_ms < available_frame_time_ms * 0.8:  # Use only 80% of frame budget
 		# Drive registered systems via orchestrator (MVP)
 		if simulation and "on_tick" in simulation and "_world_state" in generator:
 			simulation.on_tick(_dt_days, generator._world_state, {})
+			simulation_ran = true
+			# If clouds updated, refresh just the GPU cloud texture
+			if use_gpu_rendering and gpu_ascii_renderer and simulation.last_dirty_fields.has("clouds"):
+				if not ("cloud_texture_override" in generator and generator.cloud_texture_override):
+					gpu_ascii_renderer.update_clouds_only(
+						generator.last_turquoise_strength,
+						generator.last_shelf_value_noise_field,
+						generator.last_clouds,
+						_get_plate_boundary_mask()
+					)
+			# GPU cloud texture override (no CPU readback path)
+			if use_gpu_rendering and gpu_ascii_renderer and "cloud_texture_override" in generator and generator.cloud_texture_override:
+				gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
+			# GPU light texture override (no CPU readback path)
+			if use_gpu_rendering and gpu_ascii_renderer and "light_texture_override" in generator and generator.light_texture_override:
+				gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
+			# GPU river texture override (no CPU readback path)
+			if use_gpu_rendering and gpu_ascii_renderer and "river_texture_override" in generator and generator.river_texture_override:
+				gpu_ascii_renderer.set_river_texture_override(generator.river_texture_override)
+			# GPU biome/lava texture overrides (no CPU readback path)
+			if use_gpu_rendering and gpu_ascii_renderer and "biome_texture_override" in generator and generator.biome_texture_override:
+				gpu_ascii_renderer.set_biome_texture_override(generator.biome_texture_override)
+			if use_gpu_rendering and gpu_ascii_renderer and "lava_texture_override" in generator and generator.lava_texture_override:
+				gpu_ascii_renderer.set_lava_texture_override(generator.lava_texture_override)
 			
 			# Debug performance every 30 ticks and auto-tune
 			if _sim_tick_counter % 30 == 0:
@@ -1090,6 +1152,20 @@ func _on_sim_tick(_dt_days: float) -> void:
 	else:
 		# Skip heavy simulation systems this frame to maintain UI responsiveness
 		pass
+	# Ensure clouds still animate even when simulation budget skips systems
+	if _clouds_sys and "tick" in _clouds_sys and "_world_state" in generator:
+		if (not simulation_ran) or (simulation and not simulation.last_dirty_fields.has("clouds")):
+			var ret: Variant = _clouds_sys.tick(_dt_days, generator._world_state, {})
+			if typeof(ret) == TYPE_DICTIONARY and ret.has("dirty_fields"):
+				var df: PackedStringArray = ret["dirty_fields"]
+				if df.has("clouds") and use_gpu_rendering and gpu_ascii_renderer:
+					if not ("cloud_texture_override" in generator and generator.cloud_texture_override):
+						gpu_ascii_renderer.update_clouds_only(
+							generator.last_turquoise_strength,
+							generator.last_shelf_value_noise_field,
+							generator.last_clouds,
+							_get_plate_boundary_mask()
+						)
 	
 	# Always do these lightweight tasks regardless of frame budget
 	# Periodic checkpointing based on in-game time
@@ -1228,60 +1304,55 @@ func _redraw_ascii_from_current_state() -> void:
 	var h: int = generator.config.height
 	if w <= 0 or h <= 0:
 		return
-	
-	# Performance optimization: reuse styler instance
-	if styler_single == null:
-		styler_single = AsciiStyler.new()
-	
-	# Try GPU rendering first, fallback to string rendering
-	if use_gpu_rendering and gpu_ascii_renderer and gpu_ascii_renderer.is_using_gpu_rendering():
-		# GPU-based rendering (high performance)
-		gpu_ascii_renderer.update_ascii_display(
-			w, h,
-			generator.last_height,
-			generator.last_temperature, 
-			generator.last_moisture,
-			generator.last_light,
-			generator.last_biomes,
-			generator.last_is_land,
-			generator.last_beach,
-			generator.config.rng_seed
-		)
-		# Ensure GPU renderer texture is visible and ASCII label hidden
-		if ascii_map:
-			ascii_map.modulate.a = 0.0
-	else:
-		# Fallback to string-based rendering
-		var grid: PackedByteArray = generator.last_is_land
-		var ascii_str: String = styler_single.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()), generator.last_light, _get_plate_boundary_mask())
-		
-		# Update ASCII map - always update to ensure day-night lighting changes are visible
-		ascii_map.clear()
-		ascii_map.append_text(ascii_str)
-		last_ascii_text = ascii_str
-		
-		# Also update GPU renderer as fallback if available
+	if use_gpu_rendering:
+		if not gpu_ascii_renderer:
+			_initialize_gpu_renderer()
 		if gpu_ascii_renderer:
+			# GPU-only: refresh base world textures from buffers to avoid CPU packing
+			if "config" in generator and generator.config.use_gpu_all and "update_base_textures_gpu" in generator:
+				generator.update_base_textures_gpu()
+			if "world_data_1_override" in generator:
+				gpu_ascii_renderer.set_world_data_1_override(generator.world_data_1_override)
+			if "world_data_2_override" in generator:
+				gpu_ascii_renderer.set_world_data_2_override(generator.world_data_2_override)
+			# Clear optional GPU texture overrides on full redraw to avoid stale textures after reset
+			if "cloud_texture_override" in generator:
+				gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
+			if "light_texture_override" in generator:
+				gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
+			if "river_texture_override" in generator:
+				gpu_ascii_renderer.set_river_texture_override(generator.river_texture_override)
+			if "biome_texture_override" in generator:
+				gpu_ascii_renderer.set_biome_texture_override(generator.biome_texture_override)
+			if "lava_texture_override" in generator:
+				gpu_ascii_renderer.set_lava_texture_override(generator.lava_texture_override)
+			var skip_base_textures: bool = ("config" in generator and generator.config.use_gpu_all and "world_data_1_override" in generator and generator.world_data_1_override and "world_data_2_override" in generator and generator.world_data_2_override)
 			gpu_ascii_renderer.update_ascii_display(
 				w, h,
 				generator.last_height,
 				generator.last_temperature,
-				generator.last_moisture, 
+				generator.last_moisture,
 				generator.last_light,
 				generator.last_biomes,
 				generator.last_is_land,
 				generator.last_beach,
 				generator.config.rng_seed,
-				ascii_str  # Pass string as fallback
+				generator.last_turquoise_strength,
+				generator.last_shelf_value_noise_field,
+				generator.last_clouds,
+				_get_plate_boundary_mask(),
+				generator.last_lake,
+				generator.last_river,
+				generator.last_lava,
+				generator.last_pooled_lake,
+				generator.last_lake_id,
+				generator.config.sea_level,
+				"",
+				skip_base_textures
 			)
+			if ascii_map:
+				ascii_map.modulate.a = 0.0
 	_update_char_size_cache()
-	
-	# Cloud overlay update (lightweight)
-	if cloud_map:
-		var clouds_text: String = styler_single.build_cloud_overlay(w, h, generator.last_clouds)
-		cloud_map.clear()
-		cloud_map.append_text(clouds_text)
-		cloud_map.visible = true
 
 	# Keep bottom panel info in sync with latest tile data
 	_refresh_hover_info()
@@ -1360,8 +1431,6 @@ func _reset_view() -> void:
 	if ascii_map:
 		ascii_map.clear()
 		ascii_map.append_text("")
-	if cloud_map:
-		cloud_map.clear()
 	if info_label:
 		info_label.text = "Hover: -"
 	if seed_used_label:
@@ -1408,23 +1477,53 @@ func _on_sea_changed(v: float) -> void:
 		sea_value_label.text = "%.2f" % v
 	if sea_signal_blocked:
 		return
-	# Update only sea level and regenerate without changing current seed/config jitter
-	if generator != null:
-		# Fast path in generator to avoid recomputing climate/biome unless needed
-		if "quick_update_sea_level" in generator:
-			generator.quick_update_sea_level(float(v))
-		else:
-			generator.apply_config({"sea_level": float(v)})
-		# Throttle regeneration to keep UI responsive while dragging
-		sea_update_pending = true
+	# Defer heavy regeneration until slider is released
+	sea_pending_value = float(v)
+	sea_update_pending = true
+	if sea_slider == null or not sea_slider.has_signal("drag_ended"):
 		if sea_debounce_timer and sea_debounce_timer.is_stopped():
 			sea_debounce_timer.start()
-	# Update hover info immediately to reflect new sea-level effects
 	_refresh_hover_info()
 
 func _update_sea_label() -> void:
 	if sea_value_label and sea_slider:
 		sea_value_label.text = "%.2f" % float(sea_slider.value)
+
+func _sync_sea_slider_to_generator() -> void:
+	if sea_slider == null or generator == null:
+		return
+	var effective: float = generator.config.sea_level
+	if abs(float(sea_slider.value) - effective) > 0.0001:
+		sea_signal_blocked = true
+		sea_slider.value = effective
+		sea_signal_blocked = false
+		_update_sea_label()
+	sea_last_applied = effective
+	sea_pending_value = effective
+
+func _on_sea_drag_ended(value_changed: bool) -> void:
+	if not value_changed:
+		return
+	_apply_sea_level_from_slider()
+
+func _apply_sea_level_from_slider() -> void:
+	if generator == null or sea_slider == null:
+		return
+	var v: float = sea_pending_value if sea_update_pending else float(sea_slider.value)
+	if abs(v - sea_last_applied) < 0.0001:
+		sea_update_pending = false
+		return
+	# Update only sea level and regenerate without changing current seed/config jitter
+	if "quick_update_sea_level" in generator:
+		generator.quick_update_sea_level(float(v))
+	else:
+		generator.apply_config({"sea_level": float(v)})
+	_sync_sea_slider_to_generator()
+	sea_update_pending = false
+	# Redraw from current state after applying the new sea level
+	_redraw_ascii_from_current_state()
+	_update_cursor_dimensions()
+	_refresh_hover_info()
 
 func _on_temp_changed(v: float) -> void:
 	if generator == null:
@@ -1469,8 +1568,7 @@ func _update_cont_label() -> void:
 
 func _on_sea_debounce_timeout() -> void:
 	if sea_update_pending:
-		sea_update_pending = false
-		_generate_and_draw_preserve_seed()
+		_apply_sea_level_from_slider()
 
 func _generate_and_draw_preserve_seed() -> void:
 	# If the last change was sea-level only, terrain arrays are already updated
@@ -1483,15 +1581,8 @@ func _generate_and_draw_preserve_seed() -> void:
 	generator.apply_config(scaled_cfg)
 	# Force a fast recompute of sea-dependent fields (lakes, beaches, water distance)
 	generator.quick_update_sea_level(float(sea_slider.value))
-	var grid: PackedByteArray = generator.last_is_land
-	var w: int = generator.config.width
-	var h: int = generator.config.height
-	var styler: Object = AsciiStyler.new()
-	var ascii_str: String = styler.build_ascii(w, h, generator.last_height, grid, generator.last_turquoise_water, generator.last_turquoise_strength, generator.last_beach, generator.last_water_distance, generator.last_biomes, generator.config.sea_level, generator.config.rng_seed, generator.last_temperature, generator.config.temp_min_c, generator.config.temp_max_c, generator.last_shelf_value_noise_field, generator.last_lake, generator.last_river, generator.last_pooled_lake, generator.last_lava, generator.last_clouds, (generator.hydro_extras.get("lake_freeze", PackedByteArray()) if "hydro_extras" in generator else PackedByteArray()), generator.last_light, _get_plate_boundary_mask())
-	ascii_map.clear()
-	ascii_map.append_text(ascii_str)
-	# debug removed
-	last_ascii_text = ascii_str
+	_sync_sea_slider_to_generator()
+	_redraw_ascii_from_current_state()
 	_update_char_size_cache()
 	_update_cursor_dimensions()
 	_refresh_hover_info()
@@ -1509,12 +1600,8 @@ func _apply_monospace_font() -> void:
 	# Some platforms may fail to resolve; guard against null override
 	if sys != null:
 		ascii_map.add_theme_font_override("normal_font", sys)
-		if cloud_map:
-			cloud_map.add_theme_font_override("normal_font", sys)
 		if cursor_overlay and cursor_overlay.has_method("apply_font"):
 			cursor_overlay.apply_font(sys)
-
-## Styling moved to AsciiStyler
 
 func _on_ascii_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
@@ -1554,24 +1641,6 @@ func _on_ascii_input(event: InputEvent) -> void:
 
 # Old highlight functions removed - replaced by CursorOverlay system
 
-
-func _glyph_at(x: int, y: int) -> String:
-	var w: int = generator.get_width()
-	var h: int = generator.get_height()
-	if x < 0 or y < 0 or x >= w or y >= h:
-		return ""
-	var i: int = x + y * w
-	var land: bool = (i < generator.last_is_land.size()) and generator.last_is_land[i] != 0
-	var beach_flag: bool = (i < generator.last_beach.size()) and generator.last_beach[i] != 0
-	if not land:
-		# water glyphs are set by styler
-		return "~"
-	var biome_id: int = 0
-	if i < generator.last_biomes.size():
-		biome_id = generator.last_biomes[i]
-	if styler_single == null:
-		styler_single = AsciiStyler.new()
-	return styler_single.glyph_for(x, y, land, biome_id, beach_flag, generator.config.rng_seed)
 
 func _update_char_size_cache() -> void:
 	# Skip if already computed and dimensions haven't changed
@@ -1627,7 +1696,8 @@ func _update_char_size_cache() -> void:
 func _on_map_resized() -> void:
 	_update_char_size_cache()
 	# Adjust font size to keep tile count while filling available space
-	_apply_font_to_fit_tiles()
+	if not use_gpu_rendering:
+		_apply_font_to_fit_tiles()
 	# Ensure cursor overlay tracks the resized map and updated glyph metrics
 	_update_cursor_dimensions()
 	_refresh_hover_info()
@@ -1635,6 +1705,8 @@ func _on_map_resized() -> void:
 # Mouse enter/exit now handled by CursorOverlay
 
 func _apply_font_to_fit_tiles() -> void:
+	if use_gpu_rendering:
+		return
 	# Compute font size to fit tile_cols x tile_rows using measured glyph metrics
 	var w: int = max(1, tile_cols)
 	var h: int = max(1, tile_rows)
@@ -1670,13 +1742,65 @@ func _apply_font_to_fit_tiles() -> void:
 	if size_guess <= 0:
 		return
 	ascii_map.add_theme_font_size_override("normal_font_size", size_guess)
-	if cloud_map:
-		cloud_map.add_theme_font_size_override("normal_font_size", size_guess)
 	_update_char_size_cache()
 	_update_cursor_dimensions()
 
+func _schedule_tile_fit() -> void:
+	if not use_gpu_rendering or not GPU_AUTO_FIT_TILES:
+		return
+	if tile_fit_timer:
+		tile_fit_timer.start()
+
+func _on_tile_fit_timeout() -> void:
+	_apply_gpu_tile_fit()
+
+func _apply_gpu_tile_fit() -> void:
+	if not use_gpu_rendering or not GPU_SQUARE_TILES:
+		return
+	var rect_size := Vector2.ZERO
+	if gpu_ascii_renderer and gpu_ascii_renderer is Control:
+		rect_size = (gpu_ascii_renderer as Control).size
+	if rect_size.x <= 0.0 or rect_size.y <= 0.0:
+		if ascii_map:
+			rect_size = ascii_map.size
+	if rect_size.x <= 0.0 or rect_size.y <= 0.0:
+		return
+	# Establish target square tile size once (halve size = double grid)
+	if desired_tile_px <= 0.0:
+		var base_cols: int = max(1, tile_cols)
+		var current_tile_px: float = rect_size.x / float(base_cols)
+		desired_tile_px = max(1.0, current_tile_px / max(1.0, GPU_TILE_SCALE))
+	var new_cols: int = int(floor(rect_size.x / desired_tile_px))
+	var new_rows: int = int(floor(rect_size.y / desired_tile_px))
+	new_cols = clamp(new_cols, 8, 2048)
+	new_rows = clamp(new_rows, 8, 2048)
+	if new_cols == tile_cols and new_rows == tile_rows:
+		return
+	_set_tile_grid(new_cols, new_rows)
+
+func _set_tile_grid(new_cols: int, new_rows: int) -> void:
+	tile_cols = max(1, new_cols)
+	tile_rows = max(1, new_rows)
+	base_width = tile_cols
+	base_height = tile_rows
+	if tiles_across_spin:
+		tiles_across_spin.set_block_signals(true)
+		tiles_across_spin.value = tile_cols
+		tiles_across_spin.set_block_signals(false)
+	if tiles_down_spin:
+		tiles_down_spin.set_block_signals(true)
+		tiles_down_spin.value = tile_rows
+		tiles_down_spin.set_block_signals(false)
+	if lock_aspect_check:
+		lock_aspect_check.button_pressed = true
+		lock_aspect = true
+		if tiles_down_spin:
+			tiles_down_spin.editable = false
+	_generate_and_draw()
+
 func _on_tiles_across_changed(v: float) -> void:
 	tile_cols = int(max(1, v))
+	desired_tile_px = 0.0
 	# Maintain aspect ratio of the current viewport if locked
 	var rect_w: float = max(1.0, float(ascii_map.size.x))
 	var rect_h: float = max(1.0, float(ascii_map.size.y))
@@ -1707,16 +1831,14 @@ func _on_tiles_down_changed(v: float) -> void:
 	if lock_aspect_check and lock_aspect_check.button_pressed:
 		return
 	tile_rows = int(max(1, v))
+	desired_tile_px = 0.0
 	_apply_tile_grid_to_generator()
 	_apply_font_to_fit_tiles()
 
 func _apply_tile_grid_to_generator() -> void:
-	var cfg := {
-		"width": max(1, tile_cols),
-		"height": max(1, tile_rows),
-	}
-	generator.apply_config(cfg)
-	_redraw_ascii_from_current_state()
+	base_width = max(1, tile_cols)
+	base_height = max(1, tile_rows)
+	_generate_and_draw()
 
 class StringBuilder:
 	var parts: PackedStringArray = []
@@ -1734,13 +1856,13 @@ func _connect_cursor_overlay() -> void:
 		_setup_cursor_overlay_positioning()
 
 func _setup_cursor_overlay_positioning() -> void:
-	if cursor_overlay and ascii_map:
+	if cursor_overlay:
 		# Wait a frame to ensure ascii_map has proper size
 		await get_tree().process_frame
-		# Reparent overlay under ascii_map so it always matches map rect
-		if cursor_overlay.get_parent() != ascii_map:
-			cursor_overlay.reparent(ascii_map)
-		# Fill entire ascii_map rect and capture events for snappy cursor tracking
+		var map_container = ascii_map.get_parent() if ascii_map else cursor_overlay.get_parent()
+		if map_container and cursor_overlay.get_parent() != map_container:
+			cursor_overlay.reparent(map_container)
+		# Fill entire map rect and capture events for snappy cursor tracking
 		cursor_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		# Ensure same transform as map (inherit size/scale)
 		cursor_overlay.top_level = false
@@ -1805,6 +1927,8 @@ func _on_viewport_resized() -> void:
 	
 	# Update cursor overlay dimensions when window is resized (triggers font rescaling)
 	call_deferred("_update_cursor_dimensions")
+	if use_gpu_rendering and GPU_AUTO_FIT_TILES:
+		_schedule_tile_fit()
 
 func _on_floating_show_pressed() -> void:
 	_on_hide_panel_pressed()  # Toggle back to show
@@ -1842,7 +1966,6 @@ func _update_info_panel_for_tile(x: int, y: int) -> void:
 	var ttxt: String = info.get("biome_name", "Unknown")
 	var flags: PackedStringArray = PackedStringArray()
 	if info.get("is_beach", false): flags.append("Beach")
-	if info.get("is_turquoise_water", false): flags.append("Turquoise")
 	if info.get("is_lava", false): flags.append("Lava")
 	if info.get("is_river", false): flags.append("River")
 	if info.get("is_lake", false): flags.append("Lake")
@@ -1918,19 +2041,14 @@ func _gpu_clear_hover() -> void:
 		gpu_ascii_renderer.clear_hover_cell()
 
 func _on_gpu_rendering_toggled(enabled: bool) -> void:
-	"""Toggle between GPU and string-based rendering"""
-	use_gpu_rendering = enabled
-	
-	if enabled:
-		if not gpu_ascii_renderer:
-			_initialize_gpu_renderer()
-		if gpu_ascii_renderer and gpu_ascii_renderer.has_method("is_using_gpu_rendering") and gpu_ascii_renderer.is_using_gpu_rendering():
-			# Enable GPU rendering
-			ascii_map.modulate.a = 0.0  # Hide string rendering
-	else:
-		# Enable string rendering
-		ascii_map.modulate.a = 1.0  # Show string rendering
-	
+	"""GPU-only rendering (toggle kept for UI consistency)."""
+	use_gpu_rendering = true
+	if gpu_rendering_toggle:
+		gpu_rendering_toggle.button_pressed = true
+	if not gpu_ascii_renderer:
+		_initialize_gpu_renderer()
+	if ascii_map:
+		ascii_map.modulate.a = 0.0
 	# Force a redraw to show the change
 	_redraw_ascii_from_current_state()
 
@@ -1946,12 +2064,13 @@ func _initialize_gpu_renderer() -> void:
 	# Create GPU renderer as a sibling to ASCII map in MapContainer
 	gpu_ascii_renderer = GPUAsciiRendererClass.new()
 	gpu_ascii_renderer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	gpu_ascii_renderer.z_index = -1  # Behind cursor overlay
+	gpu_ascii_renderer.z_index = 0  # Keep above background; cursor overlay handles its own z_index
 	gpu_ascii_renderer.mouse_filter = Control.MOUSE_FILTER_IGNORE  # Don't block mouse events
 	var map_container = ascii_map.get_parent() if ascii_map else null
 	if map_container and map_container is Control:
 		(map_container as Control).add_child(gpu_ascii_renderer)
 		(map_container as Control).move_child(gpu_ascii_renderer, 0)  # Move to back
+		gpu_ascii_renderer.size = (map_container as Control).size
 	
 	# Get default font from ascii_map
 	var default_font = ascii_map.get_theme_font("normal_font")

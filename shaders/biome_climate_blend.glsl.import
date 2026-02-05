@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://caafrxmo0yquh"
+path="res://.godot/imported/biome_climate_blend.glsl-6e6df6072d7a276d23b5faef43d4a881.res"
+
+[deps]
+
+source_file="res://shaders/biome_climate_blend.glsl"
+dest_files=["res://.godot/imported/biome_climate_blend.glsl-6e6df6072d7a276d23b5faef43d4a881.res"]
+
+[params]
+

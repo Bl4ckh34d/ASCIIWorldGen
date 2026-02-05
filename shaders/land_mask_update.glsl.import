@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://baqan477ygqwg"
+path="res://.godot/imported/land_mask_update.glsl-7fef2583af64083dd81ab3fc4b6aef66.res"
+
+[deps]
+
+source_file="res://shaders/land_mask_update.glsl"
+dest_files=["res://.godot/imported/land_mask_update.glsl-7fef2583af64083dd81ab3fc4b6aef66.res"]
+
+[params]
+
