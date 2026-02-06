@@ -7,7 +7,6 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(rgba32f, set = 0, binding = 0) uniform image2D out_tex;
 layout(rgba32f, set = 0, binding = 1) uniform readonly image2D mycelium_tex;
-layout(rgba8, set = 0, binding = 2) uniform readonly image2D corona_noise_tex;
 
 layout(push_constant) uniform Params {
 	int width;
@@ -36,11 +35,12 @@ layout(push_constant) uniform Params {
 	float zone_inner_radius;
 	float zone_outer_radius;
 	float planet_has_position;
-	float _pad0;
-	float _pad1;
+	float moon_count;
+	float moon_seed;
 } PC;
 
 const float TAU = 6.28318530718;
+const float PI = 3.14159265359;
 const int SHADER_PHASE_QUOTE = 0;
 const int SHADER_PHASE_BIG_BANG = 1;
 const int SHADER_PHASE_STAGE2 = 2;
@@ -187,14 +187,11 @@ float corona_ring_ray_noise(vec3 ray, vec3 pos, float r, float size, mat3 mr, fl
 }
 
 float corona_noise_texture(vec2 x) {
-	ivec2 sz = imageSize(corona_noise_tex);
-	if (sz.x <= 0 || sz.y <= 0) {
-		return 0.5;
-	}
-	vec2 uv = fract(x * 0.01);
-	ivec2 pix = ivec2(floor(uv * vec2(sz)));
-	pix = clamp(pix, ivec2(0), sz - ivec2(1));
-	return imageLoad(corona_noise_tex, pix).r;
+	// Keep corona noise fully procedural to avoid external image dependencies.
+	float n0 = value_noise(x * 0.80 + vec2(13.7, -9.2));
+	float n1 = value_noise(rot2(0.73) * x * 1.65 + vec2(-5.4, 7.1));
+	float n2 = value_noise(rot2(-0.48) * x * 3.10 + vec2(17.3, 3.8));
+	return clamp(n0 * 0.62 + n1 * 0.28 + n2 * 0.10, 0.0, 1.0);
 }
 
 float corona_ray_fbm(vec2 p) {
@@ -274,27 +271,46 @@ float bump_soft_profile(float h) {
 }
 
 vec2 sun_sine_warp(vec2 p, float t) {
-	p = (p + 3.0) * 3.2;
+	p = (p + 3.0) * 4.6;
 	float tw = t * 0.18 + sin(t * 0.07) * 0.35;
 	for (int i = 0; i < 3; i++) {
-		p += cos(p.yx * 2.0 + vec2(tw, 1.57)) / 3.6;
-		p += sin(p.yx * 0.78 + tw + vec2(1.57, 0.0)) / 2.9;
-		p *= 1.18;
+		p += cos(p.yx * 2.8 + vec2(tw, 1.57)) / 4.2;
+		p += sin(p.yx * 1.14 + tw + vec2(1.57, 0.0)) / 3.5;
+		p *= 1.23;
 	}
-	p += fract(sin(p + vec2(13.0, 7.0)) * 500000.0) * 0.008 - 0.004;
-	return mod(p, 2.0) - 1.0;
+	p += fract(sin(p + vec2(13.0, 7.0)) * 500000.0) * 0.006 - 0.003;
+	return mod(p, 1.55) - 0.775;
+}
+
+// Continuous sibling of sun_sine_warp used to share the same morph behavior
+// across multiple surface layers without introducing modular discontinuities.
+vec2 sun_sine_morph_delta(vec2 p, float t) {
+	vec2 q = (p + 3.0) * 4.6;
+	vec2 q0 = q;
+	float tw = t * 0.18 + sin(t * 0.07) * 0.35;
+	float amp = 1.0;
+	vec2 delta = vec2(0.0);
+	for (int i = 0; i < 3; i++) {
+		vec2 d = cos(q.yx * 2.8 + vec2(tw, 1.57)) / 4.2;
+		d += sin(q.yx * 1.14 + tw + vec2(1.57, 0.0)) / 3.5;
+		q += d;
+		delta += d * amp;
+		q *= 1.23;
+		amp *= 0.62;
+	}
+	return (q - q0) / 4.6 + delta * 0.18;
 }
 
 float honey_cells(vec2 p, float t) {
 	float slow_t = t * 0.16;
-	vec2 q = p * 2.25;
-	q += vec2(sin(slow_t * 0.90), cos(slow_t * 0.70)) * 0.22;
+	vec2 q = p * 3.4;
+	q += vec2(sin(slow_t * 0.90), cos(slow_t * 0.70)) * 0.18;
 	float w0 = sin(q.x + slow_t * 0.35);
 	float w1 = sin(dot(q, vec2(0.5, 0.8660254)) - slow_t * 0.28 + 1.10);
 	float w2 = sin(dot(q, vec2(-0.5, 0.8660254)) + slow_t * 0.24 - 0.90);
 	float tri = (w0 + w1 + w2) / 3.0;
 	float cell = smoothstep(0.10, 0.88, 1.0 - abs(tri));
-	float pocket = fbm(q * 0.85 + vec2(2.3, -1.4) + vec2(slow_t * 0.33, -slow_t * 0.27));
+	float pocket = fbm(q * 1.35 + vec2(2.3, -1.4) + vec2(slow_t * 0.33, -slow_t * 0.27));
 	return clamp(cell * 0.72 + pocket * 0.28, 0.0, 1.0);
 }
 
@@ -302,10 +318,10 @@ float sun_bump_height(vec2 p, float t) {
 	float slow_t = t * 0.52;
 	float h = length(sun_sine_warp(p, slow_t)) * 0.7071;
 	h = bump_soft_profile(h);
-	float fine0 = fbm(p * 2.8 + vec2(-slow_t * 0.12, slow_t * 0.10));
-	float fine1 = fbm(p * 6.4 + vec2(slow_t * 0.24, -slow_t * 0.20));
-	float comb = honey_cells(p * 2.3, slow_t * 0.78);
-	float micro = noise4q(vec4(vec3(p * 9.5 + vec2(83.23, 34.34), comb * 2.4 + 67.453), slow_t * 1.35));
+	float fine0 = fbm(p * 4.2 + vec2(-slow_t * 0.12, slow_t * 0.10));
+	float fine1 = fbm(p * 9.6 + vec2(slow_t * 0.24, -slow_t * 0.20));
+	float comb = honey_cells(p * 3.4, slow_t * 0.78);
+	float micro = noise4q(vec4(vec3(p * 14.5 + vec2(83.23, 34.34), comb * 2.4 + 67.453), slow_t * 1.35));
 	h = mix(h, fine0, 0.22);
 	h = mix(h, fine1, 0.14);
 	h = mix(h, comb, 0.12);
@@ -313,10 +329,75 @@ float sun_bump_height(vec2 p, float t) {
 	return smoothstep(0.12, 0.92, clamp(h, 0.0, 1.0));
 }
 
+// Rounded Voronoi field for photosphere-like granulation cells with periodic tiling.
+// x = nearest-cell distance, y = edge distance (small near borders), z = cell id noise
+vec3 sun_granule_voronoi(vec2 p, vec2 tile, float t) {
+	vec2 p_wrap = mod(p, tile);
+	vec2 p_norm = p_wrap / max(tile, vec2(1.0));
+	vec2 warp0 = vec2(
+		sin((p_norm.y + 0.20 * sin(p_norm.x * TAU * 2.2)) * TAU * 4.9),
+		cos((p_norm.x + 0.18 * cos(p_norm.y * TAU * 1.9)) * TAU * 4.2)
+	);
+	vec2 warp1 = vec2(
+		sin((p_norm.x + p_norm.y) * TAU * 6.1),
+		cos((p_norm.x - p_norm.y) * TAU * 5.3)
+	);
+	float warp_morph0 = 0.5 + 0.5 * sin(t * 0.18 + dot(p_norm, vec2(11.0, 7.0)) * TAU);
+	float warp_morph1 = 0.5 + 0.5 * cos(t * 0.14 - dot(p_norm, vec2(8.0, 13.0)) * TAU);
+	p_wrap = mod(p_wrap + warp0 * mix(0.36, 0.50, warp_morph0) + warp1 * mix(0.18, 0.30, warp_morph1), tile);
+	vec2 ip = floor(p_wrap);
+	float d1 = 1e9;
+	float d2 = 1e9;
+	float cell_id = 0.0;
+	for (int j = -1; j <= 1; j++) {
+		for (int i = -1; i <= 1; i++) {
+			vec2 o = vec2(float(i), float(j));
+			vec2 cell = mod(ip + o, tile);
+			float h0 = hash12(cell + vec2(17.0, 91.0));
+			float h1 = hash12(cell + vec2(53.0, 27.0));
+			float h2 = hash12(cell + vec2(11.0, 63.0));
+			float h3 = hash12(cell + vec2(87.0, 149.0));
+			float h4 = hash12(cell + vec2(191.0, 37.0));
+			float jitter_amp = mix(0.34, 1.22, h2);
+			vec2 jitter = (vec2(h0, h1) - 0.5) * jitter_amp;
+			jitter += vec2(
+				cos(t * 0.09 + h0 * TAU + h2 * 3.1),
+				sin(t * 0.08 + h1 * TAU + h2 * 5.3)
+			) * mix(0.07, 0.16, h2);
+			vec2 center = cell + vec2(0.5) + jitter * 0.84;
+			vec2 r = center - p_wrap;
+			r -= tile * round(r / tile);
+			vec2 rr = r * vec2(mix(0.74, 1.38, h3), mix(0.74, 1.38, h4));
+			rr += rr.yx * (h2 - 0.5) * 0.38;
+			float d = dot(rr, rr) + (h2 - 0.5) * 0.50;
+			if (d < d1) {
+				d2 = d1;
+				d1 = d;
+				cell_id = hash12(cell + vec2(211.7, 73.1));
+			} else if (d < d2) {
+				d2 = d;
+			}
+		}
+	}
+	float f1 = sqrt(max(0.0, d1));
+	float edge = sqrt(max(0.0, d2)) - f1;
+	return vec3(f1, edge, cell_id);
+}
+
+float sun_voronoi_bump_height(vec3 vor) {
+	float edge = 1.0 - smoothstep(0.014, 0.205, vor.y);
+	float center = 1.0 - smoothstep(0.08, 0.47, vor.x);
+	float cell = smoothstep(0.040, 0.34, vor.y);
+	float ridge = pow(edge, 1.2);
+	float cell_variation = 0.85 + vor.z * 0.35;
+	float h = cell * 0.78 + center * 0.32 - ridge * 0.18 * cell_variation;
+	return clamp(h, 0.0, 1.0);
+}
+
 vec2 sun_spherical_warp_coord(vec3 n, float t) {
 	vec2 p = n.xy / max(0.30, n.z + 0.56);
-	p += flow_dir(p * 1.45, t * 0.12) * 0.020;
-	p += vec2(sin(t * 0.08 + p.y * 1.2), cos(t * 0.07 + p.x * 1.1)) * 0.008;
+	p += flow_dir(p * 2.2, t * 0.12) * 0.016;
+	p += vec2(sin(t * 0.08 + p.y * 1.8), cos(t * 0.07 + p.x * 1.7)) * 0.007;
 	return p;
 }
 
@@ -538,40 +619,88 @@ vec3 render_stage2(vec2 uv, float t) {
 	// a late opacity fade while the camera is already panning.
 	float sun_reveal = space * smoothstep(0.00, 0.12, pan);
 	float sun_dist = r / max(0.0001, sun_r);
-	// Tight back-glow layer behind sun/corona (kept intentionally compact).
-	float back_glow_inner = exp(-pow(sun_dist * 2.7, 2.0));
-	float back_glow_outer = exp(-pow(sun_dist * 1.6, 2.0));
-	float back_glow_limb = exp(-abs(sun_dist - 1.0) * 15.0);
-	vec3 back_glow = vec3(1.0, 0.84, 0.18) * back_glow_inner * 0.24;
-	back_glow += vec3(1.0, 0.92, 0.32) * back_glow_outer * 0.17;
-	back_glow += vec3(1.0, 0.74, 0.24) * back_glow_limb * 0.16;
-	col += back_glow * sun_reveal;
+	// Back-glow bridge from limb to corona: keep it thin and softly tapered.
+	float glow_out = max(0.0, sun_dist - 1.0);
+	float back_glow_peak = exp(-pow(glow_out * 14.0, 2.0));
+	float back_glow_tail = exp(-glow_out * 10.8);
+	float back_glow_gate = smoothstep(0.998, 1.015, sun_dist) * (1.0 - smoothstep(1.16, 1.30, sun_dist));
+	vec3 back_glow = vec3(1.0, 0.88, 0.22) * back_glow_peak * 0.17;
+	back_glow += vec3(1.0, 0.95, 0.42) * back_glow_tail * 0.045;
+	col += back_glow * sun_reveal * back_glow_gate;
 
 	float sun_body = smoothstep(sun_r + 0.0025, sun_r - 0.0015, r);
 	vec2 np = rel / max(0.0001, sun_r);
 	float np_len2 = dot(np, np);
 	float hemisphere = sqrt(max(0.0, 1.0 - min(np_len2, 1.0)));
 	vec3 sphere_n = normalize(vec3(np, hemisphere));
-	vec2 warp_p = sun_spherical_warp_coord(sphere_n, t) * 3.0;
-	float h = sun_bump_height(warp_p, t * 0.34);
-	float e = 0.018;
-	float hx = sun_bump_height(warp_p + vec2(e, 0.0), t * 0.34) - h;
-	float hy = sun_bump_height(warp_p + vec2(0.0, e), t * 0.34) - h;
+	// Seam-safe spin: move surface phase without rotating into a discontinuous projection.
+	float sun_spin = t * 0.22;
+	float sun_spin_uv = sun_spin * 0.38;
+	vec2 surf_uv = sun_spherical_warp_coord(sphere_n, t);
+	surf_uv.x += sun_spin_uv;
+	vec2 warp_p = surf_uv * 4.7;
+	float flow0 = filament_field(warp_p * 1.35 + flow_dir(warp_p * 1.8, t * 0.24) * 0.22, t * 0.24, 8.4, 0.30);
+	float flow1 = filament_field(rot2(0.52) * warp_p * 1.70 + vec2(-t * 0.08, t * 0.06), t * 0.19, 10.1, 0.28);
+	float honey_mask = honey_cells(warp_p * 1.28, t * 0.38);
+	float detail_noise = noise4q(vec4(sphere_n * 40.0 + vec3(83.23, 34.34, 67.453), t * 0.78 + sun_spin * 0.62));
+	detail_noise = smoothstep(0.38, 0.92, detail_noise);
+	// Keep Voronoi advection synced with photosphere spin; slower scalar avoids apparent over-rotation.
+	float granule_spin = sun_spin_uv * 0.27;
+	// Equal-area spherical mapping for more uniform granule cell size across the disc.
+	float granule_u = fract(atan(sphere_n.x, sphere_n.z) / TAU + 0.5 + granule_spin);
+	float granule_v = sphere_n.y * 0.5 + 0.5;
+	vec2 granule_uv = vec2(granule_u, granule_v);
+	vec2 granule_tile = vec2(228.0, 116.0);
+	vec2 granule_p = granule_uv * granule_tile;
+	float voronoi_morph_t = t * 0.46;
+	float shared_morph_t = t * 0.34 * 0.52;
+	vec2 shared_morph = sun_sine_morph_delta(warp_p, shared_morph_t);
+	granule_p += shared_morph * (granule_tile * vec2(0.026, 0.026));
+	vec2 granule_anchor_warp0 = vec2(
+		fbm(granule_uv * 13.0 + vec2(4.3, 9.7)),
+		fbm(rot2(0.87) * granule_uv * 17.0 + vec2(11.9, 1.6))
+	) - 0.5;
+	vec2 granule_anchor_warp1 = vec2(
+		fbm(granule_uv * 29.0 + vec2(17.4, 5.2)),
+		fbm(rot2(-0.49) * granule_uv * 25.0 + vec2(2.1, 13.3))
+	) - 0.5;
+	float granule_pulse_own = 0.5 + 0.5 * sin(voronoi_morph_t * 0.33 + dot(granule_uv, vec2(7.1, 5.3)) * TAU);
+	float granule_pulse_shared = 0.5 + 0.5 * sin(shared_morph_t * 0.74 + dot(granule_uv, vec2(5.9, 8.1)) * TAU);
+	float granule_pulse = mix(granule_pulse_own, granule_pulse_shared, 0.45);
+	granule_p += granule_anchor_warp0 * mix(5.0, 5.8, granule_pulse);
+	granule_p += granule_anchor_warp1 * mix(1.4, 1.9, granule_pulse);
+	float vor_morph_t = voronoi_morph_t + shared_morph_t * 0.65;
+	vec3 vor = sun_granule_voronoi(granule_p, granule_tile, vor_morph_t);
+	float edge_fuzz = fbm(granule_uv * 36.0 + vec2(7.2, -4.1));
+	float edge_wobble0 = fbm(granule_p * 0.23 + vec2(vor.z * 31.7, -vor.z * 17.9));
+	float edge_wobble1 = fbm(rot2(0.73) * granule_p * 0.31 + vec2(vor.z * 13.4, vor.z * 29.1));
+	float edge_pulse = 0.5 + 0.5 * sin(vor_morph_t * 0.92 + vor.z * TAU + edge_fuzz * 2.8);
+	float edge_shift = (edge_fuzz - 0.5) * mix(0.016, 0.028, edge_pulse) + (edge_wobble0 - 0.5) * mix(0.010, 0.020, 1.0 - edge_pulse);
+	float edge_metric = vor.y + (edge_wobble0 - 0.5) * 0.11 + (edge_wobble1 - 0.5) * 0.08;
+	float core_metric = vor.x + (edge_wobble1 - 0.5) * 0.05;
+	float vor_edge = 1.0 - smoothstep(0.014 + edge_shift, 0.205 + edge_shift, edge_metric);
+	float vor_cell = smoothstep(0.040 + edge_shift * 0.5, 0.34 + edge_shift * 0.5, edge_metric);
+	float vor_center = 1.0 - smoothstep(0.08, 0.47, core_metric);
+	float granule = clamp(vor_cell * 0.66 + vor_center * 0.34, 0.0, 1.0);
+	vor_edge = smoothstep(0.0, 1.0, clamp(pow(vor_edge, 0.62), 0.0, 1.0));
+	float bump_e = 0.42;
+	float h = sun_voronoi_bump_height(vor);
+	float hxp = sun_voronoi_bump_height(sun_granule_voronoi(granule_p + vec2(bump_e, 0.0), granule_tile, vor_morph_t));
+	float hyp = sun_voronoi_bump_height(sun_granule_voronoi(granule_p + vec2(0.0, bump_e), granule_tile, vor_morph_t));
+	float hx = hxp - h;
+	float hy = hyp - h;
 	vec3 tangent_x = normalize(vec3(1.0, 0.0, -sphere_n.x / max(0.10, sphere_n.z)));
 	vec3 tangent_y = normalize(vec3(0.0, 1.0, -sphere_n.y / max(0.10, sphere_n.z)));
-	float bump_strength = 1.18;
+	float bump_strength = 1.06;
 	vec3 surf_n = normalize(sphere_n - tangent_x * hx * bump_strength - tangent_y * hy * bump_strength);
 	vec3 light_dir = normalize(vec3(cos(t * 0.18) * 0.28, sin(t * 0.14) * 0.22, 0.93));
 	float ndl = clamp(dot(surf_n, light_dir), 0.0, 1.0);
 	float fres = pow(1.0 - clamp(surf_n.z, 0.0, 1.0), 2.2);
-	float flow0 = filament_field(warp_p * 0.95 + flow_dir(warp_p * 1.2, t * 0.24) * 0.28, t * 0.24, 5.8, 0.34);
-	float flow1 = filament_field(rot2(0.52) * warp_p * 1.20 + vec2(-t * 0.08, t * 0.06), t * 0.19, 7.2, 0.32);
-	float honey_mask = honey_cells(warp_p * 0.92, t * 0.38);
-	float detail_noise = noise4q(vec4(sphere_n * 24.0 + vec3(83.23, 34.34, 67.453), t * 0.78));
-	detail_noise = smoothstep(0.38, 0.92, detail_noise);
 	float veins = smoothstep(0.22, 0.84, mix(flow0, flow1, 0.36));
 	veins = mix(veins, honey_mask, 0.24);
 	veins = mix(veins, detail_noise, 0.10);
+	veins = mix(veins, granule, 0.30);
+	veins = clamp(veins - vor_edge * 0.030, 0.0, 1.0);
 	float core_grad = exp(-r / max(0.0001, sun_r * 0.55));
 	float limb = smoothstep(sun_r * 0.58, sun_r * 0.995, r);
 
@@ -582,6 +711,9 @@ vec3 render_stage2(vec2 uv, float t) {
 	float color_mix0 = clamp(h * 0.42 + veins * 0.58, 0.0, 1.0);
 	vec3 base_col = mix(sun_deep, sun_mid, color_mix0);
 	base_col = mix(base_col, sun_hot, clamp(h * 0.28 + veins * 0.62, 0.0, 1.0));
+	base_col = mix(base_col, sun_mid * 0.86 + sun_hot * 0.14, vor_edge * 0.16);
+	base_col += sun_hot * vor_edge * 0.045;
+	base_col += sun_hot * granule * (0.06 + 0.10 * vor.z);
 	vec3 plasma = base_col;
 	float ember = smoothstep(0.62, 0.98, detail_noise);
 	plasma += vec3(1.0, 0.56, 0.06) * ember * (0.02 + 0.04 * veins);
@@ -599,8 +731,9 @@ vec3 render_stage2(vec2 uv, float t) {
 	float outside_body = smoothstep(0.985, 1.02, rn);
 	float far_fade = 1.0 - smoothstep(1.55, 2.35, rn);
 	float corona_mask = outside_body * far_fade * sun_reveal;
-	float limb_bridge = exp(-abs(rn - 1.0) * 46.0) * sun_reveal;
-	corona_mask = max(corona_mask, limb_bridge * 0.34);
+	float limb_out = max(0.0, rn - 1.0);
+	float limb_bridge = exp(-pow(limb_out * 34.0, 1.15)) * smoothstep(0.995, 1.018, rn) * sun_reveal;
+	corona_mask = max(corona_mask, limb_bridge * 0.25);
 
 	vec2 p_cor = np * 0.70710678;
 	vec3 ray_cor = normalize(vec3(p_cor, 2.0));
@@ -616,12 +749,12 @@ vec3 render_stage2(vec2 uv, float t) {
 	float swirl_shell = smoothstep(1.02, 1.82, rn) * (1.0 - smoothstep(1.90, 2.35, rn));
 	vec3 cor_swirl = mix(vec3(0.98, 0.24, 0.02), vec3(1.0, 0.84, 0.40), swirl) * swirl;
 	cor_swirl *= 0.72 + swirl_shell * 0.78;
-	vec3 bridge_col = vec3(1.0, 0.72, 0.22) * limb_bridge * 0.36;
+	vec3 bridge_col = vec3(1.0, 0.72, 0.22) * limb_bridge * 0.24;
 
 	col += bridge_col;
-	col += cor_rays * corona_mask * mix(1.72, 1.12, swirl * 0.75);
-	col += cor_swirl * corona_mask * 1.62;
-	col += vec3(1.0, 0.78, 0.24) * swirl_ridge * corona_mask * 0.32;
+	col += cor_rays * corona_mask * mix(1.52, 0.99, swirl * 0.75);
+	col += cor_swirl * corona_mask * 1.40;
+	col += vec3(1.0, 0.78, 0.24) * swirl_ridge * corona_mask * 0.27;
 
 	float inner = PC.zone_inner_radius / max(1.0, float(PC.height));
 	float outer = PC.zone_outer_radius / max(1.0, float(PC.height));
@@ -651,9 +784,10 @@ vec3 render_stage2(vec2 uv, float t) {
 		if (PC.intro_phase == INTRO_PHASE_PLANET_PLACE && PC.planet_has_position < 0.5) {
 			px = PC.planet_preview_x;
 		}
+
 		vec2 p_rel = vec2((xpix - px) / max(1.0, float(PC.height)), (ypix - PC.orbit_y) / max(1.0, float(PC.height)));
 		float pr = length(p_rel);
-		float p_rad = 14.0 / max(1.0, float(PC.height));
+		float p_rad = 17.0 / max(1.0, float(PC.height));
 		float p_mask = smoothstep(p_rad + 0.002, p_rad - 0.001, pr);
 		float p_noise = fbm(p_rel * 14.0 + vec2(t * 0.45, -t * 0.35));
 		float p_vein = filament_field(p_rel * 8.5 + vec2(t * 0.25, -t * 0.2), t * 0.3, 8.0, 0.24);
@@ -664,6 +798,100 @@ vec3 render_stage2(vec2 uv, float t) {
 		col = mix(col, p_col, p_mask);
 		float p_glow = exp(-max(0.0, pr - p_rad) * 45.0) * step(p_rad, pr);
 		col += vec3(1.0, 0.46, 0.14) * p_glow * 0.30;
+
+		int moon_count = clamp(int(floor(PC.moon_count + 0.5)), 0, 3);
+		float moon_seed = max(0.0001, PC.moon_seed);
+		for (int mi = 0; mi < 3; mi++) {
+			if (mi >= moon_count) {
+				continue;
+			}
+			float fi = float(mi);
+			float h0 = hash12(vec2(moon_seed * 0.071 + fi * 11.13, moon_seed * 0.037 + fi * 3.97));
+			float h1 = hash12(vec2(moon_seed * 0.113 + fi * 7.21, moon_seed * 0.053 + fi * 5.61));
+			float h2 = hash12(vec2(moon_seed * 0.167 + fi * 2.83, moon_seed * 0.029 + fi * 13.17));
+			float h3 = hash12(vec2(moon_seed * 0.197 + fi * 17.11, moon_seed * 0.089 + fi * 19.73));
+			float h4 = hash12(vec2(moon_seed * 0.251 + fi * 23.03, moon_seed * 0.131 + fi * 29.31));
+			float h5 = hash12(vec2(moon_seed * 0.307 + fi * 31.39, moon_seed * 0.149 + fi * 37.71));
+
+			// Keep moons on separated circular shells with more base spacing.
+			float orbit_mul = 2.80 + fi * 1.45 + h0 * 0.40;
+			float orbit_r = p_rad * orbit_mul;
+			float phase = h2 * TAU;
+			float omega = (1.80 + h5 * 0.65) / pow(max(0.5, orbit_mul), 1.5);
+			float ang = t * omega + phase;
+			vec2 m_off = vec2(cos(ang), sin(ang)) * orbit_r;
+
+			vec2 m_rel = p_rel - m_off;
+			float mr = length(m_rel);
+			float m_rad = p_rad * mix(0.10, 0.50, h4);
+			float m_mask = smoothstep(m_rad + 0.0018, m_rad - 0.0010, mr);
+			vec2 m_local = m_rel / max(0.0001, m_rad);
+			float m_l2 = dot(m_local, m_local);
+			float m_z = sqrt(max(0.0, 1.0 - min(m_l2, 1.0)));
+			vec3 m_norm = normalize(vec3(m_local, m_z));
+
+			// Moon day length tracks orbital period (tidal-lock baseline), with small deviation.
+			float spin_ratio = 1.0 + (h1 - 0.5) * 0.18;
+			// Very rare case: strong negative deviation can tip into mild retrograde.
+			if (h5 > 0.992) {
+				float retro_t = (h5 - 0.992) / 0.008;
+				spin_ratio -= mix(1.05, 1.22, retro_t);
+			}
+			spin_ratio = clamp(spin_ratio, -0.22, 1.12);
+			float spin_rate = omega * spin_ratio;
+			float spin_ang = t * spin_rate + h1 * TAU;
+			float spin_phase = spin_ang / TAU;
+			float m_lon = atan(m_norm.y, m_norm.x) / TAU + 0.5;
+			float m_lat = acos(clamp(m_norm.z, -1.0, 1.0)) / PI;
+			vec2 m_uv = vec2(fract(m_lon + spin_phase + h0 * 0.37), clamp(m_lat + (h3 - 0.5) * 0.08, 0.0, 1.0));
+
+			float patch0 = fbm(m_uv * (2.8 + h4 * 2.1) + vec2(1.7, -2.3));
+			float patch1 = fbm(rot2(1.11 + h5 * 0.35) * m_uv * (6.2 + h2 * 3.3) + vec2(-3.7, 2.1));
+			float patch_mix = clamp(patch0 * 0.65 + patch1 * 0.35, 0.0, 1.0);
+
+			float crater_seed0 = fbm(m_uv * (14.0 + h1 * 8.0) + vec2(7.0, -5.0));
+			float crater_seed1 = fbm(rot2(0.73 + h4 * 0.4) * m_uv * (22.0 + h5 * 6.0) + vec2(-4.0, 9.0));
+			float crater_field = max(crater_seed0, crater_seed1 * 0.92);
+			float crater_pit = pow(smoothstep(0.66, 0.99, crater_field), 1.18);
+			float crater_rim = smoothstep(0.46, 0.78, crater_field) * (1.0 - crater_pit);
+
+			float canyon_n0 = fbm(rot2(0.42 + h3 * 0.4) * m_uv * (9.0 + h0 * 5.0) + vec2(2.4, -1.9));
+			float canyon_n1 = fbm(rot2(-0.91 + h2 * 0.5) * m_uv * (16.0 + h2 * 7.0) + vec2(-1.1, 2.7));
+			float canyon_wave = abs((canyon_n0 * 0.68 + canyon_n1 * 0.32) * 2.0 - 1.0);
+			float canyon_trough = pow(clamp(1.0 - canyon_wave, 0.0, 1.0), 4.5);
+			float canyon_rim = pow(clamp(1.0 - canyon_wave, 0.0, 1.0), 2.1) * (1.0 - canyon_trough);
+
+			float grey_base = 0.34 + (h3 - 0.5) * 0.30;
+			float albedo = grey_base;
+			albedo *= 0.74 + patch_mix * 0.58;
+			albedo += crater_rim * 0.16;
+			albedo -= crater_pit * 0.22;
+			albedo += canyon_rim * 0.10;
+			albedo -= canyon_trough * 0.12;
+			albedo = clamp(albedo, 0.08, 1.0);
+
+			vec3 tint = vec3(
+				0.92 + (h0 - 0.5) * 0.14,
+				0.92 + (h1 - 0.5) * 0.14,
+				0.92 + (h2 - 0.5) * 0.14
+			);
+			float tint_amt = 0.02 + h5 * 0.05;
+			albedo *= 0.86 + (h4 - 0.5) * 0.34;
+
+			vec3 moon_light_dir = normalize(vec3(-0.30 + h1 * 0.20, 0.22 + h2 * 0.16, 0.92));
+			float moon_ndl = clamp(dot(m_norm, moon_light_dir), 0.0, 1.0);
+			float moon_fres = pow(1.0 - clamp(m_norm.z, 0.0, 1.0), 2.4);
+			float moon_shade = 0.42 + moon_ndl * (0.60 + h2 * 0.16) + moon_fres * 0.10;
+
+			vec3 moon_col = vec3(albedo) * moon_shade;
+			moon_col *= mix(vec3(1.0), tint, tint_amt);
+			moon_col += vec3(0.10) * crater_rim * (0.28 + moon_ndl * 0.62);
+			moon_col -= vec3(0.10) * crater_pit * 0.48;
+			moon_col = clamp(moon_col, 0.0, 1.0);
+			col = mix(col, moon_col, m_mask);
+			float moon_rim = exp(-abs(mr - m_rad) * 110.0);
+			col += mix(vec3(0.78), tint, tint_amt * 0.7) * moon_rim * 0.05;
+		}
 
 		if (PC.intro_phase == INTRO_PHASE_PLANET_PLACE) {
 			float pulse = 0.5 + 0.5 * sin(t * 4.0);
@@ -691,4 +919,3 @@ void main() {
 	color = clamp(color, 0.0, 1.0);
 	imageStore(out_tex, ivec2(gid), vec4(color, 1.0));
 }
-

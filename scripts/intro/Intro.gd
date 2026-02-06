@@ -35,7 +35,7 @@ const BIG_BANG_EXPLODE_SEC := 1.80
 const BIG_BANG_PLASMA_FADE_SEC := 3.00
 const BIG_BANG_STARFIELD_SEC := 5.80
 const BIG_BANG_FADE_SEC := 1.00
-const BIG_BANG_EXPANSION_DRIVE_SEC := 3.40
+const BIG_BANG_EXPANSION_DRIVE_SEC := 2.20
 const BIG_BANG_SHAKE_START_DELAY_SEC := 0.30
 const BIG_BANG_SHAKE_RISE_SEC := 0.50
 const BIG_BANG_SHAKE_DECAY_SEC := 3.00
@@ -53,6 +53,126 @@ const GOLDILOCK_DISTANCE_SCALE := GOLDILOCK_REFERENCE_SCALE * 2.0
 const GOLDILOCK_SCREEN_CENTER_X := 0.50
 const GOLDILOCK_BAND_WIDTH_FACTOR := 0.30
 const GOLDILOCK_BAND_MIN_WIDTH_PX := 360.0
+const MAX_MOONS := 3
+
+const FANTASY_SINGLE_NAMES := [
+	"Bel", "Trus", "Ash", "Keth", "Nyr", "Vorn", "Lun", "Tal", "Syr", "Ril",
+	"Karn", "Myr", "Zel", "Orn", "Thal", "Brin", "Cyr", "Drus", "Fen", "Ith",
+	"Jor", "Kyr", "Lor", "Morn", "Nesh", "Oth", "Prax", "Quor", "Ryn", "Sarn",
+	"Tor", "Ulm", "Vesh", "Wren", "Xal", "Yor", "Zhin", "Ael", "Bael", "Cael",
+	"Daen", "Eld", "Fael", "Grax", "Heth", "Ivar", "Jask", "Loth", "Khar", "Vor",
+	"Ashk", "Bren", "Cald", "Dren", "Evor", "Fyrn", "Ghal", "Harn", "Irel", "Jurn",
+	"Kest", "Lyrn", "Mesk", "Norn", "Oryn", "Phel", "Qarn", "Rusk", "Seth", "Tarn",
+	"Ulth", "Varn", "Wyst", "Xern", "Yvyr", "Zarn", "Arix", "Bast", "Corth", "Dask",
+	"Elyn", "Fask", "Grun", "Hyrn", "Inor", "Jyss", "Kroth", "Lask", "Myrk", "Nol",
+	"Orr", "Pyrn", "Qeth", "Rhov", "Syth", "Tusk", "Urn", "Vesk", "Wor", "Xyr",
+	"Yast", "Zeth", "Aurn", "Bryl", "Cask", "Dorn", "Erix", "Frin", "Gesk", "Hov",
+	"Ixar", "Jarn", "Keld", "Lorn", "Malk", "Neth", "Osk", "Pran", "Qor", "Rald",
+	"Siv", "Tov", "Urik", "Vyx", "Wesk", "Xarn", "Yorn", "Zyr", "Astrix", "Borth",
+	"Cren", "Dyth", "Eskar", "Forn", "Gyr", "Hest", "Ilth", "Jorv", "Krail", "Lusk",
+	"Morv", "Nyrn", "Orv", "Pesk", "Qirn", "Rask", "Surn", "Tyr", "Uven", "Vryk",
+	"Warn", "Xoss", "Ysel", "Zorn", "Avar", "Brenk", "Cyrn", "Drel", "Fyr", "Gorn",
+	"Hyr", "Istr", "Jeth", "Krys", "Lyr", "Morr", "Nysk", "Orel", "Pyr", "Quarn",
+	"Reth", "Skar", "Thyr", "Uth", "Veld", "Wyr", "Xeth", "Yrik", "Zhul"
+]
+
+const FANTASY_CURATED_NAMES := [
+	"Astrael", "Varnis", "Kordesh", "Belora", "Nythar", "Orimel", "Truvain", "Lunara", "Ashkiel", "Mordun",
+	"Soryn", "Vaelith", "Draeven", "Thalora", "Yradesh", "Caldrin", "Mireth", "Rovara", "Zerath", "Elandor",
+	"Kyralis", "Badesh", "Lotharda", "Fenor", "Neruva", "Qorath", "Averon", "Brivar", "Celesh", "Doreth",
+	"Erivash", "Faryn", "Gorune", "Harovar", "Iskara", "Jorven", "Kelora", "Lyrath", "Morvane", "Nolira",
+	"Orveth", "Praxora", "Quenor", "Rethys", "Sarune", "Tovaris", "Uraveth", "Virel", "Wynora", "Xerun",
+	"Yalara", "Zorvain", "Ashael", "Brenor", "Corveth", "Dralune", "Elvaris", "Ferath", "Galorin", "Heskar",
+	"Iralune", "Jastor", "Keldara", "Lorveth", "Myralis", "Nardesh", "Ophira", "Pellune", "Qirath", "Rulora",
+	"Selvane", "Tarnel", "Umbrion", "Valeth", "Woralis", "Xandor", "Ylith", "Zarune", "Ardeth", "Briora",
+	"Caldora", "Drethys", "Eryth", "Fendara", "Galenor", "Hyrune", "Ithara", "Jorath", "Kryndel", "Luneth",
+	"Morash", "Nerath", "Oradis", "Praxel", "Quorune", "Rynora", "Sardel", "Thyra", "Uldara", "Varneth",
+	"Weskar", "Xerath", "Yoralis", "Zyndra", "Aldune", "Boreth", "Cyralis", "Drathen", "Elyra", "Fornal",
+	"Gryth", "Halune", "Iradesh", "Joralis", "Koveth", "Lareth", "Mirel", "Norune", "Orelith", "Pryndor"
+]
+
+const FANTASY_PREFIXES := [
+	"ash", "bal", "cor", "dar", "el", "fen", "gal", "har", "isk", "jor",
+	"kel", "lor", "mor", "nar", "or", "pra", "quel", "ryn", "sar", "tor",
+	"ur", "vor", "wyn", "xan", "yor", "zar", "drav", "khal", "loth", "myr",
+	"neth", "thar", "varn", "bryn", "cald", "dren", "glyn", "hest", "jast", "krand",
+	"asha", "aria", "bela", "cora", "dara", "elya", "fara", "gala", "hira", "iona",
+	"jora", "kora", "lira", "mera", "nora", "oria", "pela", "qira", "rhea", "sora",
+	"tala", "uria", "vela", "wira", "xera", "yara", "zora", "lyra", "nyra", "seva",
+	"aeth", "ael", "aura", "avor", "azel", "baryn", "belor", "berin", "brava", "brin",
+	"cael", "calen", "cair", "caren", "ceryn", "ceth", "cyra", "dair", "dalen", "davor",
+	"deira", "delor", "dera", "dorin", "drava", "drin", "elyr", "enor", "eris", "felyn",
+	"fera", "fira", "fora", "gael", "galen", "garon", "gora", "halen", "havor", "helor",
+	"hera", "hyra", "iber", "idra", "ilar", "iren", "isra", "jalen", "jaro", "jovar",
+	"kael", "kavor", "kera", "kiran", "korae", "krya", "laer", "larin", "lavor", "leira",
+	"lenor", "lera", "maer", "mavor", "melor", "mira", "navor", "nelor", "nera", "nira",
+	"oira", "orin", "ovar", "pael", "parin", "pera", "qalen", "qora", "rael", "ravyn",
+	"relin", "riven", "savor", "selor", "sira", "tavor", "teira", "thora", "ulor", "uryn",
+	"vael", "velor", "vera", "voryn", "wavor", "welor", "wirae", "xavor", "xelor", "xira",
+	"yael", "yavor", "yelor", "zira", "zorin", "zoral"
+]
+
+const FANTASY_MIDDLE_VOWEL := [
+	"a", "ae", "ia", "io", "oa", "ui", "ara", "eri", "ila", "ora",
+	"une", "yri", "eon", "ula", "ira", "aya", "iri", "orae", "e", "i",
+	"o", "u", "ai", "ao", "au", "ea", "ei", "eo", "eu", "ie",
+	"iu", "oe", "oi", "oo", "ou", "ua", "ue", "uo", "aen", "ain",
+	"aor", "eor", "iar", "ior", "iur", "oen", "oir", "our", "uar", "uer",
+	"uin", "uor", "yth", "alia", "aria", "avia", "elia", "eria", "ilia", "inia",
+	"iova", "olia", "onia", "oria", "ovia", "udia", "ulia", "unia", "uria", "ylia",
+	"yria", "yora", "yuna", "aeo", "aio", "eio", "ioa", "oia", "uai", "eua",
+	"iau", "oui", "aei"
+]
+
+const FANTASY_MIDDLE_CONSONANT := [
+	"bar", "dar", "kar", "lor", "mir", "neth", "syl", "tor", "vash", "zen",
+	"thal", "drin", "khar", "loth", "myr", "rend", "sarn", "tov", "wyr", "zhar",
+	"bel", "cor", "dun", "fen", "gorn", "hyl", "jor", "kyr", "lax", "mond",
+	"br", "dr", "gr", "kr", "pr", "tr", "vr", "zr", "st", "sk",
+	"sp", "sm", "sn", "sl", "sr", "sh", "th", "kh", "gh", "ch",
+	"ph", "xh", "nd", "nt", "ld", "lm", "ln", "rn", "rk", "rd",
+	"rt", "rz", "lth", "rth", "nth", "mth", "vyr", "zyr", "ksh", "dsh",
+	"gth", "phr", "xth", "ryn", "lorn", "morn", "drel", "dron", "grel", "gren",
+	"kren", "krel", "brin", "bryn", "cryn", "dral", "dren", "fryn", "gral", "hrin",
+	"jren", "larn", "lryn", "marn", "narn", "pryn", "qryn", "rald", "rask", "seld",
+	"tarn", "vorn", "wryn", "xarn", "zarn", "besh", "desh", "gesh", "kesh", "lesh",
+	"mesh", "nesh", "resh", "tesh", "veth", "weth", "xeth", "zeth", "cairn", "dairn",
+	"fald", "gald", "hald", "jald", "kald", "lald", "mald", "nald", "pald", "qald",
+	"raln", "sald", "tald", "vald", "wald", "xald", "yald", "zald"
+]
+
+const FANTASY_SUFFIX_VOWEL := [
+	"a", "ae", "ia", "ara", "ora", "ira", "ena", "ona", "una", "elia",
+	"iora", "itha", "orae", "yra", "eon", "uin", "aya", "irae", "ula", "eris",
+	"ana", "ava", "ayae", "eia", "ela", "enae", "eria", "essa", "eva", "iae",
+	"ila", "ilia", "ina", "iona", "iraa", "isa", "iva", "iya", "oae", "olia",
+	"onae", "oraa", "oria", "osa", "ova", "oya", "uae", "ulae", "unae", "uria",
+	"usa", "uva", "uya", "yla", "yria", "yrae", "yuna", "zea", "zora", "zuna",
+	"arae", "eriae", "ulea", "anea", "ariel", "oriel", "uriel", "avel", "anel", "orra",
+	"erra", "ilra", "ulra", "eya", "oyae", "iea", "uea", "alia", "arua", "elua",
+	"irua", "orua", "urua", "ynia", "yriae", "yorae"
+]
+
+const FANTASY_SUFFIX_CONSONANT := [
+	"desh", "veth", "kash", "rion", "thar", "dros", "mora", "lune", "var", "garde",
+	"neth", "dris", "vorn", "taris", "bel", "kora", "vash", "thos", "zhar", "myr",
+	"dran", "vyr", "lith", "nor", "rath", "shan", "glen", "dun", "rune", "xis",
+	"qir", "brin", "dell", "gor", "hal", "jor", "kyr", "mond", "nox", "phar",
+	"besh", "cresh", "fesh", "gesh", "hesh", "kesh", "lesh", "mesh", "pesh", "qesh",
+	"resh", "sesh", "tesh", "wesh", "xesh", "yesh", "zesh", "bard", "card", "dard",
+	"fard", "gard", "hard", "kard", "lard", "mard", "nard", "pard", "qard", "rard",
+	"sard", "tard", "vard", "ward", "xard", "yard", "zard", "bryn", "cryn", "dryn",
+	"fryn", "gryn", "hryn", "kryn", "lryn", "mryn", "nryn", "pryn", "qryn", "rryn",
+	"sryn", "tryn", "vryn", "wryn", "xryn", "yryn", "zryn", "brol", "crol", "drol",
+	"frol", "grol", "hrol", "krol", "lrol", "mrol", "nrol", "prol", "qrol", "rrol",
+	"srol", "trol", "vrol", "wrol", "xrol", "yrol", "zrol", "bane", "dane", "fane",
+	"gane", "hane", "kane", "lane", "mane", "nane", "pane", "rane", "sane", "tane",
+	"vane", "wane", "xane", "yane", "zane", "bion", "cion", "dion", "fion", "gion",
+	"hion", "kion", "lion", "mion", "nion", "pion", "sion", "tion", "vion", "wion",
+	"xion", "yion", "zion", "bras", "cras", "dras", "fras", "gras", "kras", "lras",
+	"mras", "nras", "pras", "qras", "rras", "sras", "tras", "vras", "wras", "xras",
+	"yras", "zras"
+]
 
 var _phase: int = PHASE_QUOTE
 var _phase_time: float = 0.0
@@ -76,6 +196,11 @@ var _orbit_x_max: float = 0.0
 var _planet_x: float = 0.0
 var _planet_preview_x: float = 0.0
 var _planet_has_position: bool = false
+var _moon_count: int = 0
+var _moon_seed: float = 0.0
+var _moon_names: Array[String] = []
+var _planet_name_suggestion: String = ""
+var _name_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 var _bigbang_compute: RefCounted = null
 var _bg_texture: Texture2D = null
@@ -88,6 +213,7 @@ var _planet_hint_label: Label
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_name_rng.randomize()
 	_configure_pixel_viewport()
 	_create_ui()
 	_update_layout()
@@ -325,12 +451,15 @@ func _set_phase(new_phase: int) -> void:
 		PHASE_PLANET_PROMPT_FADE_IN, PHASE_PLANET_PROMPT_INPUT, PHASE_PLANET_PROMPT_FADE_OUT:
 			_active_prompt_kind = PROMPT_PLANET
 			if _planet_name.is_empty():
-				_input_buffer = ""
+				if _planet_name_suggestion.is_empty():
+					_planet_name_suggestion = _generate_planet_name(_name_rng)
+				_input_buffer = _planet_name_suggestion
 			else:
 				_input_buffer = _planet_name
 		PHASE_PLANET_PLACE:
 			if _planet_preview_x < _orbit_x_min or _planet_preview_x > _orbit_x_max:
 				_planet_preview_x = lerp(_orbit_x_min, _orbit_x_max, 0.5)
+			_roll_planetary_setup()
 		_:
 			pass
 
@@ -403,7 +532,10 @@ func _build_prompt_display_text() -> String:
 	var cursor: String = ""
 	if _is_prompt_input_phase() and _cursor_visible():
 		cursor = "_"
-	return prompt + value + cursor
+	var text: String = prompt + value + cursor
+	if _active_prompt_kind == PROMPT_PLANET:
+		text += "\n\n" + _build_moon_prompt_line()
+	return text
 
 func _cursor_visible() -> bool:
 	return int(floor(_intro_total_time * 2.0)) % 2 == 0
@@ -506,7 +638,7 @@ func _update_background_gpu() -> void:
 		zoom_scale,
 		_planet_x,
 		_planet_preview_x,
-		 _orbit_y,
+		_orbit_y,
 		_orbit_x_min,
 		_orbit_x_max,
 		_sun_start_center,
@@ -514,7 +646,9 @@ func _update_background_gpu() -> void:
 		_sun_radius,
 		_zone_inner_radius,
 		_zone_outer_radius,
-		_planet_has_position
+		_planet_has_position,
+		_moon_count,
+		_moon_seed
 	)
 
 func _draw_intro_background() -> void:
@@ -648,11 +782,107 @@ func _build_planet_hint_text() -> String:
 		descriptor = "Glacial ice world"
 	return "%s | Orbit %.2f (0=hot, 1=cold)." % [descriptor, orbit]
 
+func _roll_planetary_setup() -> void:
+	_moon_count = _roll_moon_count(_name_rng)
+	_moon_seed = _name_rng.randf_range(1.0, 10000.0)
+	_moon_names = _generate_unique_moon_names(_moon_count, _name_rng)
+	_planet_name_suggestion = _generate_planet_name(_name_rng)
+
+func _roll_moon_count(rng: RandomNumberGenerator) -> int:
+	var roll: float = rng.randf()
+	if roll < 0.22:
+		return 0
+	if roll < 0.57:
+		return 1
+	if roll < 0.84:
+		return 2
+	return 3
+
+func _build_moon_prompt_line() -> String:
+	if _moon_count <= 0:
+		return "Moons: none"
+	var parts: Array[String] = []
+	for moon_name in _moon_names:
+		parts.append(String(moon_name))
+	var joined: String = ", ".join(parts)
+	var suffix: String = "" if _moon_count == 1 else "s"
+	return "Moon%s: %s" % [suffix, joined]
+
+func _generate_unique_moon_names(count: int, rng: RandomNumberGenerator) -> Array[String]:
+	var target: int = int(clamp(count, 0, MAX_MOONS))
+	var names: Array[String] = []
+	if target <= 0:
+		return names
+	var used := {}
+	var guard: int = 0
+	while names.size() < target and guard < 256:
+		guard += 1
+		var candidate: String = _generate_moon_name(rng)
+		if used.has(candidate):
+			continue
+		used[candidate] = true
+		names.append(candidate)
+	return names
+
+func _generate_planet_name(rng: RandomNumberGenerator) -> String:
+	return _generate_fantasy_name(rng, _roll_name_syllable_count(rng))
+
+func _generate_moon_name(rng: RandomNumberGenerator) -> String:
+	return _generate_fantasy_name(rng, _roll_name_syllable_count(rng))
+
+func _roll_name_syllable_count(rng: RandomNumberGenerator) -> int:
+	var roll: float = rng.randf()
+	if roll < 0.50:
+		return 1
+	if roll < 0.85:
+		return 2
+	return 3
+
+func _generate_fantasy_name(rng: RandomNumberGenerator, syllables: int) -> String:
+	var syl: int = int(clamp(syllables, 1, 3))
+	if syl == 1:
+		if FANTASY_SINGLE_NAMES.is_empty():
+			return "Bel"
+		var single_idx: int = rng.randi_range(0, FANTASY_SINGLE_NAMES.size() - 1)
+		return String(FANTASY_SINGLE_NAMES[single_idx])
+
+	var prefix: String = _pick_pool_item(FANTASY_PREFIXES, rng)
+	var built_name: String = prefix
+	if syl >= 3:
+		var middle_pool: Array = FANTASY_MIDDLE_VOWEL
+		if _ends_with_vowel(built_name):
+			middle_pool = FANTASY_MIDDLE_CONSONANT
+		built_name += _pick_pool_item(middle_pool, rng)
+	var suffix_pool: Array = FANTASY_SUFFIX_VOWEL
+	if _ends_with_vowel(built_name):
+		suffix_pool = FANTASY_SUFFIX_CONSONANT
+	built_name += _pick_pool_item(suffix_pool, rng)
+	return _capitalize_name(built_name)
+
+func _pick_pool_item(pool: Array, rng: RandomNumberGenerator) -> String:
+	if pool.is_empty():
+		return "na"
+	var idx: int = rng.randi_range(0, pool.size() - 1)
+	return String(pool[idx])
+
+func _ends_with_vowel(value: String) -> bool:
+	if value.is_empty():
+		return false
+	var c: String = value.substr(value.length() - 1, 1).to_lower()
+	return c == "a" or c == "e" or c == "i" or c == "o" or c == "u" or c == "y"
+
+func _capitalize_name(value: String) -> String:
+	if value.is_empty():
+		return value
+	return value.substr(0, 1).to_upper() + value.substr(1).to_lower()
+
 func _finalize_intro_selection() -> void:
 	if _star_name.strip_edges().is_empty():
 		_star_name = "Unnamed Star"
 	if _planet_name.strip_edges().is_empty():
-		_planet_name = "Unnamed World"
+		if _planet_name_suggestion.is_empty():
+			_planet_name_suggestion = _generate_planet_name(_name_rng)
+		_planet_name = _planet_name_suggestion
 	if not _planet_has_position:
 		_planet_x = _planet_preview_x
 		_planet_has_position = true

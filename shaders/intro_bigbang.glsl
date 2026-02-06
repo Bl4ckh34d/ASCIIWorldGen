@@ -35,8 +35,8 @@ layout(push_constant) uniform Params {
 	float zone_inner_radius;
 	float zone_outer_radius;
 	float planet_has_position;
-	float _pad0;
-	float _pad1;
+	float moon_count;
+	float moon_seed;
 } PC;
 
 const float TAU = 6.28318530718;
@@ -335,19 +335,24 @@ vec3 render_bigbang(vec2 uv, float t) {
 	)) * core_clear_t;
 	col *= (1.0 - core_clear);
 
-	// Singularity flash: center-origin wave reaches full screen in <0.2s, then dies quickly.
-	float flash_expand_t = clamp(PC.phase_time / 0.12, 0.0, 1.0);
-	float flash_decay_t = clamp((PC.phase_time - 0.06) / 0.10, 0.0, 1.0);
-	float flash_intensity = 1.0 - flash_decay_t;
-	float flash_radius = mix(0.015, 2.90, flash_expand_t * flash_expand_t * (3.0 - 2.0 * flash_expand_t));
-	float flash_feather = mix(0.028, 0.24, flash_expand_t);
+	// Singularity flash pulse: rapid expand to full-screen, then rapid collapse back to center.
+	float flash_total = 0.22;
+	float flash_t = clamp(PC.phase_time / flash_total, 0.0, 1.0);
+	float flash_up = flash_t < 0.5 ? smoothstep(0.0, 1.0, flash_t * 2.0) : 1.0;
+	float flash_down = flash_t > 0.5 ? smoothstep(0.0, 1.0, (flash_t - 0.5) * 2.0) : 0.0;
+	float flash_radius = mix(0.015, 2.95, flash_up);
+	flash_radius = mix(flash_radius, 0.015, flash_down);
+	float flash_feather = mix(0.028, 0.22, smoothstep(0.04, 2.95, flash_radius));
 	float radial_flash = 1.0 - smoothstep(
 		flash_radius - flash_feather,
 		flash_radius + flash_feather,
 		r
 	);
-	float center_flare = exp(-r * 58.0) * smoothstep(0.0, 0.10, PC.phase_time) * (1.0 - smoothstep(0.10, 0.25, PC.phase_time));
-	float flash_mask = clamp(max(radial_flash, center_flare * 1.45), 0.0, 1.0) * flash_intensity;
+	float end_fade = 1.0 - smoothstep(0.90, 1.0, flash_t);
+	float center_start = exp(-pow(flash_t / 0.11, 2.0));
+	float center_end = exp(-pow((1.0 - flash_t) / 0.11, 2.0));
+	float center_flare = exp(-r * 62.0) * min(1.0, center_start + center_end);
+	float flash_mask = clamp(max(radial_flash, center_flare * 1.35), 0.0, 1.0) * end_fade;
 	col = mix(col, vec3(1.0, 0.98, 0.94), flash_mask);
 
 	// Use the exact same star generator as scene-2 for continuity.
@@ -389,4 +394,3 @@ void main() {
 	color = clamp(color, 0.0, 1.0);
 	imageStore(out_tex, ivec2(gid), vec4(color, 1.0));
 }
-

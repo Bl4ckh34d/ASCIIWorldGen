@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://dfdu5of3lcx3h"]
+[gd_scene load_steps=2 format=3 uid="uid://bq6fnigbh6cc8"]
 
-[ext_resource type="Script" path="res://scripts/intro/Intro.gd" id="1"]
+[ext_resource type="Script" uid="uid://c88j8hneqf4g6" path="res://scripts/intro/Intro.gd" id="1"]
 
 [node name="Intro" type="Control"]
 layout_mode = 3
@@ -17,10 +17,10 @@ anchor_bottom = 1.0
 stretch = true
 
 [node name="PixelViewport" type="SubViewport" parent="PixelContainer"]
-size = Vector2i(1770, 830)
 disable_3d = true
+handle_input_locally = false
+size = Vector2i(1770, 830)
 render_target_update_mode = 4
-handle_input_locally = true
 
 [node name="PixelRoot" type="Control" parent="PixelContainer/PixelViewport"]
 layout_mode = 3
@@ -29,5 +29,4 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-mouse_filter = 0
 script = ExtResource("1")
