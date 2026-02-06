@@ -100,24 +100,6 @@ float filament_field(vec2 p, float t, float scale, float thickness) {
 	return line * line;
 }
 
-float star_field_seed(vec2 uv, float t) {
-	vec2 cell = floor(uv * vec2(float(PC.width), float(PC.height)) * 0.95);
-	float h = hash12(cell + vec2(31.7, 17.3));
-	float s = smoothstep(0.9952, 1.0, h);
-	float tw = 0.5 + 0.5 * sin(t * (1.5 + hash12(cell) * 3.0) + hash12(cell + 5.0) * TAU);
-	return s * tw;
-}
-
-float star_field_expanding(vec2 uv, float t, float expansion) {
-	float spread = mix(0.035, 1.10, clamp(expansion, 0.0, 1.0));
-	vec2 rel = uv - 0.5;
-	vec2 src = rel / max(0.001, spread) + 0.5;
-	float in_bounds = step(0.0, src.x) * step(0.0, src.y) * step(src.x, 1.0) * step(src.y, 1.0);
-	float radial = smoothstep(1.18, 0.0, length(rel) / max(0.001, spread * 0.98));
-	float stars = star_field_seed(src, t);
-	return stars * in_bounds * radial;
-}
-
 float star_layer(vec2 uv, float t, float scale, float pan_shift, float threshold, vec2 seed_bias) {
 	vec2 su = fract(uv + vec2(pan_shift, 0.0));
 	vec2 cell = floor(su * vec2(float(PC.width), float(PC.height)) * scale);
@@ -141,28 +123,33 @@ vec3 render_quote(vec2 uv, float t) {
 }
 
 vec3 render_bigbang(vec2 uv, float t) {
-	float timeline = clamp(PC.bigbang_progress, 0.0, 1.0);
+	float progress_raw = max(PC.bigbang_progress, 0.0);
+	float timeline = clamp(progress_raw, 0.0, 1.0);
 	float ignition = 1.0 - pow(1.0 - clamp(timeline / 0.11, 0.0, 1.0), 3.0);
-	float burst_t = clamp(timeline / 0.16, 0.0, 1.0);
-	float expand_accel = pow(burst_t, 1.15); // fast burst.
-	float expand = 1.0 - exp(-3.0 * timeline);
-	float star_expand = 1.0 - exp(-3.6 * timeline); // keeps expanding but slows naturally.
+	// Base expansion during early normalized phase.
+	float s_curve = timeline * timeline * (3.0 - 2.0 * timeline);
+	float expand_accel = pow(s_curve, 1.85);
+	float expand = pow(timeline, 1.62);
+	// Keep acceleration rising beyond timeline=1.0 (no late slowdown).
+	float late_tail = max(progress_raw - 0.82, 0.0);
+	float late_tail_pow = pow(late_tail, 2.30);
 	float plasma_alpha = clamp(PC.quote_alpha, 0.0, 1.0);
 	vec2 aspect = vec2(float(PC.width) / max(1.0, float(PC.height)), 1.0);
 	vec2 q = (uv - 0.5) * aspect * 2.0;
 	float r = length(q);
 	// The whole effect starts as a tiny central singularity and expands outwards.
-	float spread = mix(0.004, 1.95, expand_accel);
+	float spread = mix(0.004, 2.30, expand_accel) + 0.95 * late_tail_pow;
 	float envelope = smoothstep(spread + 0.09, spread - 0.012, r);
 	vec2 qn = q / max(0.001, spread);
 	float rn = length(qn);
 	float a = atan(qn.y, qn.x);
+	float spiral_fade = 1.0 - smoothstep(0.56, 1.08, progress_raw);
 
 	vec2 adv = flow_dir(qn * (1.6 + ignition * 0.9), t * 1.9 + expand * 8.0);
-	vec2 warp = qn + adv * (0.40 - 0.18 * expand);
+	vec2 warp = qn + adv * (0.40 - 0.18 * expand) * (0.24 + 0.76 * spiral_fade);
 
 	float core = exp(-rn * mix(44.0, 5.2, ignition));
-	float shell_r = mix(0.04, 1.22, expand_accel);
+	float shell_r = mix(0.04, 1.70, expand_accel) + 0.58 * pow(late_tail, 2.20);
 	float shock = exp(-abs(rn - shell_r) * mix(34.0, 9.0, expand)) * (1.0 - expand * 0.20);
 	float shock_front = exp(-abs(rn - shell_r) * mix(68.0, 14.0, expand)) * (1.0 - expand * 0.08);
 
@@ -172,10 +159,12 @@ vec3 render_bigbang(vec2 uv, float t) {
 	float filaments = max(fil0, max(fil1 * 0.90, fil2 * 0.74));
 	filaments *= (1.0 - smoothstep(0.08, 1.12, rn));
 	filaments *= (0.28 + 0.92 * smoothstep(0.01, 0.24, ignition));
+	filaments *= spiral_fade;
 
 	float branch_wave = sin(a * (17.0 - ignition * 5.0) - rn * 18.0 + t * 2.8);
 	float branches = pow(clamp(branch_wave * 0.5 + 0.5, 0.0, 1.0), 9.0);
 	branches *= exp(-rn * 1.5) * (1.0 - expand * 0.25);
+	branches *= spiral_fade;
 
 	float mist = fbm(warp * 4.5 + vec2(t * 0.24, -t * 0.21));
 	mist = smoothstep(0.28, 0.88, mist) * (1.0 - smoothstep(0.04, 1.20, rn));
@@ -213,16 +202,12 @@ vec3 render_bigbang(vec2 uv, float t) {
 	float flash = exp(-PC.phase_time * 65.0);
 	col += vec3(1.0, 0.96, 0.90) * flash * 1.65;
 
-	float star_gate = max(clamp(PC.star_alpha, 0.0, 1.0), smoothstep(0.02, 0.22, timeline) * 0.72);
-	float stars = star_field_expanding(uv, t, star_expand);
-	col += vec3(stars) * vec3(0.74, 0.84, 1.0) * (0.85 * star_gate);
-
 	float post_glow = exp(-r * 2.8) * smoothstep(0.16, 1.0, expand) * 0.30;
 	col += vec3(0.34, 0.50, 0.92) * post_glow;
 
 	// Mycelium growth layer (inspired by your web shader): seeded at singularity and
 	// advected outward, blended behind the main plasma blast.
-	float myc_spread = mix(0.003, 1.95, pow(timeline, 0.60));
+	float myc_spread = mix(0.003, 2.45, pow(timeline, 1.72)) + 0.78 * pow(late_tail, 2.25);
 	vec2 my_qn = q / max(0.001, myc_spread);
 	float my_r = length(my_qn);
 	float my_env = smoothstep(1.20, 0.0, my_r);
@@ -255,9 +240,48 @@ vec3 render_bigbang(vec2 uv, float t) {
 	col = 1.0 - exp(-col * 1.55);
 	col *= (1.0 - clamp(PC.fade_alpha, 0.0, 1.0));
 
-	// Full-screen flash at singularity birth.
-	float screen_flash = exp(-PC.phase_time * 19.0);
-	col = mix(col, vec3(1.0), clamp(screen_flash * 1.35, 0.0, 1.0));
+	// Fade the big-bang core first while it expands, revealing stars behind it.
+	float core_clear_t = smoothstep(0.22, 1.85, progress_raw);
+	float core_clear_edge = mix(0.04, 0.66, core_clear_t);
+	float core_clear_feather = mix(0.05, 0.16, core_clear_t);
+	float core_clear = (1.0 - smoothstep(
+		core_clear_edge - core_clear_feather,
+		core_clear_edge + core_clear_feather,
+		rn
+	)) * core_clear_t;
+	col *= (1.0 - core_clear);
+
+	// Singularity flash: center-origin wave reaches full screen in <0.2s, then dies quickly.
+	float flash_expand_t = clamp(PC.phase_time / 0.18, 0.0, 1.0);
+	float flash_decay_t = clamp((PC.phase_time - 0.10) / 0.15, 0.0, 1.0);
+	float flash_intensity = 1.0 - flash_decay_t;
+	float flash_radius = mix(0.015, 2.90, flash_expand_t * flash_expand_t * (3.0 - 2.0 * flash_expand_t));
+	float flash_feather = mix(0.028, 0.24, flash_expand_t);
+	float radial_flash = 1.0 - smoothstep(
+		flash_radius - flash_feather,
+		flash_radius + flash_feather,
+		r
+	);
+	float center_flare = exp(-r * 58.0) * smoothstep(0.0, 0.10, PC.phase_time) * (1.0 - smoothstep(0.10, 0.25, PC.phase_time));
+	float flash_mask = clamp(max(radial_flash, center_flare * 1.45), 0.0, 1.0) * flash_intensity;
+	col = mix(col, vec3(1.0, 0.98, 0.94), flash_mask);
+
+	// Use the exact same star generator as scene-2 for continuity.
+	// During scene-1 we add a center-origin burst warp, then decay into the static field.
+	float star_emit_t = max(progress_raw - 1.00, 0.0);
+	float star_burst = smoothstep(0.0, 1.0, clamp(star_emit_t / 0.85, 0.0, 1.0));
+	float star_expand = 1.0 + pow(star_emit_t, 1.36) * 1.70;
+	vec2 uv_burst = 0.5 + (uv - 0.5) / max(1.0, star_expand);
+	float burst_weight = star_burst * exp(-star_emit_t * 1.45);
+	float drift_blend = smoothstep(0.0, 1.0, clamp(PC.fade_alpha, 0.0, 1.0));
+	float star_gate = max(clamp(PC.star_alpha, 0.0, 1.0), smoothstep(0.02, 0.22, timeline) * 0.72);
+
+	vec3 base_sky = 1.0 - exp(-stage2_star_sky(uv, t, 0.0, 1.0) * 1.20);
+	vec3 burst_sky = 1.0 - exp(-stage2_star_sky(uv_burst, t, 0.0, 1.18) * 1.25);
+	vec3 stars_mix = mix(burst_sky, base_sky, drift_blend);
+	float persistent_reveal = smoothstep(1.20, 1.90, progress_raw);
+	col += (base_sky * persistent_reveal * 1.12 + stars_mix * burst_weight * 1.05) * star_gate;
+
 	return col;
 }
 
@@ -306,8 +330,9 @@ vec3 render_stage2(vec2 uv, float t) {
 
 	float outside = step(sun_r, r);
 	float d = max(0.0, r - sun_r);
-	float halo0 = exp(-d * 22.0);
-	float halo1 = exp(-d * 9.0);
+	float halo_inner = exp(-d * 16.0);
+	float halo_mid = exp(-d * 8.0);
+	float halo_far = exp(-d * 3.8);
 	float cor_noise0 = fbm(np * 5.6 + vec2(t * 0.72, -t * 0.54));
 	float cor_noise1 = filament_field(
 		rot2(0.58) * np * 4.4 + flow_dir(np * 3.2, t * 0.84) * 1.35,
@@ -315,10 +340,28 @@ vec3 render_stage2(vec2 uv, float t) {
 		8.4,
 		0.23
 	);
-	float cor_shape = smoothstep(0.26, 0.97, cor_noise0 * 0.58 + cor_noise1 * 0.42);
-	float corona = outside * (halo0 * 0.92 + halo1 * 0.24) * cor_shape;
-	vec3 cor_col = mix(vec3(1.0, 0.42, 0.08), vec3(1.0, 0.88, 0.33), cor_noise0);
-	col += cor_col * corona * sun_reveal * 1.62;
+	float cor_noise2 = fbm(rot2(-0.41) * np * 10.2 + vec2(-t * 0.95, t * 0.74) + 4.3);
+	float cor_fil2 = filament_field(
+		rot2(1.06) * np * 6.8 + flow_dir(np * 2.7, t * 0.72) * 1.05,
+		t * 1.18,
+		10.6,
+		0.20
+	);
+	float cor_shape_inner = smoothstep(0.24, 0.95, cor_noise0 * 0.45 + cor_noise1 * 0.40 + cor_noise2 * 0.15);
+	float cor_shape_outer = smoothstep(0.30, 0.96, cor_noise0 * 0.28 + cor_noise2 * 0.44 + cor_fil2 * 0.28);
+	float corona_inner = outside * (halo_inner * 0.95 + halo_mid * 0.35) * cor_shape_inner;
+	float corona_outer = outside * (halo_mid * 0.55 + halo_far * 0.26) * cor_shape_outer;
+	float limb_ring = exp(-abs(r - sun_r) * 120.0);
+	float prominence = outside * exp(-d * 6.5) * pow(max(cor_noise1, cor_fil2), 1.6) * 0.42;
+	vec3 cor_hot = vec3(1.0, 0.46, 0.10);
+	vec3 cor_warm = vec3(1.0, 0.78, 0.24);
+	vec3 cor_cool = vec3(1.0, 0.95, 0.66);
+	vec3 cor_col_inner = mix(cor_hot, cor_warm, cor_noise0 * 0.75 + cor_noise2 * 0.25);
+	vec3 cor_col_outer = mix(cor_warm, cor_cool, cor_noise2);
+	col += cor_col_inner * corona_inner * sun_reveal * 2.20;
+	col += cor_col_outer * corona_outer * sun_reveal * 1.55;
+	col += vec3(1.0, 0.84, 0.38) * prominence * sun_reveal * 1.35;
+	col += vec3(1.0, 0.92, 0.62) * limb_ring * sun_reveal * 0.26;
 
 	float inner = PC.zone_inner_radius / max(1.0, float(PC.height));
 	float outer = PC.zone_outer_radius / max(1.0, float(PC.height));
@@ -326,7 +369,19 @@ vec3 render_stage2(vec2 uv, float t) {
 	float band = smoothstep(inner - bw, inner + bw, r) * (1.0 - smoothstep(outer - bw, outer + bw, r));
 	float band_reveal = sun_reveal * smoothstep(0.48, 1.0, pan);
 	float shimmer = 0.82 + 0.18 * sin(uvw.y * float(PC.height) * 0.12 + t * 1.5);
-	col += vec3(1.0, 0.88, 0.30) * band * band_reveal * 0.26 * shimmer;
+	float zone_t_r = clamp((r - inner) / max(0.0001, outer - inner), 0.0, 1.0);
+	float xpix_band = uvw.x * float(PC.width);
+	float zone_t_x = clamp((xpix_band - PC.orbit_x_min) / max(1.0, PC.orbit_x_max - PC.orbit_x_min), 0.0, 1.0);
+	float zone_t = clamp(mix(zone_t_r, zone_t_x, 0.65), 0.0, 1.0);
+	vec3 zone_hot = vec3(1.0, 0.30, 0.12);
+	vec3 zone_mid = vec3(1.0, 0.86, 0.28);
+	vec3 zone_cold = vec3(0.34, 0.64, 1.0);
+	float t_hot_mid = smoothstep(0.0, 0.5, zone_t);
+	float t_mid_cold = smoothstep(0.5, 1.0, zone_t);
+	vec3 hot_to_mid = mix(zone_hot, zone_mid, t_hot_mid);
+	vec3 mid_to_cold = mix(zone_mid, zone_cold, t_mid_cold);
+	vec3 zone_col = mix(hot_to_mid, mid_to_cold, step(0.5, zone_t));
+	col += zone_col * band * band_reveal * 0.34 * shimmer;
 
 	if (PC.intro_phase >= INTRO_PHASE_PLANET_PLACE) {
 		float xpix = uvw.x * float(PC.width);
@@ -386,3 +441,4 @@ void main() {
 	color = clamp(color, 0.0, 1.0);
 	imageStore(out_tex, ivec2(gid), vec4(color, 1.0));
 }
+

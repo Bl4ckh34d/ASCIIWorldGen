@@ -4,7 +4,7 @@ extends Control
 const IntroBigBangCompute = preload("res://scripts/intro/IntroBigBangCompute.gd")
 
 const TARGET_VIEWPORT_SIZE := Vector2i(1770, 830)
-const QUOTE_TEXT := "\"If you wish to make an apple pie from scratch, you must first invent the universe\""
+const QUOTE_TEXT := "\"If you wish to make an apple pie from scratch,\nyou must first invent the universe\""
 const QUOTE_AUTHOR_TEXT := "- Carl Sagan"
 const STAR_PROMPT_TEXT := "Then there was light and this goddess of life had a name: "
 const PLANET_PROMPT_TEXT := "A new world was born and her\nname was: "
@@ -30,12 +30,13 @@ const PHASE_TRANSITION := 12
 
 const QUOTE_FADE_IN_SEC := 3.0
 const QUOTE_HOLD_SEC := 2.6
-const QUOTE_FADE_OUT_SEC := 2.4
 const QUOTE_START_DELAY_SEC := 1.00
 const BIG_BANG_EXPLODE_SEC := 1.80
 const BIG_BANG_PLASMA_FADE_SEC := 3.00
 const BIG_BANG_STARFIELD_SEC := 5.80
 const BIG_BANG_FADE_SEC := 1.00
+const BIG_BANG_EXPANSION_DRIVE_SEC := 3.40
+const BIG_BANG_SHAKE_START_DELAY_SEC := 0.30
 const BIG_BANG_SHAKE_RISE_SEC := 0.50
 const BIG_BANG_SHAKE_DECAY_SEC := 3.00
 const STAR_PROMPT_FADE_IN_SEC := 1.20
@@ -46,6 +47,7 @@ const PLANET_PROMPT_FADE_IN_SEC := 0.95
 const PLANET_PROMPT_FADE_OUT_SEC := 0.95
 const PLANET_ZOOM_SEC := 1.95
 const TRANSITION_SEC := 0.18
+const SUN_PROMPT_PAN_PROGRESS := 0.45
 
 var _phase: int = PHASE_QUOTE
 var _phase_time: float = 0.0
@@ -101,20 +103,20 @@ func _process(delta: float) -> void:
 
 	match _phase:
 		PHASE_QUOTE:
-			if _phase_time >= QUOTE_START_DELAY_SEC + QUOTE_FADE_IN_SEC + QUOTE_HOLD_SEC + QUOTE_FADE_OUT_SEC:
+			if _phase_time >= QUOTE_START_DELAY_SEC + QUOTE_FADE_IN_SEC + QUOTE_HOLD_SEC:
 				_set_phase(PHASE_BIG_BANG)
 		PHASE_BIG_BANG:
 			if _phase_time >= _bigbang_total_sec():
-				_set_phase(PHASE_STAR_PROMPT_FADE_IN)
+				_set_phase(PHASE_SPACE_REVEAL)
 		PHASE_STAR_PROMPT_FADE_IN:
 			if _phase_time >= STAR_PROMPT_FADE_IN_SEC:
 				_set_phase(PHASE_STAR_PROMPT_INPUT)
 		PHASE_STAR_PROMPT_FADE_OUT:
 			if _phase_time >= STAR_PROMPT_FADE_OUT_SEC:
-				_set_phase(PHASE_SPACE_REVEAL)
+				_set_phase(PHASE_CAMERA_PAN)
 		PHASE_SPACE_REVEAL:
 			if _phase_time >= SPACE_REVEAL_SEC:
-				_set_phase(PHASE_CAMERA_PAN)
+				_set_phase(PHASE_STAR_PROMPT_FADE_IN)
 		PHASE_CAMERA_PAN:
 			if _phase_time >= CAMERA_PAN_SEC:
 				_set_phase(PHASE_PLANET_PLACE)
@@ -220,7 +222,7 @@ func _create_ui() -> void:
 	add_child(_quote_author_label)
 
 	_terminal_label = Label.new()
-	_terminal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_terminal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_terminal_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_terminal_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_terminal_label.add_theme_font_size_override("font_size", 32)
@@ -246,8 +248,8 @@ func _update_layout() -> void:
 		_quote_author_label.position = Vector2(w * 0.56, h * 0.452)
 		_quote_author_label.size = Vector2(w * 0.40, h * 0.08)
 	if _terminal_label != null:
-		_terminal_label.position = Vector2(w * 0.03, h * 0.28)
-		_terminal_label.size = Vector2(w * 0.94, h * 0.36)
+		_terminal_label.position = Vector2(w * 0.10, h * 0.28)
+		_terminal_label.size = Vector2(w * 0.80, h * 0.36)
 	if _planet_hint_label != null:
 		_planet_hint_label.position = Vector2(w * 0.08, h * 0.82)
 		_planet_hint_label.size = Vector2(w * 0.84, h * 0.14)
@@ -423,10 +425,7 @@ func _get_quote_alpha() -> float:
 		return 0.0
 	if t <= QUOTE_FADE_IN_SEC:
 		return clamp(t / QUOTE_FADE_IN_SEC, 0.0, 1.0)
-	if t <= QUOTE_FADE_IN_SEC + QUOTE_HOLD_SEC:
-		return 1.0
-	var out_t: float = (t - QUOTE_FADE_IN_SEC - QUOTE_HOLD_SEC) / QUOTE_FADE_OUT_SEC
-	return clamp(1.0 - out_t, 0.0, 1.0)
+	return 1.0
 
 func _update_background_gpu() -> void:
 	if _bigbang_compute == null:
@@ -450,12 +449,13 @@ func _update_background_gpu() -> void:
 		quote_alpha = _get_quote_alpha()
 	elif _phase == PHASE_BIG_BANG:
 		phase_idx = 1
-		var spread_total: float = _bigbang_total_sec()
-		bigbang_progress = clamp(_phase_time / max(0.0001, spread_total), 0.0, 1.0)
+		var event_time: float = _bigbang_event_time(_phase_time)
+		# Keep raw progress unbounded so shader can continue slow late expansion.
+		bigbang_progress = event_time / max(0.0001, BIG_BANG_EXPANSION_DRIVE_SEC)
 		# Reuse quote_alpha push-constant channel as plasma alpha during big bang.
-		quote_alpha = _bigbang_plasma_alpha(_phase_time)
-		star_alpha = _bigbang_star_alpha(_phase_time)
-		fade_alpha = _bigbang_fade_alpha(_phase_time)
+		quote_alpha = _bigbang_plasma_alpha(event_time)
+		star_alpha = _bigbang_star_alpha(event_time)
+		fade_alpha = _bigbang_fade_alpha(event_time)
 	else:
 		phase_idx = 2
 		space_alpha = _get_space_alpha()
@@ -478,7 +478,7 @@ func _update_background_gpu() -> void:
 		zoom_scale,
 		_planet_x,
 			_planet_preview_x,
-		_orbit_y,
+		 _orbit_y,
 		_orbit_x_min,
 		_orbit_x_max,
 		_sun_start_center,
@@ -495,7 +495,7 @@ func _draw_intro_background() -> void:
 	if _phase != PHASE_BIG_BANG:
 		draw_texture_rect(_bg_texture, Rect2(Vector2.ZERO, size), false)
 		return
-	var shake_amp: float = _bigbang_shake_amplitude(_phase_time)
+	var shake_amp: float = _bigbang_shake_amplitude(_bigbang_event_time(_phase_time))
 	if shake_amp <= 0.0001:
 		draw_texture_rect(_bg_texture, Rect2(Vector2.ZERO, size), false)
 		return
@@ -516,13 +516,19 @@ func _bigbang_star_alpha(time_sec: float) -> float:
 	return 1.0
 
 func _bigbang_fade_alpha(time_sec: float) -> float:
-	var fade_start: float = _bigbang_total_sec() - BIG_BANG_FADE_SEC
+	var fade_start: float = _bigbang_effect_total_sec() - BIG_BANG_FADE_SEC
 	if time_sec <= fade_start:
 		return 0.0
 	return clamp((time_sec - fade_start) / max(0.0001, BIG_BANG_FADE_SEC), 0.0, 1.0)
 
-func _bigbang_total_sec() -> float:
+func _bigbang_effect_total_sec() -> float:
 	return BIG_BANG_EXPLODE_SEC + BIG_BANG_PLASMA_FADE_SEC + BIG_BANG_STARFIELD_SEC + BIG_BANG_FADE_SEC
+
+func _bigbang_total_sec() -> float:
+	return _bigbang_effect_total_sec()
+
+func _bigbang_event_time(time_sec: float) -> float:
+	return max(0.0, time_sec)
 
 func _bigbang_plasma_alpha(time_sec: float) -> float:
 	if time_sec <= BIG_BANG_EXPLODE_SEC:
@@ -531,7 +537,7 @@ func _bigbang_plasma_alpha(time_sec: float) -> float:
 	return clamp(1.0 - t, 0.0, 1.0)
 
 func _bigbang_shake_amplitude(time_sec: float) -> float:
-	var shake_start: float = BIG_BANG_EXPLODE_SEC * 0.70
+	var shake_start: float = BIG_BANG_EXPLODE_SEC * 0.70 + BIG_BANG_SHAKE_START_DELAY_SEC
 	var t: float = time_sec - shake_start
 	if t <= 0.0:
 		return 0.0
@@ -544,14 +550,22 @@ func _bigbang_shake_amplitude(time_sec: float) -> float:
 
 func _get_space_alpha() -> float:
 	if _phase == PHASE_SPACE_REVEAL:
-		return clamp(_phase_time / SPACE_REVEAL_SEC, 0.0, 1.0)
+		return 1.0
+	if _phase == PHASE_STAR_PROMPT_FADE_IN or _phase == PHASE_STAR_PROMPT_INPUT or _phase == PHASE_STAR_PROMPT_FADE_OUT:
+		return 1.0
 	if _phase >= PHASE_CAMERA_PAN:
 		return 1.0
 	return 0.0
 
 func _get_pan_progress() -> float:
+	if _phase == PHASE_SPACE_REVEAL:
+		var t: float = _ease_in_out(clamp(_phase_time / SPACE_REVEAL_SEC, 0.0, 1.0))
+		return lerp(0.0, SUN_PROMPT_PAN_PROGRESS, t)
+	if _phase == PHASE_STAR_PROMPT_FADE_IN or _phase == PHASE_STAR_PROMPT_INPUT or _phase == PHASE_STAR_PROMPT_FADE_OUT:
+		return SUN_PROMPT_PAN_PROGRESS
 	if _phase == PHASE_CAMERA_PAN:
-		return _ease_in_out(clamp(_phase_time / CAMERA_PAN_SEC, 0.0, 1.0))
+		var t: float = _ease_in_out(clamp(_phase_time / CAMERA_PAN_SEC, 0.0, 1.0))
+		return lerp(SUN_PROMPT_PAN_PROGRESS, 1.0, t)
 	if _phase >= PHASE_PLANET_PLACE:
 		return 1.0
 	return 0.0
