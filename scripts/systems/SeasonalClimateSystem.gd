@@ -82,8 +82,9 @@ func _update_light_field(world: Object) -> void:
 	# Calculate day of year and time of day from simulation time
 	var day_of_year = 0.0
 	var time_of_day = 0.0
+	var sim_days: float = 0.0
 	if world != null and "simulation_time_days" in world:
-		var sim_days = float(world.simulation_time_days)
+		sim_days = float(world.simulation_time_days)
 		# Use configurable year length from time system
 		var days_per_year = time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else 365.0
 		day_of_year = fposmod(sim_days / days_per_year, 1.0)
@@ -98,7 +99,11 @@ func _update_light_field(world: Object) -> void:
 		"day_of_year": day_of_year,
 		"time_of_day": time_of_day,
 		"day_night_base": generator.config.day_night_base if generator.config else 0.25,
-		"day_night_contrast": generator.config.day_night_contrast if generator.config else 0.75
+		"day_night_contrast": generator.config.day_night_contrast if generator.config else 0.75,
+		"moon_count": float(generator.config.moon_count) if generator.config else 0.0,
+		"moon_seed": generator.config.moon_seed if generator.config else 0.0,
+		"moon_shadow_strength": generator.config.moon_shadow_strength if generator.config else 0.55,
+		"sim_days": sim_days if world != null and "simulation_time_days" in world else (day_of_year * 365.0 + time_of_day)
 	}
 
 	if _light_tex == null:

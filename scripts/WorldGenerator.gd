@@ -89,6 +89,10 @@ class Config:
 	# Day-night visual settings
 	var day_night_contrast: float = 0.75
 	var day_night_base: float = 0.25
+	# Intro-scene moon system propagated into world light field
+	var moon_count: int = 0
+	var moon_seed: float = 0.0
+	var moon_shadow_strength: float = 0.55
 	# Mountain radiance influence
 	var mountain_cool_amp: float = 0.15
 	var mountain_wet_amp: float = 0.10
@@ -274,6 +278,16 @@ func apply_config(dict: Dictionary) -> void:
 		config.diurnal_amp_pole = float(dict["diurnal_amp_pole"])
 	if dict.has("diurnal_ocean_damp"):
 		config.diurnal_ocean_damp = float(dict["diurnal_ocean_damp"])
+	if dict.has("day_night_base"):
+		config.day_night_base = clamp(float(dict["day_night_base"]), 0.0, 1.0)
+	if dict.has("day_night_contrast"):
+		config.day_night_contrast = clamp(float(dict["day_night_contrast"]), 0.0, 2.0)
+	if dict.has("moon_count"):
+		config.moon_count = clamp(int(dict["moon_count"]), 0, 3)
+	if dict.has("moon_seed"):
+		config.moon_seed = max(0.0, float(dict["moon_seed"]))
+	if dict.has("moon_shadow_strength"):
+		config.moon_shadow_strength = clamp(float(dict["moon_shadow_strength"]), 0.0, 1.0)
 	if dict.has("mountain_cool_amp"):
 		config.mountain_cool_amp = float(dict["mountain_cool_amp"]) 
 	if dict.has("mountain_wet_amp"):
@@ -538,6 +552,10 @@ func generate() -> PackedByteArray:
 		"day_of_year": config.season_phase,  # Use season_phase as day_of_year for now
 		"day_night_base": config.day_night_base,
 		"day_night_contrast": config.day_night_contrast,
+		"moon_count": float(config.moon_count),
+		"moon_seed": config.moon_seed,
+		"moon_shadow_strength": config.moon_shadow_strength,
+		"sim_days": config.season_phase * 365.0 + config.time_of_day,
 	}
 
 	# Step 1: terrain (GPU) with wrapper reuse
@@ -1216,6 +1234,10 @@ func quick_update_climate(skip_light: bool = false) -> void:
 		"day_of_year": config.season_phase,
 		"day_night_base": config.day_night_base,
 		"day_night_contrast": config.day_night_contrast,
+		"moon_count": float(config.moon_count),
+		"moon_seed": config.moon_seed,
+		"moon_shadow_strength": config.moon_shadow_strength,
+		"sim_days": config.season_phase * 365.0 + config.time_of_day,
 	}
 	params["distance_to_coast"] = last_water_distance
 	

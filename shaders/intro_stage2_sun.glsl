@@ -285,20 +285,20 @@ vec2 sun_sine_warp(vec2 p, float t) {
 // Continuous sibling of sun_sine_warp used to share the same morph behavior
 // across multiple surface layers without introducing modular discontinuities.
 vec2 sun_sine_morph_delta(vec2 p, float t) {
-	vec2 q = (p + 3.0) * 4.6;
+	vec2 q = (p + 3.0) * 5.4;
 	vec2 q0 = q;
 	float tw = t * 0.18 + sin(t * 0.07) * 0.35;
 	float amp = 1.0;
 	vec2 delta = vec2(0.0);
 	for (int i = 0; i < 3; i++) {
-		vec2 d = cos(q.yx * 2.8 + vec2(tw, 1.57)) / 4.2;
-		d += sin(q.yx * 1.14 + tw + vec2(1.57, 0.0)) / 3.5;
+		vec2 d = cos(q.yx * 3.3 + vec2(tw, 1.57)) / 4.9;
+		d += sin(q.yx * 1.42 + tw + vec2(1.57, 0.0)) / 3.9;
 		q += d;
 		delta += d * amp;
-		q *= 1.23;
+		q *= 1.25;
 		amp *= 0.62;
 	}
-	return (q - q0) / 4.6 + delta * 0.18;
+	return (q - q0) / 5.4 + delta * 0.15;
 }
 
 float honey_cells(vec2 p, float t) {
@@ -411,21 +411,52 @@ float filament_field(vec2 p, float t, float scale, float thickness) {
 	return line * line;
 }
 
-float star_layer(vec2 uv, float t, float scale, float pan_shift, float threshold, vec2 seed_bias) {
+float flare_rnd(float w) {
+	return fract(sin(w) * 1000.0);
+}
+
+float flare_reg_shape(vec2 p, int n) {
+	float a = atan(p.x, p.y) + 0.2;
+	float b = TAU / float(n);
+	return smoothstep(0.5, 0.51, cos(floor(0.5 + a / b) * b - a) * length(p));
+}
+
+vec3 flare_circle(vec2 p, float size, float dist, vec2 drift) {
+	float l = length(p + drift * (dist * 4.0)) + size * 0.5;
+	float c = max(0.01 - pow(max(length(p + drift * dist), 1e-4), size * 1.4), 0.0) * 50.0;
+	float c1 = max(0.001 - pow(max(l - 0.3, 1e-4), 1.0 / 40.0) + sin(l * 30.0), 0.0) * 3.0;
+	float c2 = max(0.04 / pow(max(length(p - drift * dist * 0.5 + 0.09), 1e-4), 1.0), 0.0) / 20.0;
+	float s = max(0.01 - pow(flare_reg_shape(p * 5.0 + drift * dist * 5.0 + 0.9, 6), 1.0), 0.0) * 5.0;
+	vec3 color = cos(vec3(0.44, 0.24, 0.2) * 8.0 + dist * 4.0) * 0.5 + 0.5;
+	vec3 f = (c + c1 + c2 + s) * color;
+	return max(f - 0.01, vec3(0.0));
+}
+
+vec3 star_layer_colored(vec2 uv, float t, float scale, float pan_shift, float threshold, vec2 seed_bias) {
 	vec2 su = fract(uv + vec2(pan_shift, 0.0));
 	vec2 cell = floor(su * vec2(float(PC.width), float(PC.height)) * scale);
 	float h = hash12(cell + seed_bias);
 	float s = smoothstep(threshold, 1.0, h);
 	float tw = 0.5 + 0.5 * sin(t * (1.4 + hash12(cell + 5.7) * 2.8) + hash12(cell + 12.3) * TAU);
-	return s * tw;
+	float lum = s * tw;
+	float tint_pick = hash12(cell + seed_bias * 1.73 + vec2(73.1, 19.7));
+	float blue_mask = step(0.989, tint_pick);
+	float red_mask = step(0.976, tint_pick) * (1.0 - blue_mask);
+	vec3 warm_col = vec3(0.95, 0.90, 0.74);
+	vec3 red_col = vec3(0.96, 0.58, 0.50);
+	vec3 blue_col = vec3(0.56, 0.70, 1.0);
+	vec3 star_col = warm_col * (1.0 - red_mask - blue_mask);
+	star_col += red_col * red_mask;
+	star_col += blue_col * blue_mask;
+	return star_col * lum;
 }
 
 vec3 stage2_star_sky(vec2 uv, float t, float pan, float alpha) {
-	float l0 = star_layer(uv, t, 0.70, pan * 0.035, 0.9982, vec2(17.3, 41.7));
-	float l1 = star_layer(uv, t, 1.25, pan * 0.080, 0.9988, vec2(51.8, 13.4));
-	float l2 = star_layer(uv, t, 1.95, pan * 0.160, 0.9992, vec2(9.6, 77.2));
-	float s = l0 * 0.95 + l1 * 0.70 + l2 * 0.45;
-	return vec3(0.70, 0.80, 1.0) * s * alpha;
+	vec3 l0 = star_layer_colored(uv, t, 0.70, pan * 0.035, 0.9982, vec2(17.3, 41.7));
+	vec3 l1 = star_layer_colored(uv, t, 1.25, pan * 0.080, 0.9988, vec2(51.8, 13.4));
+	vec3 l2 = star_layer_colored(uv, t, 1.95, pan * 0.160, 0.9992, vec2(9.6, 77.2));
+	vec3 s = l0 * 0.95 + l1 * 0.70 + l2 * 0.45;
+	return s * alpha;
 }
 
 vec3 render_quote(vec2 uv, float t) {
@@ -558,20 +589,37 @@ vec3 render_bigbang(vec2 uv, float t) {
 	)) * core_clear_t;
 	col *= (1.0 - core_clear);
 
-	// Singularity flash: center-origin wave reaches full screen in <0.2s, then dies quickly.
-	float flash_expand_t = clamp(PC.phase_time / 0.18, 0.0, 1.0);
-	float flash_decay_t = clamp((PC.phase_time - 0.10) / 0.15, 0.0, 1.0);
-	float flash_intensity = 1.0 - flash_decay_t;
-	float flash_radius = mix(0.015, 2.90, flash_expand_t * flash_expand_t * (3.0 - 2.0 * flash_expand_t));
-	float flash_feather = mix(0.028, 0.24, flash_expand_t);
-	float radial_flash = 1.0 - smoothstep(
-		flash_radius - flash_feather,
-		flash_radius + flash_feather,
-		r
-	);
-	float center_flare = exp(-r * 58.0) * smoothstep(0.0, 0.10, PC.phase_time) * (1.0 - smoothstep(0.10, 0.25, PC.phase_time));
-	float flash_mask = clamp(max(radial_flash, center_flare * 1.45), 0.0, 1.0) * flash_intensity;
-	col = mix(col, vec3(1.0, 0.98, 0.94), flash_mask);
+	// Shadertoy-inspired lens flare flash: rings + spikes + bright core, bounded in radius.
+	float flash_total = 0.30;
+	float flash_t = clamp(PC.phase_time / flash_total, 0.0, 1.0);
+	float flash_expand = smoothstep(0.0, 1.0, clamp(flash_t / 0.46, 0.0, 1.0));
+	float flash_collapse = smoothstep(0.52, 1.0, flash_t);
+	float flash_radius = mix(0.015, 2.90, flash_expand);
+	flash_radius = mix(flash_radius, 0.012, flash_collapse);
+	float flash_env = smoothstep(0.0, 0.12, flash_t) * (1.0 - smoothstep(0.86, 1.0, flash_t));
+	vec2 fuv = q / max(0.001, flash_radius * 2.35 + 0.02);
+	vec2 mm = vec2(0.0);
+
+	vec3 flare = vec3(0.0);
+	for (int i = 0; i < 8; i++) {
+		float fi = float(i);
+		float size = pow(flare_rnd(fi * 2000.0) * 1.8, 2.0) + 1.41;
+		float dist = flare_rnd(fi * 20.0) * 3.0 - 0.3;
+		flare += flare_circle(fuv, size, dist, mm);
+	}
+
+	float a_fl = atan(fuv.y - mm.y, fuv.x - mm.x);
+	float l_fl = max(length(fuv - mm), 1e-4);
+	float spikes = max(0.1 / pow(l_fl * 5.0, 5.0), 0.0) * abs(sin(a_fl * 5.0 + cos(a_fl * 9.0))) / 20.0;
+	spikes += max(0.1 / pow(l_fl * 10.0, 1.0 / 20.0), 0.0);
+	spikes += abs(sin(a_fl * 3.0 + cos(a_fl * 9.0))) * abs(sin(a_fl * 9.0)) / 8.0;
+	vec3 flare_core = max(0.10 / pow(l_fl * 4.0, 0.5), 0.0) * vec3(0.78, 0.82, 1.0) * 2.8;
+	flare += vec3(spikes) * vec3(1.0, 0.96, 0.90) + flare_core;
+
+	float flash_bound = exp(-pow(r / max(0.001, flash_radius * 1.32 + 0.03), 2.2));
+	float flash_tail = exp(-r / max(0.001, flash_radius * 2.50 + 0.08));
+	float flash_mix = flash_env * (flash_bound * 0.92 + flash_tail * 0.34);
+	col += flare * flash_mix * 0.42;
 
 	// Use the exact same star generator as scene-2 for continuity.
 	// During scene-1 we add a center-origin burst warp, then decay into the static field.
@@ -655,25 +703,25 @@ vec3 render_stage2(vec2 uv, float t) {
 	float voronoi_morph_t = t * 0.46;
 	float shared_morph_t = t * 0.34 * 0.52;
 	vec2 shared_morph = sun_sine_morph_delta(warp_p, shared_morph_t);
-	granule_p += shared_morph * (granule_tile * vec2(0.026, 0.026));
+	granule_p += shared_morph * (granule_tile * vec2(0.020, 0.020));
 	vec2 granule_anchor_warp0 = vec2(
-		fbm(granule_uv * 13.0 + vec2(4.3, 9.7)),
-		fbm(rot2(0.87) * granule_uv * 17.0 + vec2(11.9, 1.6))
+		fbm(granule_uv * 17.0 + vec2(4.3, 9.7)),
+		fbm(rot2(0.87) * granule_uv * 23.0 + vec2(11.9, 1.6))
 	) - 0.5;
 	vec2 granule_anchor_warp1 = vec2(
-		fbm(granule_uv * 29.0 + vec2(17.4, 5.2)),
-		fbm(rot2(-0.49) * granule_uv * 25.0 + vec2(2.1, 13.3))
+		fbm(granule_uv * 38.0 + vec2(17.4, 5.2)),
+		fbm(rot2(-0.49) * granule_uv * 33.0 + vec2(2.1, 13.3))
 	) - 0.5;
 	float granule_pulse_own = 0.5 + 0.5 * sin(voronoi_morph_t * 0.33 + dot(granule_uv, vec2(7.1, 5.3)) * TAU);
 	float granule_pulse_shared = 0.5 + 0.5 * sin(shared_morph_t * 0.74 + dot(granule_uv, vec2(5.9, 8.1)) * TAU);
 	float granule_pulse = mix(granule_pulse_own, granule_pulse_shared, 0.45);
-	granule_p += granule_anchor_warp0 * mix(5.0, 5.8, granule_pulse);
-	granule_p += granule_anchor_warp1 * mix(1.4, 1.9, granule_pulse);
+	granule_p += granule_anchor_warp0 * mix(4.2, 4.9, granule_pulse);
+	granule_p += granule_anchor_warp1 * mix(1.2, 1.6, granule_pulse);
 	float vor_morph_t = voronoi_morph_t + shared_morph_t * 0.65;
 	vec3 vor = sun_granule_voronoi(granule_p, granule_tile, vor_morph_t);
-	float edge_fuzz = fbm(granule_uv * 36.0 + vec2(7.2, -4.1));
-	float edge_wobble0 = fbm(granule_p * 0.23 + vec2(vor.z * 31.7, -vor.z * 17.9));
-	float edge_wobble1 = fbm(rot2(0.73) * granule_p * 0.31 + vec2(vor.z * 13.4, vor.z * 29.1));
+	float edge_fuzz = fbm(granule_uv * 54.0 + vec2(7.2, -4.1));
+	float edge_wobble0 = fbm(granule_p * 0.31 + vec2(vor.z * 31.7, -vor.z * 17.9));
+	float edge_wobble1 = fbm(rot2(0.73) * granule_p * 0.41 + vec2(vor.z * 13.4, vor.z * 29.1));
 	float edge_pulse = 0.5 + 0.5 * sin(vor_morph_t * 0.92 + vor.z * TAU + edge_fuzz * 2.8);
 	float edge_shift = (edge_fuzz - 0.5) * mix(0.016, 0.028, edge_pulse) + (edge_wobble0 - 0.5) * mix(0.010, 0.020, 1.0 - edge_pulse);
 	float edge_metric = vor.y + (edge_wobble0 - 0.5) * 0.11 + (edge_wobble1 - 0.5) * 0.08;
@@ -691,11 +739,12 @@ vec3 render_stage2(vec2 uv, float t) {
 	float hy = hyp - h;
 	vec3 tangent_x = normalize(vec3(1.0, 0.0, -sphere_n.x / max(0.10, sphere_n.z)));
 	vec3 tangent_y = normalize(vec3(0.0, 1.0, -sphere_n.y / max(0.10, sphere_n.z)));
-	float bump_strength = 1.06;
+	float bump_strength = 0.94;
 	vec3 surf_n = normalize(sphere_n - tangent_x * hx * bump_strength - tangent_y * hy * bump_strength);
 	vec3 light_dir = normalize(vec3(cos(t * 0.18) * 0.28, sin(t * 0.14) * 0.22, 0.93));
 	float ndl = clamp(dot(surf_n, light_dir), 0.0, 1.0);
-	float fres = pow(1.0 - clamp(surf_n.z, 0.0, 1.0), 2.2);
+	float ndl_diff = pow(ndl, 1.22);
+	float fres = pow(1.0 - clamp(surf_n.z, 0.0, 1.0), 2.6);
 	float veins = smoothstep(0.22, 0.84, mix(flow0, flow1, 0.36));
 	veins = mix(veins, honey_mask, 0.24);
 	veins = mix(veins, detail_noise, 0.10);
@@ -717,11 +766,11 @@ vec3 render_stage2(vec2 uv, float t) {
 	vec3 plasma = base_col;
 	float ember = smoothstep(0.62, 0.98, detail_noise);
 	plasma += vec3(1.0, 0.56, 0.06) * ember * (0.02 + 0.04 * veins);
-	plasma = mix(plasma, sun_core, clamp(core_grad * 0.45 + pow(ndl, 3.5) * 0.35, 0.0, 1.0));
+	plasma = mix(plasma, sun_core, clamp(core_grad * 0.45 + pow(ndl, 2.4) * 0.22, 0.0, 1.0));
 	plasma += sun_hot * veins * 0.24;
-	plasma += sun_core * ndl * 0.16;
-	plasma += vec3(1.0, 0.82, 0.18) * fres * 0.26;
-	plasma *= 1.00 + ndl * 0.22;
+	plasma += sun_core * ndl_diff * 0.11;
+	plasma += vec3(1.0, 0.82, 0.18) * fres * 0.15;
+	plasma *= 1.00 + ndl_diff * 0.12;
 	plasma *= (1.0 + limb * 0.18);
 	plasma = 1.0 - exp(-plasma * 1.34);
 	col = mix(col, plasma, sun_body * sun_reveal);
@@ -729,11 +778,11 @@ vec3 render_stage2(vec2 uv, float t) {
 	float rn = length(np);
 	vec3 cor_rays = shadertoy_corona(np, t);
 	float outside_body = smoothstep(0.985, 1.02, rn);
-	float far_fade = 1.0 - smoothstep(1.55, 2.35, rn);
+	float far_fade = 1.0 - smoothstep(1.52, 2.18, rn);
 	float corona_mask = outside_body * far_fade * sun_reveal;
 	float limb_out = max(0.0, rn - 1.0);
 	float limb_bridge = exp(-pow(limb_out * 34.0, 1.15)) * smoothstep(0.995, 1.018, rn) * sun_reveal;
-	corona_mask = max(corona_mask, limb_bridge * 0.25);
+	corona_mask = max(corona_mask, limb_bridge * 0.23);
 
 	vec2 p_cor = np * 0.70710678;
 	vec3 ray_cor = normalize(vec3(p_cor, 2.0));
@@ -742,19 +791,23 @@ vec3 render_stage2(vec2 uv, float t) {
 	float s3a = corona_ring_ray_noise(ray_cor, pos_cor, 0.96, 1.0, mr_cor, t);
 	vec3 ray_cor_b = normalize(vec3(rot2(0.31) * p_cor, 2.0));
 	float s3b = corona_ring_ray_noise(ray_cor_b, pos_cor, 1.02, 0.95, mr_cor, t * 1.11 + 0.37);
-	float swirl_raw = max(s3a, s3b * 0.88);
-	float swirl_soft = smoothstep(0.07, 0.72, swirl_raw);
-	float swirl_ridge = pow(smoothstep(0.34, 0.95, swirl_raw), 1.8);
-	float swirl = clamp(swirl_soft * 0.55 + swirl_ridge * 1.25, 0.0, 1.0);
-	float swirl_shell = smoothstep(1.02, 1.82, rn) * (1.0 - smoothstep(1.90, 2.35, rn));
+	vec3 ray_cor_c = normalize(vec3(rot2(-0.63) * p_cor, 2.0));
+	float s3c = corona_ring_ray_noise(ray_cor_c, pos_cor, 0.99, 1.05, mr_cor, t * 1.29 - 0.41);
+	float swirl_raw = max(max(s3a, s3b * 0.88), s3c * 0.92);
+	float swirl_noise = corona_noise_texture(p_cor * 67.0 + vec2(t * 0.21, -t * 0.17));
+	swirl_raw += (swirl_noise - 0.5) * 0.10;
+	float swirl_soft = smoothstep(0.06, 0.70, swirl_raw);
+	float swirl_ridge = pow(smoothstep(0.30, 0.94, swirl_raw), 1.65);
+	float swirl = clamp(swirl_soft * 0.62 + swirl_ridge * 1.38, 0.0, 1.0);
+	float swirl_shell = smoothstep(1.02, 1.70, rn) * (1.0 - smoothstep(1.82, 2.15, rn));
 	vec3 cor_swirl = mix(vec3(0.98, 0.24, 0.02), vec3(1.0, 0.84, 0.40), swirl) * swirl;
-	cor_swirl *= 0.72 + swirl_shell * 0.78;
+	cor_swirl *= 0.78 + swirl_shell * 0.92;
 	vec3 bridge_col = vec3(1.0, 0.72, 0.22) * limb_bridge * 0.24;
 
 	col += bridge_col;
-	col += cor_rays * corona_mask * mix(1.52, 0.99, swirl * 0.75);
-	col += cor_swirl * corona_mask * 1.40;
-	col += vec3(1.0, 0.78, 0.24) * swirl_ridge * corona_mask * 0.27;
+	col += cor_rays * corona_mask * mix(1.34, 0.88, swirl * 0.78);
+	col += cor_swirl * corona_mask * 1.56;
+	col += vec3(1.0, 0.78, 0.24) * swirl_ridge * corona_mask * 0.34;
 
 	float inner = PC.zone_inner_radius / max(1.0, float(PC.height));
 	float outer = PC.zone_outer_radius / max(1.0, float(PC.height));

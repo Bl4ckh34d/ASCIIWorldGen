@@ -790,11 +790,11 @@ func _roll_planetary_setup() -> void:
 
 func _roll_moon_count(rng: RandomNumberGenerator) -> int:
 	var roll: float = rng.randf()
-	if roll < 0.22:
+	if roll < 0.30:
 		return 0
-	if roll < 0.57:
+	if roll < 0.70:
 		return 1
-	if roll < 0.84:
+	if roll < 0.90:
 		return 2
 	return 3
 
@@ -889,4 +889,4 @@ func _finalize_intro_selection() -> void:
 
 	var startup_state := get_node_or_null("/root/StartupState")
 	if startup_state and "set_intro_selection" in startup_state:
-		startup_state.set_intro_selection(_star_name, _current_orbit_norm(), _planet_name)
+		startup_state.set_intro_selection(_star_name, _current_orbit_norm(), _planet_name, _moon_count, _moon_seed)

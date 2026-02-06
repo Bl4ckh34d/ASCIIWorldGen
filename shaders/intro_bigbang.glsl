@@ -148,21 +148,52 @@ float filament_field(vec2 p, float t, float scale, float thickness) {
 	return line * line;
 }
 
-float star_layer(vec2 uv, float t, float scale, float pan_shift, float threshold, vec2 seed_bias) {
+float flare_rnd(float w) {
+	return fract(sin(w) * 1000.0);
+}
+
+float flare_reg_shape(vec2 p, int n) {
+	float a = atan(p.x, p.y) + 0.2;
+	float b = TAU / float(n);
+	return smoothstep(0.5, 0.51, cos(floor(0.5 + a / b) * b - a) * length(p));
+}
+
+vec3 flare_circle(vec2 p, float size, float dist, vec2 drift) {
+	float l = length(p + drift * (dist * 4.0)) + size * 0.5;
+	float c = max(0.01 - pow(max(length(p + drift * dist), 1e-4), size * 1.4), 0.0) * 50.0;
+	float c1 = max(0.001 - pow(max(l - 0.3, 1e-4), 1.0 / 40.0) + sin(l * 30.0), 0.0) * 3.0;
+	float c2 = max(0.04 / pow(max(length(p - drift * dist * 0.5 + 0.09), 1e-4), 1.0), 0.0) / 20.0;
+	float s = max(0.01 - pow(flare_reg_shape(p * 5.0 + drift * dist * 5.0 + 0.9, 6), 1.0), 0.0) * 5.0;
+	vec3 color = cos(vec3(0.44, 0.24, 0.2) * 8.0 + dist * 4.0) * 0.5 + 0.5;
+	vec3 f = (c + c1 + c2 + s) * color;
+	return max(f - 0.01, vec3(0.0));
+}
+
+vec3 star_layer_colored(vec2 uv, float t, float scale, float pan_shift, float threshold, vec2 seed_bias) {
 	vec2 su = fract(uv + vec2(pan_shift, 0.0));
 	vec2 cell = floor(su * vec2(float(PC.width), float(PC.height)) * scale);
 	float h = hash12(cell + seed_bias);
 	float s = smoothstep(threshold, 1.0, h);
 	float tw = 0.5 + 0.5 * sin(t * (1.4 + hash12(cell + 5.7) * 2.8) + hash12(cell + 12.3) * TAU);
-	return s * tw;
+	float lum = s * tw;
+	float tint_pick = hash12(cell + seed_bias * 1.73 + vec2(73.1, 19.7));
+	float blue_mask = step(0.989, tint_pick);
+	float red_mask = step(0.976, tint_pick) * (1.0 - blue_mask);
+	vec3 warm_col = vec3(0.95, 0.90, 0.74);
+	vec3 red_col = vec3(0.96, 0.58, 0.50);
+	vec3 blue_col = vec3(0.56, 0.70, 1.0);
+	vec3 star_col = warm_col * (1.0 - red_mask - blue_mask);
+	star_col += red_col * red_mask;
+	star_col += blue_col * blue_mask;
+	return star_col * lum;
 }
 
 vec3 intro_star_sky(vec2 uv, float t, float pan, float alpha) {
-	float l0 = star_layer(uv, t, 0.70, pan * 0.035, 0.9982, vec2(17.3, 41.7));
-	float l1 = star_layer(uv, t, 1.25, pan * 0.080, 0.9988, vec2(51.8, 13.4));
-	float l2 = star_layer(uv, t, 1.95, pan * 0.160, 0.9992, vec2(9.6, 77.2));
-	float s = l0 * 0.95 + l1 * 0.70 + l2 * 0.45;
-	return vec3(0.70, 0.80, 1.0) * s * alpha;
+	vec3 l0 = star_layer_colored(uv, t, 0.70, pan * 0.035, 0.9982, vec2(17.3, 41.7));
+	vec3 l1 = star_layer_colored(uv, t, 1.25, pan * 0.080, 0.9988, vec2(51.8, 13.4));
+	vec3 l2 = star_layer_colored(uv, t, 1.95, pan * 0.160, 0.9992, vec2(9.6, 77.2));
+	vec3 s = l0 * 0.95 + l1 * 0.70 + l2 * 0.45;
+	return s * alpha;
 }
 
 vec3 render_quote(vec2 uv, float t) {
@@ -325,9 +356,11 @@ vec3 render_bigbang(vec2 uv, float t) {
 	col *= (1.0 - clamp(PC.fade_alpha, 0.0, 1.0));
 
 	// Fade the big-bang core first while it expands, revealing stars behind it.
-	float core_clear_t = smoothstep(0.22, 1.85, progress_raw);
-	float core_clear_edge = mix(0.04, 0.66, core_clear_t);
-	float core_clear_feather = mix(0.05, 0.16, core_clear_t);
+	float core_clear_n = clamp((progress_raw - 0.14) / max(0.0001, 1.30 - 0.14), 0.0, 1.0);
+	// Accelerating growth: edge speed increases as the mask expands.
+	float core_clear_t = core_clear_n * 0.25 + pow(core_clear_n, 2.15) * 0.75;
+	float core_clear_edge = mix(0.05, 0.70, core_clear_t);
+	float core_clear_feather = mix(0.048, 0.11, core_clear_t);
 	float core_clear = (1.0 - smoothstep(
 		core_clear_edge - core_clear_feather,
 		core_clear_edge + core_clear_feather,
@@ -335,25 +368,37 @@ vec3 render_bigbang(vec2 uv, float t) {
 	)) * core_clear_t;
 	col *= (1.0 - core_clear);
 
-	// Singularity flash pulse: rapid expand to full-screen, then rapid collapse back to center.
-	float flash_total = 0.22;
+	// Shadertoy-inspired lens flare flash: rings + spikes + bright core, bounded in radius.
+	float flash_total = 0.30;
 	float flash_t = clamp(PC.phase_time / flash_total, 0.0, 1.0);
-	float flash_up = flash_t < 0.5 ? smoothstep(0.0, 1.0, flash_t * 2.0) : 1.0;
-	float flash_down = flash_t > 0.5 ? smoothstep(0.0, 1.0, (flash_t - 0.5) * 2.0) : 0.0;
-	float flash_radius = mix(0.015, 2.95, flash_up);
-	flash_radius = mix(flash_radius, 0.015, flash_down);
-	float flash_feather = mix(0.028, 0.22, smoothstep(0.04, 2.95, flash_radius));
-	float radial_flash = 1.0 - smoothstep(
-		flash_radius - flash_feather,
-		flash_radius + flash_feather,
-		r
-	);
-	float end_fade = 1.0 - smoothstep(0.90, 1.0, flash_t);
-	float center_start = exp(-pow(flash_t / 0.11, 2.0));
-	float center_end = exp(-pow((1.0 - flash_t) / 0.11, 2.0));
-	float center_flare = exp(-r * 62.0) * min(1.0, center_start + center_end);
-	float flash_mask = clamp(max(radial_flash, center_flare * 1.35), 0.0, 1.0) * end_fade;
-	col = mix(col, vec3(1.0, 0.98, 0.94), flash_mask);
+	float flash_expand = smoothstep(0.0, 1.0, clamp(flash_t / 0.46, 0.0, 1.0));
+	float flash_collapse = smoothstep(0.52, 1.0, flash_t);
+	float flash_radius = mix(0.015, 2.90, flash_expand);
+	flash_radius = mix(flash_radius, 0.012, flash_collapse);
+	float flash_env = smoothstep(0.0, 0.12, flash_t) * (1.0 - smoothstep(0.86, 1.0, flash_t));
+	vec2 fuv = q / max(0.001, flash_radius * 2.35 + 0.02);
+	vec2 mm = vec2(0.0);
+
+	vec3 flare = vec3(0.0);
+	for (int i = 0; i < 8; i++) {
+		float fi = float(i);
+		float size = pow(flare_rnd(fi * 2000.0) * 1.8, 2.0) + 1.41;
+		float dist = flare_rnd(fi * 20.0) * 3.0 - 0.3;
+		flare += flare_circle(fuv, size, dist, mm);
+	}
+
+	float a_fl = atan(fuv.y - mm.y, fuv.x - mm.x);
+	float l_fl = max(length(fuv - mm), 1e-4);
+	float spikes = max(0.1 / pow(l_fl * 5.0, 5.0), 0.0) * abs(sin(a_fl * 5.0 + cos(a_fl * 9.0))) / 20.0;
+	spikes += max(0.1 / pow(l_fl * 10.0, 1.0 / 20.0), 0.0);
+	spikes += abs(sin(a_fl * 3.0 + cos(a_fl * 9.0))) * abs(sin(a_fl * 9.0)) / 8.0;
+	vec3 flare_core = max(0.10 / pow(l_fl * 4.0, 0.5), 0.0) * vec3(0.78, 0.82, 1.0) * 2.8;
+	flare += vec3(spikes) * vec3(1.0, 0.96, 0.90) + flare_core;
+
+	float flash_bound = exp(-pow(r / max(0.001, flash_radius * 1.32 + 0.03), 2.2));
+	float flash_tail = exp(-r / max(0.001, flash_radius * 2.50 + 0.08));
+	float flash_mix = flash_env * (flash_bound * 0.92 + flash_tail * 0.34);
+	col += flare * flash_mix * 0.42;
 
 	// Use the exact same star generator as scene-2 for continuity.
 	// During scene-1 we add a center-origin burst warp, then decay into the static field.

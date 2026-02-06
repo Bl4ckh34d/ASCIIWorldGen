@@ -4,6 +4,8 @@ extends Node
 var star_name: String = ""
 var planet_name: String = ""
 var orbit_norm: float = 0.5
+var moon_count: int = 0
+var moon_seed: float = 0.0
 var intro_completed: bool = false
 
 var _pending_world_config: Dictionary = {}
@@ -13,17 +15,23 @@ func reset() -> void:
 	star_name = ""
 	planet_name = ""
 	orbit_norm = 0.5
+	moon_count = 0
+	moon_seed = 0.0
 	intro_completed = false
 	_pending_world_config.clear()
 	_intro_seed_string = ""
 
-func set_intro_selection(star_input: String, orbit_value: float, world_name: String = "") -> void:
+func set_intro_selection(star_input: String, orbit_value: float, world_name: String = "", selected_moon_count: int = 0, selected_moon_seed: float = 0.0) -> void:
 	star_name = _sanitize_star_name(star_input)
 	planet_name = _sanitize_planet_name(world_name)
 	orbit_norm = clamp(float(orbit_value), 0.0, 1.0)
-	_intro_seed_string = "%s|%s|orbit=%.4f" % [star_name, planet_name, orbit_norm]
+	moon_count = clamp(int(selected_moon_count), 0, 3)
+	moon_seed = max(0.0, float(selected_moon_seed))
+	_intro_seed_string = "%s|%s|orbit=%.4f|moons=%d|moonseed=%.3f" % [star_name, planet_name, orbit_norm, moon_count, moon_seed]
 	_pending_world_config = _derive_world_config(orbit_norm)
 	_pending_world_config["seed"] = _intro_seed_string
+	_pending_world_config["moon_count"] = moon_count
+	_pending_world_config["moon_seed"] = moon_seed
 	intro_completed = true
 
 func has_pending_world_config() -> bool:

@@ -438,11 +438,17 @@ func evaluate_light_field(w: int, h: int, params: Dictionary) -> PackedFloat32Ar
 	# Pack push constants for light shader
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
+	var day_of_year: float = float(params.get("day_of_year", 0.0))
+	var time_of_day: float = float(params.get("time_of_day", 0.0))
 	var floats := PackedFloat32Array([
-		float(params.get("day_of_year", 0.0)),
-		float(params.get("time_of_day", 0.0)),
+		day_of_year,
+		time_of_day,
 		float(params.get("day_night_base", 0.25)),
 		float(params.get("day_night_contrast", 0.75)),
+		float(params.get("moon_count", 0.0)),
+		float(params.get("moon_seed", 0.0)),
+		float(params.get("moon_shadow_strength", 0.55)),
+		float(params.get("sim_days", day_of_year * 365.0 + time_of_day)),
 	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
@@ -490,11 +496,17 @@ func evaluate_light_field_gpu(w: int, h: int, params: Dictionary, out_buf: RID) 
 	var uniform_set: RID = _rd.uniform_set_create(uniforms, _light_shader, 0)
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
+	var day_of_year: float = float(params.get("day_of_year", 0.0))
+	var time_of_day: float = float(params.get("time_of_day", 0.0))
 	var floats := PackedFloat32Array([
-		float(params.get("day_of_year", 0.0)),
-		float(params.get("time_of_day", 0.0)),
+		day_of_year,
+		time_of_day,
 		float(params.get("day_night_base", 0.25)),
 		float(params.get("day_night_contrast", 0.75)),
+		float(params.get("moon_count", 0.0)),
+		float(params.get("moon_seed", 0.0)),
+		float(params.get("moon_shadow_strength", 0.55)),
+		float(params.get("sim_days", day_of_year * 365.0 + time_of_day)),
 	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
