@@ -17,6 +17,13 @@ layout(push_constant) uniform Params {
     float adv_scale;    // cells per tick (adv_cells_per_day * dt_days)
     float diff_alpha;   // 0..1
     float inj_alpha;    // 0..1
+    float structure_sharpen;
+    float source_pin;
+    float cloud_floor;
+    float cloud_contrast;
+    float cloud_global_floor;
+    float detail_preserve;
+    float decay_alpha;
 } PC;
 
 float clamp01(float v) { return clamp(v, 0.0, 1.0); }
@@ -64,18 +71,30 @@ void main(){
     int t = int(x) + max(0, int(y) - 1) * W;
     int b = int(x) + min(H - 1, int(y) + 1) * W;
     float nbr = (InC.in_cloud[l] + InC.in_cloud[r] + InC.in_cloud[t] + InC.in_cloud[b]) * 0.25;
-    float diffused = mix(adv_val, nbr, clamp01(PC.diff_alpha));
+    float detail = abs(adv_val - nbr);
+    float keep = smoothstep(0.02, 0.18, detail) * clamp01(PC.detail_preserve);
+    float local_diff = clamp01(PC.diff_alpha * (1.0 - keep));
+    float diffused = mix(adv_val, nbr, local_diff);
 
     // Injection from humidity proxy (source)
-    float injected = mix(diffused, Source.source[i], clamp01(PC.inj_alpha));
-    // Mild sharpening to preserve structure over time
-    float sharp = clamp01(injected + (injected - nbr) * 0.35);
-    float c = clamp01(sharp);
-    float src = clamp01(Source.source[i]);
-    // Preserve regeneration from source
-    c = max(c, src * 0.8);
-    // Contrast to avoid uniform haze
-    c = clamp01((c - 0.1) * 1.15);
-    c = max(c, 0.1);
+    float src_raw = clamp01(Source.source[i]);
+    float src_nbr = clamp01((Source.source[l] + Source.source[r] + Source.source[t] + Source.source[b]) * 0.25);
+    float src = mix(src_raw, src_nbr, 0.35);
+    float src_weight = smoothstep(0.20, 0.90, src);
+    float inj = clamp01(PC.inj_alpha * mix(0.35, 1.0, src_weight));
+    float injected = mix(diffused, src, inj);
+    float pinned = max(injected, src * clamp01(PC.source_pin));
+    // Preserve soft edges: emphasize contrast/sharpening mostly in dense cloud cores.
+    float core_emphasis = smoothstep(0.30, 0.78, pinned) * smoothstep(0.20, 0.80, src_weight);
+    float contrasted = clamp01((pinned - PC.cloud_floor) * max(0.01, PC.cloud_contrast));
+    float tonal = mix(pinned, contrasted, core_emphasis);
+    float sharpened = tonal;
+    if (PC.structure_sharpen > 0.0001) {
+        float sharp_k = PC.structure_sharpen * core_emphasis;
+        sharpened = clamp01(tonal + (tonal - nbr) * sharp_k);
+    }
+    float decay = clamp01(PC.decay_alpha * (0.35 + 0.65 * (1.0 - src_weight)));
+    float c = sharpened * (1.0 - decay);
+    c = max(c, clamp01(PC.cloud_global_floor));
     OutC.out_cloud[i] = c;
 }

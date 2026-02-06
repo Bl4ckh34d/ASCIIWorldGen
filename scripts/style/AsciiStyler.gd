@@ -230,7 +230,7 @@ func glyph_for(x: int, y: int, is_land: bool, biome_id: int, is_beach: bool, rng
 			var hill_variants = ["+", "∩", "~", "≈"]  # Hill variants  
 			return hill_variants[glyph_hash % hill_variants.size()]
 		BiomeClassifier.Biome.DESERT_SAND:
-			var desert_variants = [":", ".", "°", "·"]  # Desert variants
+			var desert_variants = [":", ".", "o", "·"]  # Desert variants
 			return desert_variants[glyph_hash % desert_variants.size()]
 		BiomeClassifier.Biome.GRASSLAND:
 			var grass_variants = [",", "'", "`", "."]  # Grass variants

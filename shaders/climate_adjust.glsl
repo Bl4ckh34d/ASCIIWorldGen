@@ -78,7 +78,7 @@ void main() {
     int H = PC.height;
     int i = int(x) + int(y) * W;
 
-    float lat_norm_signed = (float(y) / max(1.0, float(H) - 1.0)) - 0.5; // -0.5..+0.5
+    float lat_norm_signed = 0.5 - (float(y) / max(1.0, float(H) - 1.0)); // -0.5..+0.5 (north positive)
     float lat = abs(lat_norm_signed) * 2.0;
     // Apply elevation cooling only above sea level (temperature-neutral below sea level)
     // Anchored baseline: approximate by median/mean land height pre-computed on CPU -- here we use a neutral 0.0 and rely on CPU path for parity,
@@ -111,7 +111,8 @@ void main() {
     // Diurnal term: latitude and ocean damped
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat, 1.2));
     float amp_cont_d = land_px ? 1.0 : PC.diurnal_ocean_damp;
-    float diurnal = amp_lat_d * amp_cont_d * cos(6.28318 * PC.time_of_day);
+    float local_time = fract(PC.time_of_day + float(x) / float(max(1, W)));
+    float diurnal = amp_lat_d * amp_cont_d * cos(6.28318 * local_time);
     t = clamp01(t + season + diurnal);
     // FIXED: Reduce extreme temperature scaling to prevent lava everywhere
     // Apply gentler temperature transformation to avoid extreme artifacts
@@ -150,7 +151,7 @@ void main() {
                         float amp_lat2 = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat2, 1.2));
                         float cont_amp2 = 1.0; // neighbor is land by construction here
                         float amp_cont2 = mix(PC.season_ocean_damp, 1.0, cont_amp2);
-                        float lat_norm_signed2 = (float(ny) / max(1.0, float(H) - 1.0)) - 0.5;
+                        float lat_norm_signed2 = 0.5 - (float(ny) / max(1.0, float(H) - 1.0));
                         float phase_h2 = PC.season_phase + (lat_norm_signed2 < 0.0 ? 0.5 : 0.0);
                         phase_h2 = fract(phase_h2);
                         float season2 = amp_lat2 * amp_cont2 * cos(6.28318 * phase_h2);
@@ -173,26 +174,39 @@ void main() {
     }
 
     float m_base = 0.5 + 0.3 * sin(6.28318 * float(y) / float(H) * 3.0);
-    // Moisture base noise sampled with offset (x+100, y-50)
     float m_noise = 0.3 * sample_bilinear_moist(W, H, float(x) * PC.noise_x_scale + 100.0, float(y) * PC.noise_x_scale - 50.0);
-    // Flow advection fields (already evaluated at scaled coords on CPU when built)
     float adv_u = FlowU.flow_u_data[i];
     float adv_v = FlowV.flow_v_data[i];
     float sx = clamp(float(x) + adv_u * 6.0, 0.0, float(W - 1));
     float sy = clamp(float(y) + adv_v * 6.0, 0.0, float(H - 1));
     float m_adv = 0.2 * sample_bilinear_moist(W, H, sx * PC.noise_x_scale, sy * PC.noise_x_scale);
-    float polar_dry = 0.20 * lat;
-    float m = m_base + m_noise + m_adv - polar_dry;
 
-    float humid_amp = mix(0.40, 1.60, PC.ocean_frac);
-    float humid_bias = mix(-0.30, 0.30, PC.ocean_frac);
-    m = (m - 0.5) * humid_amp + 0.5 + humid_bias;
-    float s_norm = clamp(PC.sea_level, -1.0, 1.0);
-    float dryness_strength = max(0.0, -s_norm);
-    float wet_strength = max(0.0, s_norm);
-    float amp2 = 1.0 + 0.5 * wet_strength - 0.5 * dryness_strength;
-    float bias2 = 0.25 * wet_strength - 0.25 * dryness_strength;
-    m = (m - 0.5) * amp2 + 0.5 + bias2;
+    float local_day = 0.5 - 0.5 * cos(6.28318 * (PC.time_of_day + float(x) / float(max(1, W))));
+    float night = 1.0 - local_day;
+    float warm = smoothstep(0.30, 0.90, t);
+    float coast_wet = 1.0 - smoothstep(0.02, 0.45, dc_norm);
+    float interior = smoothstep(0.18, 0.90, dc_norm);
+    float polar_dry = smoothstep(0.65, 1.0, lat) * 0.22;
+
+    float evap_ocean = land_px ? 0.0 : (0.34 + 0.48 * warm) * (0.45 + 0.55 * local_day);
+    float evap_land = land_px ? (0.08 + 0.20 * warm) * (0.25 + 0.75 * local_day) : 0.0;
+    float veg_potential = land_px
+        ? (0.55 * smoothstep(0.30, 0.82, t) * (0.30 + 0.70 * coast_wet) * (1.0 - smoothstep(0.72, 1.0, dc_norm)))
+        : 0.0;
+    float transp = evap_land * veg_potential;
+    float trade_dry = interior * (0.04 + 0.11 * warm);
+    float nocturnal_condense = (0.03 + 0.10 * night) * (0.35 + 0.65 * warm);
+    float sea_mod = clamp(PC.sea_level, -1.0, 1.0) * 0.08;
+
+    float m_seed = 0.48 + 0.18 * m_noise + 0.12 * m_adv + 0.10 * m_base;
+    float m_source = evap_ocean + transp + coast_wet * 0.12;
+    float m_sink = polar_dry + trade_dry + nocturnal_condense;
+    float target = land_px
+        ? clamp(0.32 + 0.30 * veg_potential + 0.24 * coast_wet + 0.10 * night, 0.0, 1.0)
+        : clamp(0.62 + 0.26 * warm + 0.08 * night, 0.0, 1.0);
+
+    float m = m_seed + m_source - m_sink + sea_mod + (PC.ocean_frac - 0.5) * 0.06;
+    m = mix(m, target, 0.26);
     m = clamp01((m + PC.moist_base_offset - 0.5) * PC.moist_scale + 0.5);
 
     // Precip proxy using simple orographic factor (slope_y)

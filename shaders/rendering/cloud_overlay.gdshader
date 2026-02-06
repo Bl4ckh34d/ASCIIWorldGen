@@ -13,7 +13,7 @@ uniform vec2 map_dimensions;
 
 uniform float cloud_opacity = 1.0;
 uniform float cloud_min = 0.2;
-uniform float cloud_levels = 5.0;
+uniform float cloud_levels = 8.0;
 uniform float cloud_power = 0.7;
 uniform float cloud_brightness = 1.1;
 uniform float cloud_night_alpha = 0.35;
@@ -31,7 +31,8 @@ void fragment() {
     c = pow(c, cloud_power);
     float levels = max(1.0, cloud_levels);
     float denom = max(1.0, levels - 1.0);
-    float q = floor(c * levels + 0.0001) / denom;
+    float q_hard = floor(c * levels + 0.0001) / denom;
+    float q = mix(c, q_hard, 0.20);
     float alpha = clamp(q, 0.0, 1.0) * cloud_opacity;
 
     // Dim clouds at night similarly to the map tiles.

@@ -54,11 +54,10 @@ func classify_cell(t_c: float, m: float, elev_norm: float, is_land: bool) -> int
             return BiomeClassifier.Biome.GRASSLAND
         return BiomeClassifier.Biome.WASTELAND
 
-    # t_c > 30 °C
+    # t_c > 30 degC
     if m < 0.40:
         # Desert split (sand vs rock) left to noise; pick rock here to be neutral.
         return BiomeClassifier.Biome.WASTELAND
     # Otherwise apply relief/forest hot overrides
     return BiomeClassifier.Biome.STEPPE
-
 

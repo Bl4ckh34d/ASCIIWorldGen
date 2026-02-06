@@ -18,8 +18,9 @@ var _front_b_buf: RID
 var _buf_size: int = 0
 
 func _river_max_iters(w: int, h: int, min_len: int) -> int:
-	# Allow rivers to reach oceans/lakes; cap to keep GPU cost bounded.
-	var cap: int = min(w + h, 512)
+	# Gameplay-oriented cap: shorter traces keep runtime predictable.
+	# This intentionally sacrifices long-tail realism for performance.
+	var cap: int = min(w + h, 96)
 	return max(min_len, cap)
 
 func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
@@ -84,7 +85,8 @@ func trace_rivers_gpu_buffers(
 		threshold: float,
 		min_len: int,
 		roi: Rect2i,
-		out_river_buf: RID
+		out_river_buf: RID,
+		clear_output: bool = true
 	) -> bool:
 	_ensure()
 	if not _seed_pipeline.is_valid() or not _trace_pipeline.is_valid() or not _clear_pipeline.is_valid():
@@ -95,23 +97,33 @@ func trace_rivers_gpu_buffers(
 	if size == 0:
 		return false
 	_ensure_frontier_buffers(size)
-	# Clear river output
+	var g1d2 := int(ceil(float(size) / 256.0))
 	var uniforms_c: Array = []
-	var uc := RDUniform.new(); uc.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; uc.binding = 0; uc.add_id(out_river_buf); uniforms_c.append(uc)
-	var u_set_c := _rd.uniform_set_create(uniforms_c, _clear_shader, 0)
-	var pc_c := PackedByteArray(); var ints_c := PackedInt32Array([size]); pc_c.append_array(ints_c.to_byte_array())
+	var u_set_c: RID
+	var pc_c := PackedByteArray()
+	var ints_c := PackedInt32Array([size])
+	pc_c.append_array(ints_c.to_byte_array())
 	var pad_clear := (16 - (pc_c.size() % 16)) % 16
 	if pad_clear > 0:
-		var z_clear := PackedByteArray(); z_clear.resize(pad_clear)
+		var z_clear := PackedByteArray()
+		z_clear.resize(pad_clear)
 		pc_c.append_array(z_clear)
-	var g1d2 := int(ceil(float(size) / 256.0))
-	var clc := _rd.compute_list_begin()
-	_rd.compute_list_bind_compute_pipeline(clc, _clear_pipeline)
-	_rd.compute_list_bind_uniform_set(clc, u_set_c, 0)
-	_rd.compute_list_set_push_constant(clc, pc_c, pc_c.size())
-	_rd.compute_list_dispatch(clc, g1d2, 1, 1)
-	_rd.compute_list_end()
-	_rd.free_rid(u_set_c)
+	# Clear river output only when requested by caller (tile scheduler controls this).
+	if clear_output:
+		uniforms_c.clear()
+		var uc := RDUniform.new()
+		uc.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+		uc.binding = 0
+		uc.add_id(out_river_buf)
+		uniforms_c.append(uc)
+		u_set_c = _rd.uniform_set_create(uniforms_c, _clear_shader, 0)
+		var clc := _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(clc, _clear_pipeline)
+		_rd.compute_list_bind_uniform_set(clc, u_set_c, 0)
+		_rd.compute_list_set_push_constant(clc, pc_c, pc_c.size())
+		_rd.compute_list_dispatch(clc, g1d2, 1, 1)
+		_rd.compute_list_end()
+		_rd.free_rid(u_set_c)
 	# Seed pass
 	var uniforms: Array = []
 	var u: RDUniform
@@ -150,14 +162,9 @@ func trace_rivers_gpu_buffers(
 	var buf_front_out := _front_a_buf
 	# Clear frontier out
 	uniforms_c.clear()
-	uc = RDUniform.new(); uc.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; uc.binding = 0; uc.add_id(buf_front_out); uniforms_c.append(uc)
+	var uc2 := RDUniform.new(); uc2.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; uc2.binding = 0; uc2.add_id(buf_front_out); uniforms_c.append(uc2)
 	u_set_c = _rd.uniform_set_create(uniforms_c, _clear_shader, 0)
-	pc_c = PackedByteArray(); ints_c = PackedInt32Array([size]); pc_c.append_array(ints_c.to_byte_array())
-	pad_clear = (16 - (pc_c.size() % 16)) % 16
-	if pad_clear > 0:
-		var z_clear2 := PackedByteArray(); z_clear2.resize(pad_clear)
-		pc_c.append_array(z_clear2)
-	clc = _rd.compute_list_begin()
+	var clc := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(clc, _clear_pipeline)
 	_rd.compute_list_bind_uniform_set(clc, u_set_c, 0)
 	_rd.compute_list_set_push_constant(clc, pc_c, pc_c.size())
@@ -192,7 +199,7 @@ func trace_rivers_gpu_buffers(
 		buf_front_out = tmp
 		# clear new out
 		uniforms_c.clear()
-		uc = RDUniform.new(); uc.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; uc.binding = 0; uc.add_id(buf_front_out); uniforms_c.append(uc)
+		uc2 = RDUniform.new(); uc2.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; uc2.binding = 0; uc2.add_id(buf_front_out); uniforms_c.append(uc2)
 		u_set_c = _rd.uniform_set_create(uniforms_c, _clear_shader, 0)
 		pc_c = PackedByteArray(); ints_c = PackedInt32Array([size]); pc_c.append_array(ints_c.to_byte_array())
 		pad_clear = (16 - (pc_c.size() % 16)) % 16

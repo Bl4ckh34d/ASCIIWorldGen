@@ -2,7 +2,6 @@
 extends RefCounted
 
 ## GPU ClimateAdjust using Godot 4 RenderingDevice and a compute shader.
-## CPU fallback kept by caller.
 
 var CLIMATE_SHADER_FILE: RDShaderFile = load("res://shaders/climate_adjust.glsl")
 var CLIMATE_NOISE_SHADER_FILE: RDShaderFile = load("res://shaders/climate_noise.glsl")
@@ -205,11 +204,11 @@ func evaluate(w: int, h: int,
 	if size == 0:
 		return {"temperature": PackedFloat32Array(), "moisture": PackedFloat32Array(), "precip": PackedFloat32Array()}
 
-	# Build noise fields once on CPU; upload as buffers
+	# Build climate noise fields on GPU; no CPU fallback in GPU-only mode.
 	var xscale: float = float(params.get("noise_x_scale", 1.0))
 	var nf: Dictionary = _compute_noise_fields_gpu(w, h, params, xscale)
 	if nf.is_empty():
-		nf = _compute_noise_fields(w, h, base, xscale)
+		return {}
 
 	if not _shader.is_valid() or not _pipeline.is_valid():
 		return {}

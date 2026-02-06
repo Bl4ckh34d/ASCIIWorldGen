@@ -46,7 +46,8 @@ func update_world_data(
 	pooled_lake_mask: PackedByteArray = PackedByteArray(),
 	lake_id: PackedInt32Array = PackedInt32Array(),
 	sea_level: float = 0.0,
-	skip_base_textures: bool = false
+	skip_base_textures: bool = false,
+	skip_aux_textures: bool = false
 ) -> void:
 	"""Update all world data textures"""
 	
@@ -59,8 +60,9 @@ func update_world_data(
 	if not skip_base_textures:
 		_update_data_texture_1(width, height, height_data, temperature_data, moisture_data, light_data)
 		_update_data_texture_2(width, height, biome_data, is_land_data, beach_mask, rng_seed)
-	_update_data_texture_3(width, height, turquoise_strength, shelf_noise, clouds, plate_boundary_mask)
-	_update_data_texture_4(width, height, height_data, lake_mask, river_mask, lava_mask, pooled_lake_mask, lake_id, sea_level)
+	if not skip_aux_textures or data_texture_3 == null or data_texture_4 == null:
+		_update_data_texture_3(width, height, turquoise_strength, shelf_noise, clouds, plate_boundary_mask)
+		_update_data_texture_4(width, height, height_data, lake_mask, river_mask, lava_mask, pooled_lake_mask, lake_id, sea_level)
 	_update_color_palette_texture()
 
 func update_clouds_only(

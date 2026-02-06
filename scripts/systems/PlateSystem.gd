@@ -14,15 +14,20 @@ var generator: Object = null
 var num_plates: int = 12
 var uplift_rate_per_day: float = 0.002  # normalized height units per day at convergent boundaries
 var ridge_rate_per_day: float = 0.0008  # divergent ridges (lower than convergent)
-var subsidence_rate_per_day: float = 0.001 # divergent central trough
+var subsidence_rate_per_day: float = 0.001 # legacy divergence sink
 var transform_roughness_per_day: float = 0.0004
+var subduction_rate_per_day: float = 0.0016
+var trench_rate_per_day: float = 0.0012
+var drift_cells_per_day: float = 0.02
 var boundary_band_cells: int = 1
 
 # State
 var plate_site_x: PackedInt32Array = PackedInt32Array()
 var plate_site_y: PackedInt32Array = PackedInt32Array()
+var plate_site_weight: PackedFloat32Array = PackedFloat32Array()
 var plate_vel_u: PackedFloat32Array = PackedFloat32Array() # per-plate
 var plate_vel_v: PackedFloat32Array = PackedFloat32Array() # per-plate
+var plate_buoyancy: PackedFloat32Array = PackedFloat32Array() # per-plate (0 oceanic .. 1 continental)
 var cell_plate_id: PackedInt32Array = PackedInt32Array()
 var boundary_mask: PackedByteArray = PackedByteArray()
 var boundary_mask_render: PackedByteArray = PackedByteArray()
@@ -79,11 +84,15 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				boundary_buf,
 				plate_vel_u,
 				plate_vel_v,
+				plate_buoyancy,
 				dt_days,
 				{
 					"uplift_rate_per_day": uplift_rate_per_day,
 					"ridge_rate_per_day": ridge_rate_per_day,
 					"transform_roughness_per_day": transform_roughness_per_day,
+					"subduction_rate_per_day": subduction_rate_per_day,
+					"trench_rate_per_day": trench_rate_per_day,
+					"drift_cells_per_day": drift_cells_per_day,
 				},
 				boundary_band_cells,
 				float(Time.get_ticks_msec() % 100000) / 100000.0,
@@ -102,30 +111,7 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 					if land_buf.is_valid():
 						_land_mask_compute.update_from_height(w, h, height_buf, generator.config.sea_level, land_buf)
 	if not gpu_ok:
-		if use_gpu_only:
-			return {}
-		var updated: PackedFloat32Array = _gpu_update.apply(
-			w, h,
-			generator.last_height,
-			cell_plate_id,
-			boundary_mask,
-			plate_vel_u,
-			plate_vel_v,
-			dt_days,
-			{
-				"uplift_rate_per_day": uplift_rate_per_day,
-				"ridge_rate_per_day": ridge_rate_per_day,
-				"transform_roughness_per_day": transform_roughness_per_day,
-			},
-			boundary_band_cells,
-			float(Time.get_ticks_msec() % 100000) / 100000.0
-		)
-		if updated.size() == w * h:
-			generator.last_height = updated
-			generator.last_height_final = updated
-		else:
-			# Fallback CPU path
-			_update_boundary_uplift(dt_days, w, h)
+		return {}
 	# Expose boundary mask to generator for volcanism coupling
 	var boundary_count = 0
 	if "_plates_boundary_mask_i32" in generator:
@@ -137,7 +123,7 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			mask_i32[m] = val
 			if val == 1: boundary_count += 1
 		generator._plates_boundary_mask_i32 = mask_i32
-	# Provide a noisier boundary mask for rendering only
+	# Provide render mask (kept crisp; curvature comes from warped Voronoi boundaries)
 	if "_plates_boundary_mask_render_u8" in generator:
 		generator._plates_boundary_mask_render_u8 = boundary_mask_render
 		# Store boundary count for other systems to use
@@ -145,8 +131,6 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			generator.tectonic_stats = {}
 		generator.tectonic_stats["boundary_cells"] = boundary_count
 		generator.tectonic_stats["total_plates"] = num_plates
-	if not gpu_ok:
-		_recompute_land_and_shelf(w, h)
 	return {"dirty_fields": PackedStringArray(["height", "is_land", "shelf"]), "boundary_count": boundary_count}
 
 func _build_plates() -> void:
@@ -160,12 +144,20 @@ func _build_plates() -> void:
 	var n: int = clamp(num_plates, 2, 128)
 	plate_site_x.resize(n)
 	plate_site_y.resize(n)
+	plate_site_weight.resize(n)
 	plate_vel_u.resize(n)
 	plate_vel_v.resize(n)
+	plate_buoyancy.resize(n)
 	for p in range(n):
 		plate_site_x[p] = rng.randi_range(0, max(0, w - 1))
 		plate_site_y[p] = rng.randi_range(0, max(0, h - 1))
 		var lat: float = abs(float(plate_site_y[p]) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
+		var is_cont: bool = rng.randf() < 0.42
+		var buoy: float = rng.randf_range(0.58, 0.92) if is_cont else rng.randf_range(0.15, 0.46)
+		plate_buoyancy[p] = buoy
+		# Smaller weight -> larger Voronoi region. Keep mild spread for realistic plate size diversity.
+		var size_bias: float = -0.10 if is_cont else 0.08
+		plate_site_weight[p] = clamp(1.0 + size_bias + rng.randf_range(-0.08, 0.08), 0.70, 1.30)
 		var u: float = (rng.randf() * 2.0 - 1.0)
 		var v: float = (rng.randf() * 2.0 - 1.0) * 0.3
 		if lat < 0.3:
@@ -184,7 +176,21 @@ func _build_plates() -> void:
 	# GPU Voronoi + boundary mask
 	if _gpu_update == null:
 		_gpu_update = PlateUpdateCompute.new()
-	var built: Dictionary = _gpu_update.build_voronoi_and_boundary(w, h, plate_site_x, plate_site_y)
+	var seed: int = (int(generator.config.rng_seed) ^ 0x6A09E667)
+	var warp_strength_cells: float = clamp(float(min(w, h)) * 0.03, 5.0, 12.0)
+	var warp_frequency: float = 0.013
+	var lat_anisotropy: float = 1.15
+	var built: Dictionary = _gpu_update.build_voronoi_and_boundary(
+		w,
+		h,
+		plate_site_x,
+		plate_site_y,
+		plate_site_weight,
+		seed,
+		warp_strength_cells,
+		warp_frequency,
+		lat_anisotropy
+	)
 	if not built.is_empty():
 		var pid: PackedInt32Array = built.get("plate_id", PackedInt32Array())
 		var bnd: PackedInt32Array = built.get("boundary_mask", PackedInt32Array())
@@ -208,47 +214,9 @@ func _build_boundary_render_mask(w: int, h: int) -> void:
 	var size: int = w * h
 	if size <= 0 or boundary_mask.size() != size:
 		return
-	if _boundary_noise == null:
-		_boundary_noise = FastNoiseLite.new()
-		_boundary_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-		_boundary_noise.frequency = 0.12
-	if generator and "config" in generator:
-		_boundary_noise.seed = int(generator.config.rng_seed) ^ 0xB16B00B5
 	boundary_mask_render.resize(size)
-	var jitter: float = 1.0
-	for y in range(h):
-		for x in range(w):
-			var n: float = _boundary_noise.get_noise_2d(float(x), float(y))
-			var m: float = _boundary_noise.get_noise_2d(float(x) + 57.3, float(y) - 91.7)
-			var dx: int = int(round(clamp(n * jitter, -1.0, 1.0)))
-			var dy: int = int(round(clamp(m * jitter, -1.0, 1.0)))
-			var nx := x + dx
-			if nx < 0:
-				nx += w
-			elif nx >= w:
-				nx -= w
-			var ny: int = int(clamp(y + dy, 0, h - 1))
-			var src_i: int = nx + ny * w
-			var out_i: int = x + y * w
-			var v: int = (1 if boundary_mask[src_i] != 0 else 0)
-			boundary_mask_render[out_i] = v
-			if boundary_mask[out_i] != 0:
-				if n > 0.35:
-					var nx2 := x + 1
-					if nx2 >= w:
-						nx2 = 0
-					boundary_mask_render[nx2 + y * w] = 1
-				elif n < -0.35:
-					var nx3 := x - 1
-					if nx3 < 0:
-						nx3 = w - 1
-					boundary_mask_render[nx3 + y * w] = 1
-				if m > 0.35:
-					var ny2: int = int(min(h - 1, y + 1))
-					boundary_mask_render[x + ny2 * w] = 1
-				elif m < -0.35:
-					var ny3: int = int(max(0, y - 1))
-					boundary_mask_render[x + ny3 * w] = 1
+	for i in range(size):
+		boundary_mask_render[i] = boundary_mask[i]
 
 func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 	var size: int = w * h

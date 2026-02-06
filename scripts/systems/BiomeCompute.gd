@@ -367,3 +367,72 @@ func classify_to_buffer(w: int, h: int,
 	if not use_desert:
 		_rd.free_rid(desert_buf_use)
 	return true
+
+func reapply_cryosphere_to_buffer(
+		w: int,
+		h: int,
+		biome_in_buf: RID,
+		biome_out_buf: RID,
+		land_buf: RID,
+		height_buf: RID,
+		temp_buf: RID,
+		moist_buf: RID,
+		temp_min_c: float,
+		temp_max_c: float,
+		height_scale_m: float = 6000.0,
+		lapse_c_per_km: float = 5.5,
+		ocean_ice_base_thresh_c: float = -10.0,
+		ocean_ice_wiggle_amp_c: float = 1.0
+	) -> bool:
+	_ensure()
+	if not _reapply_pipeline.is_valid():
+		return false
+	if not biome_in_buf.is_valid() or not biome_out_buf.is_valid():
+		return false
+	if not land_buf.is_valid() or not height_buf.is_valid() or not temp_buf.is_valid() or not moist_buf.is_valid():
+		return false
+	var size: int = max(0, w * h)
+	if size == 0:
+		return false
+	var ice_field := PackedFloat32Array()
+	ice_field.resize(size)
+	ice_field.fill(0.0)
+	var buf_ice := _rd.storage_buffer_create(ice_field.to_byte_array().size(), ice_field.to_byte_array())
+	var uniforms: Array = []
+	var u: RDUniform
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(biome_in_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(biome_out_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(land_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(height_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(temp_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(moist_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(buf_ice); uniforms.append(u)
+	var u_set := _rd.uniform_set_create(uniforms, _reapply_shader, 0)
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h])
+	var floats := PackedFloat32Array([
+		temp_min_c,
+		temp_max_c,
+		height_scale_m,
+		lapse_c_per_km,
+		ocean_ice_base_thresh_c,
+		ocean_ice_wiggle_amp_c,
+	])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray()
+		zeros.resize(pad)
+		pc.append_array(zeros)
+	var gx: int = int(ceil(float(w) / 16.0))
+	var gy: int = int(ceil(float(h) / 16.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _reapply_pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, gx, gy, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+	_rd.free_rid(buf_ice)
+	return true

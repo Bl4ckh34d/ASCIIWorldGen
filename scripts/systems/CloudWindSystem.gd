@@ -8,27 +8,42 @@ var generator: Object = null
 var cloud_compute: Object = null
 var time_system: Object = null
 var coupling_enabled: bool = true
-var base_rain_strength: float = 0.08
-var base_evap_strength: float = 0.06
+var base_rain_strength: float = 0.09
+var base_evap_strength: float = 0.10
 
 # Wind and advection params (cells per simulated day)
-var adv_cells_per_day: float = 8.0
-var diffusion_rate_per_day: float = 0.01
-var injection_rate_per_day: float = 0.02
-var cloud_time_scale: float = 12.0
+var adv_cells_per_day: float = 4.6
+var diffusion_rate_per_day: float = 0.006
+var injection_rate_per_day: float = 0.020
+var cloud_time_scale: float = 7.0
 var cloud_phase_speed: float = 0.28
-var cloud_floor: float = 0.05
-var cloud_contrast: float = 1.10
-var min_cloud_from_source: float = 0.8
-var min_cloud_global: float = 0.1
+var cloud_floor: float = 0.0
+var cloud_contrast: float = 1.02
+var min_cloud_global: float = 0.0
 var curl_strength: float = 0.35
-var cloud_injection_scale: float = 260.0
-var cloud_injection_min: float = 0.1
-var structure_sharpen: float = 0.35
+var cloud_injection_scale: float = 55.0
+var cloud_injection_min: float = 0.0
+var structure_sharpen: float = 0.02
+var source_pin_strength: float = 0.20
+var detail_preserve: float = 0.86
+var cloud_decay_rate_per_day: float = 2.1
+var cloud_dissipation_rate_per_day: float = 3.6
+var max_cloud_step_days: float = 0.16
+var max_moist_step_days: float = 0.14
+var max_substeps_per_tick: int = 2
+var max_adv_shift_cells: float = 1.8
+var max_diff_alpha: float = 0.35
+var max_decay_alpha: float = 0.30
+var max_injection_alpha: float = 0.14
 var polar_flow_strength: float = 0.45
 var polar_flow_dir: float = -1.0
 var polar_curl_boost: float = 0.25
 var vortex_rotate_strength: float = 0.6
+var humidity_mix_rate_per_day: float = 0.09
+var humidity_relax_rate_per_day: float = 0.05
+var condensation_rate_per_day: float = 0.10
+var precipitation_rate_per_day: float = 0.18
+var vegetation_evap_boost: float = 0.55
 
 # Cycle modulation (UI-tunable): scales diurnal/seasonal effects on clouds/wind
 var diurnal_mod_amp: float = 0.5
@@ -59,6 +74,19 @@ var _wind_gpu_valid: bool = false
 var _seed_cache: int = -2147483648
 var _gpu_manager_ref: Object = null
 var _buffer_size: int = -1
+var updates_paused: bool = false
+var wind_update_interval_ticks: int = 1
+var source_update_interval_ticks: int = 1
+var advection_update_interval_ticks: int = 1
+var moisture_update_interval_ticks: int = 1
+var texture_update_interval_ticks: int = 1
+var _tick_counter: int = 0
+var _last_wind_tick: int = -1000000
+var _last_source_tick: int = -1000000
+var _last_advection_tick: int = -1000000
+var _last_moisture_tick: int = -1000000
+var _last_texture_tick: int = -1000000
+var _force_resync: bool = true
 
 func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 	if file == null:
@@ -81,7 +109,8 @@ func initialize(gen: Object, time_sys: Object = null) -> void:
 	_noise_v = FastNoiseLite.new()
 	_noise_curl = FastNoiseLite.new()
 	_noise_curl2 = FastNoiseLite.new()
-	_sync_seed(true)
+	# Preserve generated cloud state on startup; only reset local compute bindings.
+	_sync_seed(false)
 	_noise_u.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	_noise_v.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	_noise_u.frequency = 0.015
@@ -108,6 +137,13 @@ func initialize(gen: Object, time_sys: Object = null) -> void:
 		if spirv3 != null:
 			_moist_shader_rid = rd.shader_create_from_spirv(spirv3)
 			_moist_pipeline = rd.compute_pipeline_create(_moist_shader_rid)
+	_force_resync = true
+	_tick_counter = 0
+	_last_wind_tick = -1000000
+	_last_source_tick = -1000000
+	_last_advection_tick = -1000000
+	_last_moisture_tick = -1000000
+	_last_texture_tick = -1000000
 
 func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null or world == null:
@@ -119,89 +155,124 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator.last_temperature.size() != w * h or generator.last_moisture.size() != w * h:
 		return {}
 	var gpu_only: bool = ("config" in generator and generator.config.use_gpu_all)
-	if gpu_only and (not _wind_pipeline.is_valid() or not _advec_pipeline.is_valid()):
+	if not gpu_only:
+		return {}
+	_tick_counter += 1
+	if updates_paused:
+		return {}
+	if not _wind_pipeline.is_valid() or not _advec_pipeline.is_valid():
 		# GPU-only mode: do not fall back to CPU if pipelines are missing
 		return {}
 	_ensure_buffers(w, h)
+	var dirty_fields := PackedStringArray()
+	var force_update: bool = _force_resync
 	# 1) Update wind field (bands + eddies evolving with phase)
-	# GPU-only: wind update via compute if pipeline is ready; else skip
-	var _prefer_gpu: bool = true
+	# GPU-only: wind update via compute if pipeline is ready; else skip.
 	var sim_days: float = float(world.simulation_time_days)
 	var tod: float = fposmod(sim_days, 1.0)
 	var days_per_year = time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else 365.0
 	var doy: float = fposmod(sim_days / days_per_year, 1.0)
 	var diurnal_factor: float = 0.5 - 0.5 * cos(6.28318 * tod) # 0 at midnight, 1 at midday
 	var seasonal_factor: float = cos(6.28318 * doy)
-	if _wind_pipeline.is_valid():
+	var do_wind_update: bool = force_update or ((_tick_counter - _last_wind_tick) >= max(1, wind_update_interval_ticks))
+	if do_wind_update and _wind_pipeline.is_valid():
 		_update_wind_field_gpu(world, w, h)
-	elif not gpu_only:
-		_update_wind_field(world, w, h)
+		_last_wind_tick = _tick_counter
+		dirty_fields.append("wind")
+	else:
+		if not _wind_gpu_valid:
+			return {}
 	# 2) Build humidity-driven source field via GPU overlay compute
-	var phase: float = float(world.simulation_time_days) * cloud_phase_speed
-	var source: PackedFloat32Array = PackedFloat32Array()
+	# Keep phase bounded to avoid precision artifacts at very high time acceleration.
+	var phase: float = fposmod(float(world.simulation_time_days) * cloud_phase_speed, 1024.0)
 	var source_buf_override: RID = RID()
-	var use_gpu_source: bool = (generator and "config" in generator and generator.config.use_gpu_all and cloud_compute and "compute_clouds_to_buffer" in cloud_compute)
-	if use_gpu_source:
+	var use_gpu_source: bool = (cloud_compute and "compute_clouds_to_buffer" in cloud_compute)
+	var do_source_update: bool = force_update or ((_tick_counter - _last_source_tick) >= max(1, source_update_interval_ticks))
+	if use_gpu_source and do_source_update:
 		if "ensure_persistent_buffers" in generator:
 			generator.ensure_persistent_buffers(false)
 		var temp_buf: RID = generator.get_persistent_buffer("temperature") if "get_persistent_buffer" in generator else RID()
 		var moist_buf: RID = generator.get_persistent_buffer("moisture") if "get_persistent_buffer" in generator else RID()
 		var land_buf: RID = generator.get_persistent_buffer("is_land") if "get_persistent_buffer" in generator else RID()
+		var light_buf: RID = generator.get_persistent_buffer("light") if "get_persistent_buffer" in generator else RID()
+		var biome_buf: RID = generator.get_persistent_buffer("biome_id") if "get_persistent_buffer" in generator else RID()
 		source_buf_override = generator.get_persistent_buffer("cloud_source") if "get_persistent_buffer" in generator else RID()
 		var ok_src: bool = false
-		if temp_buf.is_valid() and moist_buf.is_valid() and land_buf.is_valid() and source_buf_override.is_valid():
-			ok_src = cloud_compute.compute_clouds_to_buffer(w, h, temp_buf, moist_buf, land_buf, phase, int(generator.config.rng_seed), source_buf_override)
+		if temp_buf.is_valid() and moist_buf.is_valid() and land_buf.is_valid() and light_buf.is_valid() and biome_buf.is_valid() and source_buf_override.is_valid():
+			ok_src = cloud_compute.compute_clouds_to_buffer(
+				w,
+				h,
+				temp_buf,
+				moist_buf,
+				land_buf,
+				light_buf,
+				biome_buf,
+				phase,
+				int(generator.config.rng_seed),
+				source_buf_override
+			)
 		if not ok_src:
 			source_buf_override = RID()
-	else:
-		source_buf_override = RID()
-	if not source_buf_override.is_valid():
-		if gpu_only:
-			# GPU-only: do not fall back to CPU source computation
-			source = PackedFloat32Array()
 		else:
-			if cloud_compute and "compute_clouds" in cloud_compute:
-				source = cloud_compute.compute_clouds(w, h, generator.last_temperature, generator.last_moisture, generator.last_is_land, phase, int(generator.config.rng_seed))
-			if source.size() != w * h:
-				return {}
+			_last_source_tick = _tick_counter
+	else:
+		source_buf_override = generator.get_persistent_buffer("cloud_source") if "get_persistent_buffer" in generator else RID()
+	if not source_buf_override.is_valid():
+		return {}
 	# 3) Initialize clouds if missing; else advect previous field
 	if generator.last_clouds.size() != w * h:
-		if source.size() == w * h:
-			generator.last_clouds = source
-		else:
-			generator.last_clouds.resize(w * h)
-			generator.last_clouds.fill(0.0)
+		generator.last_clouds.resize(w * h)
+		generator.last_clouds.fill(0.0)
 		_setup_cloud_buffers(w, h)
-	# GPU-only advection; if pipeline missing, skip advection this tick
-	var _prefer_gpu_adv: bool = true
-	if _advec_pipeline.is_valid():
-		_advect_and_mix_clouds_gpu(dt_days, w, h, source, source_buf_override)
-	elif not gpu_only:
-		_advect_and_mix_clouds(dt_days, w, h, source)
-	_update_cloud_texture_gpu(w, h)
+	var clouds_changed: bool = false
+	var moisture_changed: bool = false
+	# GPU-only advection; substep large dt for stability at high time acceleration.
+	var do_advection: bool = force_update or ((_tick_counter - _last_advection_tick) >= max(1, advection_update_interval_ticks))
+	if _advec_pipeline.is_valid() and do_advection:
+		var adv_dt_input: float = max(0.0, dt_days)
+		if force_update:
+			# After high-speed skips, use a small guaranteed step to re-form cloud structure quickly.
+			adv_dt_input = max(adv_dt_input, 0.08)
+		var advec_steps: int = int(clamp(ceil(adv_dt_input / max(0.0001, max_cloud_step_days)), 1.0, float(max_substeps_per_tick)))
+		var advec_dt: float = adv_dt_input / float(max(1, advec_steps))
+		for _s in range(advec_steps):
+			_advect_and_mix_clouds_gpu(advec_dt, w, h, PackedFloat32Array(), source_buf_override)
+		_last_advection_tick = _tick_counter
+		clouds_changed = true
+		dirty_fields.append("clouds")
+	else:
+		if force_update:
+			return {}
 	# 4) Moisture coupling with diurnal/seasonal modulation
-	if coupling_enabled:
+	var do_moisture: bool = force_update or ((_tick_counter - _last_moisture_tick) >= max(1, moisture_update_interval_ticks))
+	if coupling_enabled and do_moisture and clouds_changed:
 		var rain_mult: float = 1.0 + diurnal_mod_amp * (diurnal_factor - 0.5) * 0.6 + seasonal_mod_amp * seasonal_factor * 0.2
 		var evap_mult: float = 1.0 - diurnal_mod_amp * (diurnal_factor - 0.5) * 0.3 - seasonal_mod_amp * seasonal_factor * 0.1
 		rain_mult = clamp(rain_mult, 0.5, 1.6)
 		evap_mult = clamp(evap_mult, 0.5, 1.6)
-		if gpu_only:
-			if _moist_pipeline.is_valid():
-				_apply_cloud_moisture_coupling_gpu(dt_days, w, h, rain_mult, evap_mult)
-		else:
-			if generator and "config" in generator and generator.config.use_gpu_all and _moist_pipeline.is_valid():
-				_apply_cloud_moisture_coupling_gpu(dt_days, w, h, rain_mult, evap_mult)
-			else:
-				_apply_cloud_moisture_coupling(dt_days, w, h, rain_mult, evap_mult)
-	return {"dirty_fields": PackedStringArray(["wind", "clouds", "moisture"]) }
+		if _moist_pipeline.is_valid():
+			var moist_steps: int = int(clamp(ceil(dt_days / max(0.0001, max_moist_step_days)), 1.0, float(max_substeps_per_tick)))
+			var moist_dt: float = dt_days / float(max(1, moist_steps))
+			for _m in range(moist_steps):
+				_apply_cloud_moisture_coupling_gpu(moist_dt, w, h, rain_mult, evap_mult)
+			moisture_changed = true
+			_last_moisture_tick = _tick_counter
+			dirty_fields.append("moisture")
+	var do_texture_update: bool = force_update or ((clouds_changed or moisture_changed) and ((_tick_counter - _last_texture_tick) >= max(1, texture_update_interval_ticks)))
+	if do_texture_update:
+		_update_cloud_texture_gpu(w, h)
+		_last_texture_tick = _tick_counter
+	_force_resync = false
+	if dirty_fields.size() == 0:
+		return {}
+	return {"dirty_fields": dirty_fields }
 
 func _apply_cloud_moisture_coupling(dt_days: float, w: int, h: int, rain_mult: float, evap_mult: float) -> void:
 	if generator == null:
 		return
 	var _size: int = w * h
-	if generator.last_moisture.size() != _size or generator.last_clouds.size() != _size:
+	if generator.last_moisture.size() != _size or generator.last_clouds.size() != _size or generator.last_temperature.size() != _size:
 		return
-	# Rates per simulated day (tuned conservatively, scaled by base strengths)
 	var rain_rate_land: float = base_rain_strength * rain_mult
 	var rain_rate_ocean: float = base_rain_strength * 0.65 * rain_mult
 	var evap_rate_ocean: float = base_evap_strength * evap_mult
@@ -209,14 +280,43 @@ func _apply_cloud_moisture_coupling(dt_days: float, w: int, h: int, rain_mult: f
 	var m: PackedFloat32Array = generator.last_moisture
 	var c: PackedFloat32Array = generator.last_clouds
 	var is_land: PackedByteArray = generator.last_is_land
+	var t: PackedFloat32Array = generator.last_temperature
+	var l: PackedFloat32Array = generator.last_light if generator.last_light.size() == _size else PackedFloat32Array()
+	if l.size() != _size:
+		l.resize(_size)
+		l.fill(0.75)
+	var biomes: PackedInt32Array = generator.last_biomes
+	var relax_rate: float = humidity_relax_rate_per_day + humidity_mix_rate_per_day
 	for i in range(_size):
 		var land: bool = (i < is_land.size()) and (is_land[i] != 0)
 		var cloud_cov: float = clamp(c[i], 0.0, 1.0)
+		var moist_val: float = clamp(m[i], 0.0, 1.0)
+		var temp_val: float = clamp(t[i], 0.0, 1.0)
+		var light_val: float = clamp(l[i], 0.0, 1.0)
+		var day: float = _smoothstep(0.18, 0.90, light_val)
+		var night: float = 1.0 - day
+		var warm: float = _smoothstep(0.30, 0.90, temp_val)
+		var veg: float = 0.0
+		if land:
+			var bid: int = biomes[i] if i < biomes.size() else 0
+			veg = _biome_vegetation_factor(bid)
+		var evap_rate: float = (evap_rate_land if land else evap_rate_ocean) * (0.45 + 1.05 * warm) * ((0.30 + 0.90 * day) if land else (0.55 + 0.60 * day)) * (1.0 - 0.30 * cloud_cov)
+		var transp: float = (evap_rate_land * vegetation_evap_boost * veg * (0.30 + 0.70 * warm) * (0.25 + 0.75 * day) * (1.0 - 0.25 * cloud_cov)) if land else 0.0
+		var target: float = clamp(0.28 + 0.20 * warm + 0.30 * veg + 0.12 * night, 0.0, 1.0) if land else clamp(0.60 + 0.28 * warm + 0.08 * night, 0.0, 1.0)
+		var relax: float = relax_rate * (target - moist_val)
+		var condense: float = condensation_rate_per_day * cloud_cov * (0.35 + 0.65 * night + max(0.0, moist_val - target) * 0.5)
 		var rain_rate: float = rain_rate_land if land else rain_rate_ocean
-		var evap_rate: float = evap_rate_land if land else evap_rate_ocean
-		var delta: float = dt_days * (rain_rate * cloud_cov - evap_rate * (1.0 - cloud_cov))
-		m[i] = clamp(m[i] + delta, 0.0, 1.0)
+		var precip: float = rain_rate * precipitation_rate_per_day * cloud_cov * cloud_cov * (0.40 + 0.60 * night)
+		var delta: float = dt_days * (evap_rate + transp + relax - condense - precip)
+		var moist_new: float = clamp(moist_val + delta, 0.0, 1.0)
+		m[i] = moist_new
+		var subsat: float = clamp(target - moist_new + 0.20, 0.0, 1.0)
+		var rainout_loss: float = cloud_dissipation_rate_per_day * precip * (0.40 + 0.60 * night)
+		var dry_loss: float = cloud_dissipation_rate_per_day * subsat * (0.25 + 0.75 * day)
+		var loss: float = clamp(dt_days * (rainout_loss + dry_loss), 0.0, 1.0)
+		c[i] = clamp(cloud_cov * (1.0 - loss), 0.0, 1.0)
 	generator.last_moisture = m
+	generator.last_clouds = c
 
 func _apply_cloud_moisture_coupling_gpu(dt_days: float, w: int, h: int, rain_mult: float, evap_mult: float) -> void:
 	if generator == null:
@@ -228,21 +328,40 @@ func _apply_cloud_moisture_coupling_gpu(dt_days: float, w: int, h: int, rain_mul
 	var cloud_buf := _cloud_buf_b if _cloud_flip else _cloud_buf_a
 	var moist_buf: RID = generator.get_persistent_buffer("moisture") if "get_persistent_buffer" in generator else RID()
 	var land_buf: RID = generator.get_persistent_buffer("is_land") if "get_persistent_buffer" in generator else RID()
-	if not cloud_buf.is_valid() or not moist_buf.is_valid() or not land_buf.is_valid():
+	var temp_buf: RID = generator.get_persistent_buffer("temperature") if "get_persistent_buffer" in generator else RID()
+	var light_buf: RID = generator.get_persistent_buffer("light") if "get_persistent_buffer" in generator else RID()
+	var biome_buf: RID = generator.get_persistent_buffer("biome_id") if "get_persistent_buffer" in generator else RID()
+	if not cloud_buf.is_valid() or not moist_buf.is_valid() or not land_buf.is_valid() or not temp_buf.is_valid() or not light_buf.is_valid() or not biome_buf.is_valid():
 		return
 	var rain_rate_land: float = base_rain_strength * rain_mult
 	var rain_rate_ocean: float = base_rain_strength * 0.65 * rain_mult
 	var evap_rate_ocean: float = base_evap_strength * evap_mult
 	var evap_rate_land: float = base_evap_strength * 0.5 * evap_mult
+	var dt_step: float = min(dt_days, max_moist_step_days)
 	var rd := RenderingServer.get_rendering_device()
 	var uniforms: Array = []
 	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(cloud_buf); uniforms.append(u0)
 	var u1 := RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(moist_buf); uniforms.append(u1)
 	var u2 := RDUniform.new(); u2.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u2.binding = 2; u2.add_id(land_buf); uniforms.append(u2)
+	var u3 := RDUniform.new(); u3.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u3.binding = 3; u3.add_id(temp_buf); uniforms.append(u3)
+	var u4 := RDUniform.new(); u4.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u4.binding = 4; u4.add_id(light_buf); uniforms.append(u4)
+	var u5 := RDUniform.new(); u5.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u5.binding = 5; u5.add_id(biome_buf); uniforms.append(u5)
 	var u_set := rd.uniform_set_create(uniforms, _moist_shader_rid, 0)
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
-	var floats := PackedFloat32Array([dt_days, rain_rate_land, rain_rate_ocean, evap_rate_land, evap_rate_ocean])
+	var floats := PackedFloat32Array([
+		dt_step,
+		rain_rate_land,
+		rain_rate_ocean,
+		evap_rate_land,
+		evap_rate_ocean,
+		humidity_mix_rate_per_day,
+		humidity_relax_rate_per_day,
+		condensation_rate_per_day,
+		precipitation_rate_per_day,
+		vegetation_evap_boost,
+		cloud_dissipation_rate_per_day,
+	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
 	var pad := (16 - (pc.size() % 16)) % 16
@@ -279,17 +398,12 @@ func _sync_seed(force_reset: bool) -> void:
 	_noise_v.seed = cur_seed ^ 0xBADC0DE
 	_noise_curl.seed = cur_seed ^ 0x1FEED5
 	_noise_curl2.seed = cur_seed ^ 0x5AC1D0
-	# Clear previous cloud state on seed change to avoid reusing old buffers
-	if "last_clouds" in generator:
-		generator.last_clouds = PackedFloat32Array()
-	if generator and "_gpu_buffer_manager" in generator and generator._gpu_buffer_manager != null:
-		generator._gpu_buffer_manager.clear_buffer("clouds", 0)
-		generator._gpu_buffer_manager.clear_buffer("cloud_source", 0)
-	# Force rebind of cloud buffers after seed change
+	# Rebind local resources on seed change; do not wipe generated cloud state.
 	_cloud_buf_a = RID()
 	_cloud_buf_b = RID()
 	_cloud_flip = false
 	_wind_gpu_valid = false
+	_force_resync = true
 
 func _sync_gpu_manager(w: int, h: int) -> void:
 	var mgr: Object = generator._gpu_buffer_manager if (generator and "_gpu_buffer_manager" in generator) else null
@@ -301,6 +415,7 @@ func _sync_gpu_manager(w: int, h: int) -> void:
 		_cloud_buf_b = RID()
 		_cloud_flip = false
 		_wind_gpu_valid = false
+		_force_resync = true
 
 func _update_wind_field(world: Object, w: int, h: int) -> void:
 	var _size: int = w * h
@@ -403,25 +518,24 @@ func _update_wind_field_gpu(world: Object, w: int, h: int) -> void:
 	rd.compute_list_set_push_constant(cl, pc, pc.size())
 	rd.compute_list_dispatch(cl, gx, gy, 1)
 	rd.compute_list_end()
-	# Read back wind only when GPU-only sim is disabled
 	if not use_persistent:
-		var u_bytes := rd.buffer_get_data(u_buf)
-		var v_bytes := rd.buffer_get_data(v_buf)
-		wind_u = u_bytes.to_float32_array()
-		wind_v = v_bytes.to_float32_array()
-	_wind_gpu_valid = use_persistent
-	rd.free_rid(u_set)
-	if not use_persistent:
+		# GPU-only runtime: do not read back wind buffers to CPU.
+		_wind_gpu_valid = false
+		rd.free_rid(u_set)
 		rd.free_rid(u_buf)
 		rd.free_rid(v_buf)
+		return
+	_wind_gpu_valid = use_persistent
+	rd.free_rid(u_set)
 
 func _advect_and_mix_clouds(dt_days: float, w: int, h: int, source: PackedFloat32Array) -> void:
 	var size: int = w * h
 	var dt_cloud: float = dt_days * cloud_time_scale
-	var adv_scale: float = max(0.0, adv_cells_per_day) * dt_cloud
-	var diff_alpha: float = clamp(diffusion_rate_per_day * dt_cloud, 0.0, 1.0)
+	var adv_scale: float = min(max_adv_shift_cells, max(0.0, adv_cells_per_day) * dt_cloud)
+	var diff_alpha: float = clamp(diffusion_rate_per_day * dt_cloud, 0.0, max_diff_alpha)
 	var inj_alpha: float = injection_rate_per_day * dt_days * cloud_injection_scale
-	inj_alpha = clamp(inj_alpha, cloud_injection_min, 0.35)
+	inj_alpha = clamp(inj_alpha, cloud_injection_min, max_injection_alpha)
+	var decay_alpha: float = clamp(cloud_decay_rate_per_day * dt_days, 0.0, max_decay_alpha)
 	var prev: PackedFloat32Array = generator.last_clouds
 	# Semi-Lagrangian advection with wrap-X
 	for y in range(h):
@@ -441,14 +555,24 @@ func _advect_and_mix_clouds(dt_days: float, w: int, h: int, source: PackedFloat3
 			var r: int = ((x2 + 1) % w) + y2 * w
 			var t: int = x2 + max(0, y2 - 1) * w
 			var b: int = x2 + min(h - 1, y2 + 1) * w
-			var nbr: float = ( _tmp_clouds[l] + _tmp_clouds[r] + _tmp_clouds[t] + _tmp_clouds[b] ) * 0.25
-			_tmp_clouds[i2] = lerp(_tmp_clouds[i2], nbr, diff_alpha)
+			var nbr: float = (_tmp_clouds[l] + _tmp_clouds[r] + _tmp_clouds[t] + _tmp_clouds[b]) * 0.25
+			var detail: float = abs(_tmp_clouds[i2] - nbr)
+			var keep: float = _smoothstep(0.02, 0.18, detail) * clamp(detail_preserve, 0.0, 1.0)
+			var local_diff: float = clamp(diff_alpha * (1.0 - keep), 0.0, 1.0)
+			_tmp_clouds[i2] = lerp(_tmp_clouds[i2], nbr, local_diff)
 	# Injection from humidity-driven source
 	for i3 in range(size):
 		var src: float = source[i3] if i3 < source.size() else 0.0
-		var c: float = clamp(_tmp_clouds[i3] * (1.0 - inj_alpha) + src * inj_alpha, 0.0, 1.0)
-		c = max(c, src * min_cloud_from_source)
-		c = clamp((c - cloud_floor) * cloud_contrast, 0.0, 1.0)
+		var src_weight: float = _smoothstep(0.20, 0.90, src)
+		var inj: float = clamp(inj_alpha * lerp(0.35, 1.0, src_weight), 0.0, 1.0)
+		var c: float = clamp(_tmp_clouds[i3] * (1.0 - inj) + src * inj, 0.0, 1.0)
+		c = max(c, src * source_pin_strength)
+		var core_emphasis: float = _smoothstep(0.30, 0.78, c) * _smoothstep(0.20, 0.80, src_weight)
+		var contrasted: float = clamp((c - cloud_floor) * cloud_contrast, 0.0, 1.0)
+		var tonal: float = lerp(c, contrasted, core_emphasis)
+		c = tonal
+		var decay: float = clamp(decay_alpha * (0.35 + 0.65 * (1.0 - src_weight)), 0.0, 1.0)
+		c *= (1.0 - decay)
 		c = max(c, min_cloud_global)
 		_tmp_clouds[i3] = c
 	# Structure preservation: mild sharpening against neighbor mean
@@ -461,7 +585,9 @@ func _advect_and_mix_clouds(dt_days: float, w: int, h: int, source: PackedFloat3
 				var t4: int = x3 + max(0, y3 - 1) * w
 				var b4: int = x3 + min(h - 1, y3 + 1) * w
 				var nbr4: float = (_tmp_clouds[l4] + _tmp_clouds[r4] + _tmp_clouds[t4] + _tmp_clouds[b4]) * 0.25
-				var c4: float = _tmp_clouds[i4] + (_tmp_clouds[i4] - nbr4) * structure_sharpen
+				var core4: float = _smoothstep(0.30, 0.78, _tmp_clouds[i4])
+				var sharp_k: float = structure_sharpen * core4
+				var c4: float = _tmp_clouds[i4] + (_tmp_clouds[i4] - nbr4) * sharp_k
 				_tmp_clouds[i4] = clamp(c4, 0.0, 1.0)
 	generator.last_clouds = _tmp_clouds.duplicate()
 
@@ -481,11 +607,6 @@ func _advect_and_mix_clouds_gpu(dt_days: float, w: int, h: int, source: PackedFl
 		if not _wind_gpu_valid:
 			generator.update_persistent_buffer("wind_u", wind_u.to_byte_array())
 			generator.update_persistent_buffer("wind_v", wind_v.to_byte_array())
-		if not src_buf.is_valid():
-			# GPU-only mode should not upload CPU-computed source
-			var gpu_only: bool = ("config" in generator and generator.config.use_gpu_all)
-			if not gpu_only and source.size() == w * h:
-				generator.update_persistent_buffer("cloud_source", source.to_byte_array())
 	var u_buf: RID = generator.get_persistent_buffer("wind_u") if generator else RID()
 	var v_buf: RID = generator.get_persistent_buffer("wind_v") if generator else RID()
 	if not src_buf.is_valid():
@@ -501,13 +622,25 @@ func _advect_and_mix_clouds_gpu(dt_days: float, w: int, h: int, source: PackedFl
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(out_buf); uniforms.append(u)
 	var u_set := rd.uniform_set_create(uniforms, _advec_shader_rid, 0)
 	var dt_cloud: float = dt_days * cloud_time_scale
-	var adv_scale: float = max(0.0, adv_cells_per_day) * dt_cloud
-	var diff_alpha: float = clamp(diffusion_rate_per_day * dt_cloud, 0.0, 1.0)
+	var adv_scale: float = min(max_adv_shift_cells, max(0.0, adv_cells_per_day) * dt_cloud)
+	var diff_alpha: float = clamp(diffusion_rate_per_day * dt_cloud, 0.0, max_diff_alpha)
 	var inj_alpha: float = injection_rate_per_day * dt_days * cloud_injection_scale
-	inj_alpha = clamp(inj_alpha, cloud_injection_min, 0.35)
+	inj_alpha = clamp(inj_alpha, cloud_injection_min, max_injection_alpha)
+	var decay_alpha: float = clamp(cloud_decay_rate_per_day * dt_days, 0.0, max_decay_alpha)
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
-	var floats := PackedFloat32Array([adv_scale, diff_alpha, inj_alpha])
+	var floats := PackedFloat32Array([
+		adv_scale,
+		diff_alpha,
+		inj_alpha,
+		structure_sharpen,
+		source_pin_strength,
+		cloud_floor,
+		cloud_contrast,
+		min_cloud_global,
+		detail_preserve,
+		decay_alpha,
+	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
 	var pad := (16 - (pc.size() % 16)) % 16
@@ -524,10 +657,6 @@ func _advect_and_mix_clouds_gpu(dt_days: float, w: int, h: int, source: PackedFl
 	rd.compute_list_end()
 	rd.free_rid(u_set)
 	_cloud_flip = not _cloud_flip
-	# Optional CPU readback only when GPU-only sim is disabled
-	if not (generator and "config" in generator and generator.config.use_gpu_all):
-		var out_bytes := rd.buffer_get_data(out_buf)
-		generator.last_clouds = out_bytes.to_float32_array()
 
 func _setup_cloud_buffers(w: int, h: int) -> void:
 	_sync_gpu_manager(w, h)
@@ -539,7 +668,12 @@ func _setup_cloud_buffers(w: int, h: int) -> void:
 		_cloud_buf_a = generator.get_persistent_buffer("clouds")
 	if not _cloud_buf_a.is_valid():
 		var rd := RenderingServer.get_rendering_device()
-		var arr := PackedFloat32Array(); arr.resize(w * h)
+		var arr := PackedFloat32Array()
+		if generator and "last_clouds" in generator and generator.last_clouds.size() == w * h:
+			arr = generator.last_clouds
+		else:
+			arr.resize(w * h)
+			arr.fill(0.0)
 		_cloud_buf_a = rd.storage_buffer_create(arr.to_byte_array().size(), arr.to_byte_array())
 	var rd2 := RenderingServer.get_rendering_device()
 	if not _cloud_buf_b.is_valid():
@@ -597,6 +731,27 @@ func _curl_noise(noise: FastNoiseLite, x: float, y: float, eps: float) -> Vector
 	var grad_y: float = (n3 - n4) / (2.0 * eps)
 	return Vector2(grad_x, -grad_y)
 
+func _smoothstep(edge0: float, edge1: float, x: float) -> float:
+	var t: float = clamp((x - edge0) / max(0.0001, edge1 - edge0), 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
+func _biome_vegetation_factor(biome_id: int) -> float:
+	match biome_id:
+		10, 11, 12, 13, 14, 15:
+			return 1.0
+		22, 23:
+			return 0.75
+		6, 7, 21, 29, 30, 33, 36, 37, 40:
+			return 0.55
+		16, 18, 19, 34, 41:
+			return 0.22
+		2:
+			return 0.15
+		3, 4, 5, 25, 26, 28:
+			return 0.05
+		_:
+			return 0.18
+
 func set_coupling_enabled(v: bool) -> void:
 	coupling_enabled = v
 
@@ -607,3 +762,16 @@ func set_coupling(rain_strength: float, evap_strength: float) -> void:
 func set_cycle_modulation(diurnal_amp: float, seasonal_amp: float) -> void:
 	diurnal_mod_amp = clamp(diurnal_amp, 0.0, 2.0)
 	seasonal_mod_amp = clamp(seasonal_amp, 0.0, 2.0)
+
+func set_runtime_lod(paused: bool, wind_interval: int, source_interval: int, advection_interval: int, moisture_interval: int, texture_interval: int) -> void:
+	updates_paused = paused
+	wind_update_interval_ticks = max(1, int(wind_interval))
+	source_update_interval_ticks = max(1, int(source_interval))
+	advection_update_interval_ticks = max(1, int(advection_interval))
+	moisture_update_interval_ticks = max(1, int(moisture_interval))
+	texture_update_interval_ticks = max(1, int(texture_interval))
+	if not updates_paused:
+		_force_resync = true
+
+func request_full_resync() -> void:
+	_force_resync = true

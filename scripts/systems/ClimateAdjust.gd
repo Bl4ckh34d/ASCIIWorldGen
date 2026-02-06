@@ -73,17 +73,33 @@ func evaluate(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArr
 			var sx: float = clamp(float(x) + adv_u * 6.0, 0.0, float(w - 1))
 			var sy: float = clamp(float(y) + adv_v * 6.0, 0.0, float(h - 1))
 			var m_adv: float = 0.2 * moist_noise.get_noise_2d(sx * xscale, sy * xscale)
-			var polar_dry: float = 0.20 * lat
-			var m: float = m_base + m_noise + m_adv - polar_dry
-			var humid_amp: float = lerp(0.40, 1.60, ocean_frac)
-			var humid_bias: float = lerp(-0.30, 0.30, ocean_frac)
-			m = (m - 0.5) * humid_amp + 0.5 + humid_bias
-			var s_norm: float = clamp(sea_level, -1.0, 1.0)
-			var dryness_strength: float = max(0.0, -s_norm)
-			var wet_strength: float = max(0.0, s_norm)
-			var amp2: float = 1.0 + 0.5 * wet_strength - 0.5 * dryness_strength
-			var bias2: float = 0.25 * wet_strength - 0.25 * dryness_strength
-			m = (m - 0.5) * amp2 + 0.5 + bias2
+			var local_day: float = 0.5 - 0.5 * cos(6.28318 * (float(params.get("time_of_day", 0.0)) + float(x) / float(max(1, w))))
+			var night: float = 1.0 - local_day
+			var warm: float = _smoothstep(0.30, 0.90, t)
+			var coast_wet: float = 1.0 - _smoothstep(0.02, 0.45, dc)
+			var interior: float = _smoothstep(0.18, 0.90, dc)
+			var polar_dry: float = _smoothstep(0.65, 1.0, lat) * 0.22
+			var land_px: bool = is_land[i] != 0
+			var evap_ocean: float = 0.0
+			var evap_land: float = 0.0
+			var veg_potential: float = 0.0
+			if land_px:
+				evap_land = (0.08 + 0.20 * warm) * (0.25 + 0.75 * local_day)
+				veg_potential = 0.55 * _smoothstep(0.30, 0.82, t) * (0.30 + 0.70 * coast_wet) * (1.0 - _smoothstep(0.72, 1.0, dc))
+			else:
+				evap_ocean = (0.34 + 0.48 * warm) * (0.45 + 0.55 * local_day)
+			var transp: float = evap_land * veg_potential
+			var trade_dry: float = interior * (0.04 + 0.11 * warm)
+			var nocturnal_condense: float = (0.03 + 0.10 * night) * (0.35 + 0.65 * warm)
+			var sea_mod: float = clamp(sea_level, -1.0, 1.0) * 0.08
+			var m_seed: float = 0.48 + 0.18 * m_noise + 0.12 * m_adv + 0.10 * m_base
+			var m_source: float = evap_ocean + transp + coast_wet * 0.12
+			var m_sink: float = polar_dry + trade_dry + nocturnal_condense
+			var target: float = clamp(0.62 + 0.26 * warm + 0.08 * night, 0.0, 1.0)
+			if land_px:
+				target = clamp(0.32 + 0.30 * veg_potential + 0.24 * coast_wet + 0.10 * night, 0.0, 1.0)
+			var m: float = m_seed + m_source - m_sink + sea_mod + (ocean_frac - 0.5) * 0.06
+			m = lerp(m, target, 0.26)
 			m = clamp((m + moist_base_offset - 0.5) * moist_scale + 0.5, 0.0, 1.0)
 			# Precip proxy
 			var slope_y: float = 0.0
@@ -100,3 +116,7 @@ func evaluate(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArr
 		"moisture": moisture,
 		"precip": precip,
 	}
+
+func _smoothstep(edge0: float, edge1: float, x: float) -> float:
+	var t: float = clamp((x - edge0) / max(0.0001, edge1 - edge0), 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)

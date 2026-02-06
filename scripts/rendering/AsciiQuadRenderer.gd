@@ -79,9 +79,6 @@ func initialize_rendering(font: Font, font_size: int, width: int, height: int) -
 	var viewport_height = height * cell_size.y
 	viewport.size = Vector2i(int(viewport_width), int(viewport_height))
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var parent_ctrl := get_parent() as Control
-	if parent_ctrl:
-		size = parent_ctrl.size
 	
 	# Create rendering components
 	_create_quad_mesh()
@@ -171,8 +168,8 @@ func _create_material() -> void:
 				cloud_mat.set_shader_parameter("world_data_3", tex_black2)
 				cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
 				cloud_mat.set_shader_parameter("cloud_opacity", 1.0)
-				cloud_mat.set_shader_parameter("cloud_min", 0.08)
-				cloud_mat.set_shader_parameter("cloud_levels", 5.0)
+				cloud_mat.set_shader_parameter("cloud_min", 0.06)
+				cloud_mat.set_shader_parameter("cloud_levels", 8.0)
 				cloud_mat.set_shader_parameter("cloud_power", 0.7)
 				cloud_mat.set_shader_parameter("cloud_brightness", 1.1)
 				cloud_mat.set_shader_parameter("cloud_night_alpha", 0.35)
@@ -215,7 +212,8 @@ func update_world_data(
 	pooled_lake_mask: PackedByteArray = PackedByteArray(),
 	lake_id: PackedInt32Array = PackedInt32Array(),
 	sea_level: float = 0.0,
-	skip_base_textures: bool = false
+	skip_base_textures: bool = false,
+	skip_aux_textures: bool = false
 ) -> void:
 	"""Update world data for rendering"""
 	
@@ -230,7 +228,7 @@ func update_world_data(
 		biome_data, is_land_data, beach_mask, rng_seed,
 		turquoise_strength, shelf_noise, clouds, plate_boundary_mask,
 		lake_mask, river_mask, lava_mask, pooled_lake_mask, lake_id, sea_level,
-		skip_base_textures
+		skip_base_textures, skip_aux_textures
 	)
 	
 	# Update material uniforms
@@ -511,9 +509,6 @@ func resize_map(new_width: int, new_height: int) -> void:
 	var viewport_height = new_height * cell_size.y
 	if viewport:
 		viewport.size = Vector2i(int(viewport_width), int(viewport_height))
-	var parent_ctrl := get_parent() as Control
-	if parent_ctrl:
-		size = parent_ctrl.size
 	
 	# Update material uniforms
 	if quad_material and quad_material is ShaderMaterial:

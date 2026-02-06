@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://xkuhrvkcgoaq"
+path="res://.godot/imported/intro_bigbang.glsl-6c3989e959d8e30dd9b66fd4010f96fc.res"
+
+[deps]
+
+source_file="res://shaders/intro_bigbang.glsl"
+dest_files=["res://.godot/imported/intro_bigbang.glsl-6c3989e959d8e30dd9b66fd4010f96fc.res"]
+
+[params]
+

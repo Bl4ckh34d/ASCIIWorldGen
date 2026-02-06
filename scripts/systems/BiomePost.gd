@@ -9,7 +9,7 @@ func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperat
 	lava.resize(w * h)
 	for i in range(w * h):
 		lava[i] = 0
-	# Hot override >= 45 °C (do not dry out below this)
+	# Hot override >= 45 degC (do not dry out below this)
 	var t_hot_c: float = 45.0
 	# Frozen/scorched thresholds for variant assignment
 	var t_frozen_c: float = -5.0

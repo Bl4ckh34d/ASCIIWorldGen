@@ -1,14 +1,17 @@
 #[compute]
 #version 450
 // File: res://shaders/cloud_overlay.glsl
-// Cloud intensity overlay generated from procedural noise (independent of humidity)
+// Multi-scale humidity-driven cloud source field.
+// Humidity is the primary driver; temperature/day-night and vegetation modulate formation.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) buffer TempBuf { float temp_norm[]; } Temp;
 layout(std430, set = 0, binding = 1) buffer MoistBuf { float moist_norm[]; } Moist;
 layout(std430, set = 0, binding = 2) buffer IsLandBuf { uint is_land[]; } Land;
-layout(std430, set = 0, binding = 3) buffer OutCloud { float cloud[]; } Cloud;
+layout(std430, set = 0, binding = 3) buffer LightBuf { float light[]; } Light;
+layout(std430, set = 0, binding = 4) buffer BiomeBuf { int biome_id[]; } Biome;
+layout(std430, set = 0, binding = 5) buffer OutCloud { float cloud[]; } Cloud;
 
 layout(push_constant) uniform Params {
     int width;
@@ -30,9 +33,12 @@ uint hash_u32(uvec2 q){
     return q.x ^ q.y;
 }
 float hash_f(vec2 q){
-    uvec2 qi = uvec2(q);
-    qi.x = qi.x % uint(max(1, PC.width));
-    return float(hash_u32(qi)) * (1.0 / 4294967296.0);
+    ivec2 qi = ivec2(floor(q));
+    int wx = max(1, PC.width);
+    int wy = 8192; // Keep hashing coordinates bounded for numerical stability.
+    qi.x = ((qi.x % wx) + wx) % wx;
+    qi.y = ((qi.y % wy) + wy) % wy;
+    return float(hash_u32(uvec2(uint(qi.x), uint(qi.y)))) * (1.0 / 4294967296.0);
 }
 float value2(vec2 q){
     vec2 pf = floor(q);
@@ -84,6 +90,48 @@ vec2 curl2(vec2 p){
     return vec2(grad.y, -grad.x);
 }
 
+float biome_veg_factor(int b){
+    switch (b) {
+        case 10: // SWAMP
+        case 11: // TROPICAL_FOREST
+        case 12: // BOREAL_FOREST
+        case 13: // CONIFER_FOREST
+        case 14: // TEMPERATE_FOREST
+        case 15: // RAINFOREST
+            return 1.0;
+        case 22: // FROZEN_FOREST
+        case 23: // FROZEN_MARSH
+            return 0.75;
+        case 7:  // GRASSLAND
+        case 6:  // STEPPE
+        case 21: // SAVANNA
+        case 29: // FROZEN_GRASSLAND
+        case 30: // FROZEN_STEPPE
+        case 33: // FROZEN_SAVANNA
+        case 36: // SCORCHED_GRASSLAND
+        case 37: // SCORCHED_STEPPE
+        case 40: // SCORCHED_SAVANNA
+            return 0.55;
+        case 16: // HILLS
+        case 18: // MOUNTAINS
+        case 19: // ALPINE
+        case 34: // FROZEN_HILLS
+        case 41: // SCORCHED_HILLS
+            return 0.22;
+        case 2: // BEACH
+            return 0.15;
+        case 3:  // DESERT_SAND
+        case 4:  // WASTELAND
+        case 5:  // DESERT_ICE
+        case 25: // LAVA_FIELD
+        case 26: // VOLCANIC_BADLANDS
+        case 28: // SALT_DESERT
+            return 0.05;
+        default:
+            return 0.18;
+    }
+}
+
 void main(){
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
@@ -91,47 +139,70 @@ void main(){
     int W = PC.width; int H = PC.height;
     int i = int(x) + int(y) * W;
 
-    float lat_signed = (float(y) / max(1.0, float(H) - 1.0) - 0.5) * 2.0;
-    float lat = abs(lat_signed); // 0 at equator, 1 at poles
-    float base = clamp01(1.0 - 0.15 * lat); // slight polar bias only
-    float mid = clamp(1.0 - abs(lat - 0.45) / 0.35, 0.0, 1.0);
-    float wind_strength = pow(mid, 1.3);
-    float eq = clamp(1.0 - lat / 0.25, 0.0, 1.0);
-    eq = pow(eq, 1.15);
-    float polar = clamp((lat - 0.65) / 0.35, 0.0, 1.0);
-    polar = pow(polar, 1.1);
-    float hem = (lat_signed >= 0.0) ? 1.0 : -1.0;
-    float eq_dir = -1.0;
-    float polar_dir = -1.0;
-    float drift_dir = hem * (1.0 - eq) * (1.0 - polar) + eq_dir * eq + polar_dir * polar;
-    float drift = drift_dir * (wind_strength + 0.5 * eq + 0.4 * polar) * PC.phase * 12.0;
-    vec2 drift_vec = vec2(drift, 0.0);
-
-    vec2 p = vec2(float(x), float(y)) * 0.035 + drift_vec;
-    float seed_f = float(PC.seed % 997);
-    vec2 curl = curl2(p * 0.7 + vec2(seed_f * 0.03, seed_f * 0.07));
-    vec2 pp = p + curl * 2.6 + vec2(PC.phase * 3.0, PC.phase * 1.4);
-    float w = worley2(pp * 1.0);
-    float worley_val = exp(-w * 2.3);
-    float fbm_val = fbm2(pp * 0.85 + vec2(seed_f * 0.01, seed_f * 0.02), 4) * 0.5 + 0.5;
-    float noise = clamp01(worley_val * 0.75 + fbm_val * 0.25);
-    // Large-scale coverage mask to create big clear areas + dense clusters
-    vec2 lp = vec2(float(x), float(y)) * 0.004 + vec2(seed_f * 0.02, seed_f * 0.031) + vec2(PC.phase * 2.0, -PC.phase * 1.2) + drift_vec * 0.35;
-    float large = fbm2(lp, 3) * 0.5 + 0.5;
-    large = smoothstep(0.3, 0.7, large);
-    large = pow(large, 1.8);
-    float large_mult = mix(0.05, 1.7, large);
-
-    // Gentle phase shift to suggest advection
-    float adv = 0.08 * sin(6.28318 * (float(x) / float(max(1, W)) + PC.phase));
-
+    float temp = clamp01(Temp.temp_norm[i]);
     float humidity = clamp01(Moist.moist_norm[i]);
-    float humid_boost = smoothstep(0.2, 0.85, humidity);
+    bool land = Land.is_land[i] != 0u;
+    float light_val = clamp01(Light.light[i]);
+    float daylight = smoothstep(0.18, 0.90, light_val);
+    float night = 1.0 - daylight;
+    float warm = smoothstep(0.30, 0.88, temp);
+    float humid = smoothstep(0.26, 0.96, humidity);
+    float veg = land ? biome_veg_factor(Biome.biome_id[i]) : 0.0;
 
-    float core = smoothstep(0.35, 0.7, noise);
-    float cov = base * (0.25 + 0.75 * core);
-    cov = (cov + adv * (0.2 + 0.8 * core)) * large_mult;
-    cov = cov * (0.45 + 0.95 * humid_boost) + humid_boost * 0.08;
+    float lat_signed = (float(y) / max(1.0, float(H) - 1.0) - 0.5) * 2.0;
+    float abs_lat = abs(lat_signed);
+
+    float seed_f = float(PC.seed % 4096);
+    vec2 p = vec2(float(x), float(y));
+    vec2 p_seeded = p + vec2(seed_f * 0.137, seed_f * 0.071);
+
+    // Planet-scale weather regimes.
+    vec2 regime_p = p_seeded * 0.004 + vec2(PC.phase * 0.14, -PC.phase * 0.10);
+    regime_p.x += sin(6.28318 * (float(y) / max(1.0, float(H) - 1.0) * 0.8 + PC.phase * 0.11)) * 5.0;
+    float regime = fbm2(regime_p, 4) * 0.5 + 0.5;
+    float regime_mask = smoothstep(0.30, 0.72, regime);
+
+    // Domain-warped mid/high frequencies prevent latitude striping.
+    vec2 warp_a = curl2(p_seeded * 0.020 + vec2(PC.phase * 0.22, -PC.phase * 0.18));
+    vec2 warp_b = curl2(p_seeded * 0.045 + vec2(-PC.phase * 0.31, PC.phase * 0.27));
+
+    vec2 mid_p = p_seeded * 0.016 + warp_a * 2.6 + vec2(PC.phase * 0.55, -PC.phase * 0.41);
+    float mid = fbm2(mid_p, 5) * 0.5 + 0.5;
+    float mid_core = smoothstep(0.44, 0.80, mid);
+
+    float cell = worley2(mid_p * 1.05 + warp_b * 1.2);
+    float billow = exp(-cell * 2.25);
+    billow = smoothstep(0.22, 0.90, billow);
+
+    vec2 high_p = p_seeded * 0.046 + warp_b * 3.4 + vec2(PC.phase * 0.95, -PC.phase * 0.73);
+    float wisps = fbm2(high_p, 3) * 0.5 + 0.5;
+    wisps = smoothstep(0.48, 0.84, wisps);
+
+    float structure = mid_core * 0.54 + billow * 0.34 + wisps * 0.12;
+    structure *= mix(0.70, 1.25, regime_mask);
+
+    // Physical drivers for cloud formation.
+    float ocean_boost = land ? 0.0 : (0.14 + 0.18 * warm + 0.10 * night);
+    float veg_boost = land ? (0.22 * veg * (0.45 + 0.55 * warm)) : 0.0;
+    float convective = land ? (0.18 * daylight * warm) : (0.10 * daylight * warm);
+    float night_stratus = land ? (0.06 * night * humidity) : (0.16 * night * humidity);
+    float lat_dry = smoothstep(0.72, 1.0, abs_lat) * 0.12;
+
+    float potential = humid * (0.54 + 0.46 * warm)
+                    + ocean_boost
+                    + veg_boost
+                    + convective
+                    + night_stratus
+                    - lat_dry;
+    potential = clamp01(potential);
+
+    float threshold = mix(0.66, 0.36, potential);
+    float density = smoothstep(threshold - 0.11, threshold + 0.12, structure);
+    float anvil = smoothstep(0.62, 0.92, wisps + mid * 0.35) * (0.35 + 0.65 * daylight * warm);
+
+    float cov = density * (0.44 + 0.56 * potential) + anvil * 0.16 * potential;
+    cov *= mix(0.82, 1.15, regime_mask);
+    cov += humidity * 0.08 * regime_mask;
     cov = clamp01(cov);
     Cloud.cloud[i] = cov;
 }

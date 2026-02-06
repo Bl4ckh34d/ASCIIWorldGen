@@ -197,7 +197,9 @@ void fragment() {
 
     float turq_strength = data3.r;
     float shelf_val = data3.g;
-    float cloud_cov = (use_cloud_texture != 0) ? clamp(texture(cloud_texture, world_uv).r * 1.25, 0.0, 1.0) : clamp(data3.b * 1.25, 0.0, 1.0);
+    float cloud_raw = (use_cloud_texture != 0) ? texture(cloud_texture, world_uv).r : data3.b;
+    float cloud_gain = (use_cloud_texture != 0) ? 1.0 : 1.25;
+    float cloud_cov = clamp(cloud_raw * cloud_gain, 0.0, 1.0);
     float plate_boundary = data3.a;
 
     float lake_flag = data4.r;

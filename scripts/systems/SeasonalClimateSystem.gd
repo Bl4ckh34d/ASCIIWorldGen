@@ -8,7 +8,12 @@ extends RefCounted
 var generator: Object = null
 var time_system: Object = null
 var _light_update_counter: int = 0
+var _climate_update_counter: int = 0
+var climate_update_interval_ticks: int = 6
+var light_update_interval_ticks: int = 1
 var _light_tex: Object = null
+var _cpu_climate_mirror_counter: int = 0
+const CPU_CLIMATE_MIRROR_INTERVAL_TICKS: int = 30
 
 func initialize(gen: Object, time_sys: Object = null) -> void:
 	generator = gen
@@ -19,6 +24,7 @@ func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		return {}
 	
 	_light_update_counter += 1
+	_climate_update_counter += 1
 	# Compute season phase from world time if available; otherwise no-op
 	var season_phase: float = 0.0
 	if world != null:
@@ -31,29 +37,39 @@ func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var time_of_day: float = 0.0
 	if world != null and "tick_days" in world and "simulation_time_days" in world:
 		time_of_day = fposmod(float(world.simulation_time_days), 1.0)
-	generator.apply_config({
-		"season_phase": season_phase,
-		"season_amp_equator": float(generator.config.season_amp_equator if "config" in generator else 0.10),
-		"season_amp_pole": float(generator.config.season_amp_pole if "config" in generator else 0.25),
-		"season_ocean_damp": float(generator.config.season_ocean_damp if "config" in generator else 0.60),
-		"diurnal_amp_equator": float(generator.config.diurnal_amp_equator if "config" in generator else 0.06),
-		"diurnal_amp_pole": float(generator.config.diurnal_amp_pole if "config" in generator else 0.03),
-		"diurnal_ocean_damp": float(generator.config.diurnal_ocean_damp if "config" in generator else 0.40),
-		"time_of_day": time_of_day,
-	})
+	if "config" in generator:
+		generator.config.season_phase = season_phase
+		generator.config.time_of_day = time_of_day
 	# Climate refresh every tick (GPU-only); biomes handled by separate cadence system
 	if world != null:
-		if "quick_update_climate" in generator:
-			var skip_light: bool = ("config" in generator and generator.config.use_gpu_all)
-			generator.quick_update_climate(skip_light)
-		# Update day-night light field EVERY tick to ensure continuous movement
-		_light_update_counter += 1
-		_update_light_field(world)  # Always update for continuous day-night cycle
+		var do_climate_update: bool = (_climate_update_counter <= 1) or (_climate_update_counter % max(1, climate_update_interval_ticks) == 0)
+		if do_climate_update and "quick_update_climate" in generator:
+			# Light is updated below every tick; skip light update in climate pass.
+			generator.quick_update_climate(true)
+			# Keep hover/info climate values approximately aligned with GPU runtime state.
+			_cpu_climate_mirror_counter += 1
+			if (_cpu_climate_mirror_counter % CPU_CLIMATE_MIRROR_INTERVAL_TICKS) == 0:
+				if "sync_climate_cpu_mirror_from_gpu" in generator:
+					generator.sync_climate_cpu_mirror_from_gpu()
+		var do_light_update: bool = (_light_update_counter <= 1) or (_light_update_counter % max(1, light_update_interval_ticks) == 0)
+		if do_light_update:
+			_update_light_field(world)
 	return {"dirty_fields": PackedStringArray(["climate", "light"]) }
+
+func set_update_intervals(climate_interval_ticks: int, light_interval_ticks: int) -> void:
+	climate_update_interval_ticks = max(1, int(climate_interval_ticks))
+	light_update_interval_ticks = max(1, int(light_interval_ticks))
+
+func request_full_resync() -> void:
+	_climate_update_counter = 0
+	_light_update_counter = 0
+	_cpu_climate_mirror_counter = 0
 
 func _update_light_field(world: Object) -> void:
 	"""Update the day-night light field using GPU compute"""
 	if generator == null or not ("_climate_compute_gpu" in generator):
+		return
+	if not ("config" in generator and generator.config.use_gpu_all):
 		return
 	
 	# Ensure climate compute GPU system exists
@@ -85,80 +101,15 @@ func _update_light_field(world: Object) -> void:
 		"day_night_contrast": generator.config.day_night_contrast if generator.config else 0.75
 	}
 
-	# GPU-only: write directly into persistent buffer + texture override
-	if "config" in generator and generator.config.use_gpu_all:
-		if _light_tex == null:
-			_light_tex = load("res://scripts/systems/LightTextureCompute.gd").new()
-		if "ensure_persistent_buffers" in generator:
-			generator.ensure_persistent_buffers(false)
-		var light_buf: RID = generator.get_persistent_buffer("light") if "get_persistent_buffer" in generator else RID()
-		if light_buf.is_valid():
-			var ok_gpu: bool = generator._climate_compute_gpu.evaluate_light_field_gpu(w, h, light_params, light_buf)
-			if ok_gpu and _light_tex:
-				var tex: Texture2D = _light_tex.update_from_buffer(w, h, light_buf)
-				if tex and "set_light_texture_override" in generator:
-					generator.set_light_texture_override(tex)
-				return
-		# GPU-only: do not fall back to CPU light generation
+	if _light_tex == null:
+		_light_tex = load("res://scripts/systems/LightTextureCompute.gd").new()
+	if "ensure_persistent_buffers" in generator:
+		generator.ensure_persistent_buffers(false)
+	var light_buf: RID = generator.get_persistent_buffer("light") if "get_persistent_buffer" in generator else RID()
+	if not light_buf.is_valid():
 		return
-	# Fallback: evaluate light field on GPU with readback
-	var light_field = generator._climate_compute_gpu.evaluate_light_field(w, h, light_params)
-	if light_field.size() == w * h:
-		generator.last_light = light_field
-	else:
-		_create_cpu_light_field(w, h, day_of_year, time_of_day)
-
-func _create_cpu_light_field(w: int, h: int, day_of_year: float, time_of_day: float) -> void:
-	"""CPU fallback for light field generation when GPU fails"""
-	var size = w * h
-	generator.last_light.resize(size)
-	
-	# Enhanced tilt for dramatic seasonal effect (same as GPU shader)
-	var tilt = deg_to_rad(30.0)  # Increased from 23.44° to 30°
-	var delta = -tilt * cos(2.0 * PI * day_of_year)
-	
-	for y in range(h):
-		for x in range(w):
-			var i = x + y * w
-			
-			# Latitude calculation
-			var lat_norm = (float(y) / max(1.0, float(h) - 1.0)) - 0.5  # -0.5..+0.5
-			var phi = lat_norm * PI  # -pi/2..+pi/2
-			
-			# Hour angle (longitude effect)
-			var H_ang = 2.0 * PI * (time_of_day + float(x) / float(max(1, w)))
-			
-			# Sun elevation calculation
-			var s = sin(phi) * sin(delta) + cos(phi) * cos(delta) * cos(H_ang)
-			
-			# Create terminator with twilight zone
-			var terminator_threshold = 0.02
-			var daylight = 0.0
-			
-			if s > terminator_threshold:
-				# Day side
-				daylight = 1.0
-				# Summer brightness boost at high latitudes
-				var lat_abs = abs(lat_norm) * 2.0
-				var same_hemisphere_as_sun = (lat_norm * delta) > 0.0
-				if same_hemisphere_as_sun and lat_abs > 0.6:
-					daylight = min(1.0, 1.0 + lat_abs * abs(delta) * 2.0)
-			elif s > -terminator_threshold:
-				# Twilight zone
-				var twilight = (s + terminator_threshold) / (2.0 * terminator_threshold)
-				daylight = twilight * 0.6
-			else:
-				# Night side
-				daylight = 0.1
-				# Polar night effect
-				var lat_abs = abs(lat_norm) * 2.0
-				var opposite_hemisphere = (lat_norm * delta) < 0.0
-				if opposite_hemisphere and lat_abs > 0.6 and abs(delta) > deg_to_rad(15.0):
-					daylight = max(0.05, daylight * (1.0 - lat_abs * abs(delta) * 1.5))
-			
-			# Apply base and contrast
-			var day_night_base = generator.config.day_night_base if generator.config else 0.25
-			var day_night_contrast = generator.config.day_night_contrast if generator.config else 0.75
-			var final_light = clamp(day_night_base + day_night_contrast * daylight, 0.0, 1.0)
-			
-			generator.last_light[i] = final_light
+	var ok_gpu: bool = generator._climate_compute_gpu.evaluate_light_field_gpu(w, h, light_params, light_buf)
+	if ok_gpu and _light_tex:
+		var tex: Texture2D = _light_tex.update_from_buffer(w, h, light_buf)
+		if tex and "set_light_texture_override" in generator:
+			generator.set_light_texture_override(tex)

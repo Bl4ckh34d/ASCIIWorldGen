@@ -96,7 +96,8 @@ func update_ascii_display(
 	lake_id: PackedInt32Array = PackedInt32Array(),
 	sea_level: float = 0.0,
 	fallback_ascii_string: String = "",
-	skip_base_textures: bool = false
+	skip_base_textures: bool = false,
+	skip_aux_textures: bool = false
 ) -> void:
 	"""Update the ASCII display using GPU or fallback rendering"""
 	
@@ -111,7 +112,7 @@ func update_ascii_display(
 			biome_data, is_land_data, beach_mask, rng_seed,
 			turquoise_strength, shelf_noise, clouds, plate_boundary_mask,
 			lake_mask, river_mask, lava_mask, pooled_lake_mask, lake_id, sea_level,
-			skip_base_textures
+			skip_base_textures, skip_aux_textures
 		)
 		
 	else:
@@ -301,8 +302,8 @@ func _on_resized() -> void:
 	"""Handle control resize"""
 	
 	if quad_renderer and size.x > 0.0 and size.y > 0.0:
+		# Full-rect anchors already drive sizing; forcing size here causes anchor warnings.
 		quad_renderer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		quad_renderer.size = size
 
 func _ready() -> void:
 	# Connect resize signal

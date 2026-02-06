@@ -24,9 +24,12 @@ uint hash_u32(uvec2 q){
     return q.x ^ q.y;
 }
 float hash_f(vec2 q){
-    uvec2 qi = uvec2(q);
-    qi.x = qi.x % uint(max(1, PC.width));
-    return float(hash_u32(qi)) * (1.0 / 4294967296.0);
+    ivec2 qi = ivec2(floor(q));
+    int wx = max(1, PC.width);
+    int wy = max(1, PC.height);
+    qi.x = ((qi.x % wx) + wx) % wx;
+    qi.y = ((qi.y % wy) + wy) % wy;
+    return float(hash_u32(uvec2(uint(qi.x), uint(qi.y)))) * (1.0 / 4294967296.0);
 }
 float worley2(vec2 p){
     vec2 cell = floor(p);

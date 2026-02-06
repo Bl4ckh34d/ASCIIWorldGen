@@ -41,7 +41,7 @@ void main(){
     int i = int(x) + int(y) * W;
 
     // Signed latitude in [-0.5, +0.5]
-    float lat_norm_signed = (float(y) / max(1.0, float(H) - 1.0)) - 0.5;
+    float lat_norm_signed = 0.5 - (float(y) / max(1.0, float(H) - 1.0));
     float lat_abs = abs(lat_norm_signed) * 2.0; // 0..1
 
     bool land = (IsLand.is_land_data[i] != 0u);
@@ -60,7 +60,8 @@ void main(){
 
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat_abs, 1.2));
     float amp_cont_d = land ? 1.0 : PC.diurnal_ocean_damp;
-    float dT_diurnal = amp_lat_d * amp_cont_d * cos(6.2831853 * PC.time_of_day);
+    float local_time = fract(PC.time_of_day + float(x) / float(max(1, W)));
+    float dT_diurnal = amp_lat_d * amp_cont_d * cos(6.2831853 * local_time);
 
     float t = Temp.temp_in[i];
     float t_out = clamp01(t + dT_season + dT_diurnal);

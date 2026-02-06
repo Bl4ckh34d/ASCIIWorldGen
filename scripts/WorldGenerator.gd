@@ -116,6 +116,7 @@ class Config:
 
 var config := Config.new()
 var debug_parity: bool = false
+const CLIMATE_CPU_MIRROR_MAX_CELLS: int = 250000
 
 var _noise := FastNoiseLite.new()
 var _warp_noise := FastNoiseLite.new()
@@ -280,15 +281,15 @@ func apply_config(dict: Dictionary) -> void:
 	if dict.has("mountain_radiance_passes"):
 		config.mountain_radiance_passes = int(dict["mountain_radiance_passes"]) 
 	if dict.has("use_gpu_all"):
-		config.use_gpu_all = bool(dict["use_gpu_all"]) 
+		config.use_gpu_all = true
 	if dict.has("use_gpu_clouds"):
-		config.use_gpu_clouds = bool(dict["use_gpu_clouds"]) 
+		config.use_gpu_clouds = true
 	if dict.has("lakes_enabled"):
 		config.lakes_enabled = bool(dict["lakes_enabled"])
 	if dict.has("realistic_pooling_enabled"):
 		config.realistic_pooling_enabled = bool(dict["realistic_pooling_enabled"])
 	if dict.has("use_gpu_pooling"):
-		config.use_gpu_pooling = bool(dict["use_gpu_pooling"])
+		config.use_gpu_pooling = true
 	if dict.has("max_forced_outflows"):
 		config.max_forced_outflows = int(dict["max_forced_outflows"])
 	if dict.has("prob_outflow_0"):
@@ -301,6 +302,10 @@ func apply_config(dict: Dictionary) -> void:
 		config.prob_outflow_3 = float(dict["prob_outflow_3"])
 	if seed_changed:
 		biome_phase = _compute_biome_phase(config.rng_seed)
+	# Runtime is GPU-only by design.
+	config.use_gpu_all = true
+	config.use_gpu_clouds = true
+	config.use_gpu_pooling = true
 	_setup_noises()
 	# Only randomize temperature extremes if caller didn't override both
 	var override_extremes: bool = dict.has("temp_min_c") and dict.has("temp_max_c")
@@ -347,7 +352,7 @@ func _setup_temperature_extremes() -> void:
 	rng.seed = int(config.rng_seed) ^ 0x1234ABCD
 	config.temp_min_c = lerp(-50.0, -15.0, rng.randf())
 	config.temp_max_c = lerp(35.0, 85.0, rng.randf())
-	# Keep lava threshold independent of current extremes; enforce a hard minimum of 120°C
+	# Keep lava threshold independent of current extremes; enforce a hard minimum of 120 degC
 	config.lava_temp_threshold_c = max(120.0, config.lava_temp_threshold_c)
 
 func _compute_biome_phase(seed: int) -> float:
@@ -678,7 +683,18 @@ func generate() -> PackedByteArray:
 	if config.use_gpu_clouds:
 		var cloud_compute: Object = load("res://scripts/systems/CloudOverlayCompute.gd").new()
 		var phase0: float = fposmod(config.season_phase, 1.0)
-		var clouds_init: PackedFloat32Array = cloud_compute.compute_clouds(w, h, last_temperature, last_moisture, last_is_land, phase0, int(config.rng_seed))
+		var clouds_init: PackedFloat32Array = cloud_compute.compute_clouds(
+			w,
+			h,
+			last_temperature,
+			last_moisture,
+			last_is_land,
+			last_light,
+			last_biomes,
+			phase0,
+			int(config.rng_seed),
+			false
+		)
 		if clouds_init.size() == w * h:
 			last_clouds = clouds_init
 		else:
@@ -834,6 +850,12 @@ func generate() -> PackedByteArray:
 			last_flow_accum[kk] = 0.0
 			last_river[kk] = 0
 
+	# Seed GPU buffers from freshly generated CPU arrays before simulation starts.
+	if config.use_gpu_all:
+		if _gpu_buffer_manager == null:
+			_gpu_buffer_manager = GPUBufferManager.new()
+		ensure_persistent_buffers(true)
+
 	return last_is_land
 
 func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
@@ -978,6 +1000,7 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	last_distance_to_coast = last_water_distance
 	if config.use_gpu_all and _gpu_buffer_manager != null:
 		update_persistent_buffer("temperature", last_temperature.to_byte_array())
+		update_persistent_buffer("temperature_base", last_temperature.to_byte_array())
 		update_persistent_buffer("moisture", last_moisture.to_byte_array())
 		update_persistent_buffer("biome_temp", last_temperature.to_byte_array())
 		update_persistent_buffer("biome_moist", last_moisture.to_byte_array())
@@ -1203,21 +1226,24 @@ func quick_update_climate(skip_light: bool = false) -> void:
 	# This is a simplification - in a full implementation you'd track what changed
 	var use_fast_path = last_temperature.size() == size
 	var gpu_only: bool = config.use_gpu_all and _gpu_buffer_manager != null
+	if not gpu_only:
+		return
 	var used_gpu_fast: bool = false
 	var updated_moisture: bool = false
 	if use_fast_path and gpu_only:
 		var temp_buf := get_persistent_buffer("temperature")
+		var temp_base_buf := get_persistent_buffer("temperature_base")
 		var land_buf := get_persistent_buffer("is_land")
 		var dist_buf := get_persistent_buffer("distance")
-		if temp_buf.is_valid() and land_buf.is_valid() and dist_buf.is_valid():
-			used_gpu_fast = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_buf, land_buf, dist_buf, params, temp_buf)
-	if gpu_only and not used_gpu_fast:
-		# GPU-only: do not fall back to CPU climate updates
-		return
+		if not temp_base_buf.is_valid():
+			temp_base_buf = temp_buf
+		if temp_buf.is_valid() and temp_base_buf.is_valid() and land_buf.is_valid() and dist_buf.is_valid():
+			# Apply cycles from a fixed baseline to avoid additive drift/saturation.
+			used_gpu_fast = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_base_buf, land_buf, dist_buf, params, temp_buf)
 	if use_fast_path and not used_gpu_fast:
-		# Apply only cycles to existing temperature (CPU readback path)
-		last_temperature = _climate_compute_gpu.apply_cycles_only(w, h, last_temperature, last_is_land, last_water_distance, params)
-	else:
+		# Keep runtime stable: skip expensive full recompute when fast GPU path is unavailable.
+		return
+	if not use_fast_path:
 		# Full climate recompute
 		var climate: Dictionary = _climate_compute_gpu.evaluate(w, h, last_height, last_is_land, _climate_base, params, last_water_distance, last_ocean_fraction)
 		if climate.size() > 0:
@@ -1232,22 +1258,19 @@ func quick_update_climate(skip_light: bool = false) -> void:
 				last_moisture = post["moisture"]
 				updated_moisture = true
 	
-	# Always update light field unless caller skips (GPU light override path)
-	if not skip_light and not gpu_only:
-		last_light = _climate_compute_gpu.evaluate_light_field(w, h, params)
-		# Fallback if light field evaluation failed
-		if last_light.size() != w * h:
-			last_light.resize(w * h)
-			last_light.fill(1.0)  # Default to full brightness
+	# Always update light field unless caller skips (GPU-only path).
+	if not skip_light:
+		var light_buf: RID = get_persistent_buffer("light")
+		if light_buf.is_valid():
+			_climate_compute_gpu.evaluate_light_field_gpu(w, h, params, light_buf)
 	# Keep GPU persistent buffers in sync for GPU-only simulation
 	if config.use_gpu_all and _gpu_buffer_manager != null:
 		# Only update GPU buffers from CPU arrays when CPU arrays are current.
 		if not used_gpu_fast:
 			update_persistent_buffer("temperature", last_temperature.to_byte_array())
+			update_persistent_buffer("temperature_base", last_temperature.to_byte_array())
 		if updated_moisture:
 			update_persistent_buffer("moisture", last_moisture.to_byte_array())
-		if not skip_light and last_light.size() == w * h:
-			update_persistent_buffer("light", last_light.to_byte_array())
 
 func quick_update_biomes() -> void:
 	# Reclassify biomes using current climate (temperature/moisture) and height/land/beach.
@@ -1631,6 +1654,8 @@ func ensure_persistent_buffers(refresh: bool = true) -> void:
 	_gpu_buffer_manager.ensure_buffer("height_tmp", float_size)
 	_gpu_buffer_manager.ensure_buffer("is_land", int_size, _pack_bytes_to_u32(last_is_land).to_byte_array() if refresh else PackedByteArray())
 	_gpu_buffer_manager.ensure_buffer("temperature", float_size, last_temperature.to_byte_array() if refresh else PackedByteArray())
+	# Baseline temperature used for non-accumulative seasonal/diurnal cycle application.
+	_gpu_buffer_manager.ensure_buffer("temperature_base", float_size, last_temperature.to_byte_array() if refresh else PackedByteArray())
 	_gpu_buffer_manager.ensure_buffer("moisture", float_size, last_moisture.to_byte_array() if refresh else PackedByteArray())
 	# Slow-moving climate buffers for biome evolution
 	_gpu_buffer_manager.ensure_buffer("biome_temp", float_size, last_temperature.to_byte_array() if refresh else PackedByteArray())
@@ -1687,6 +1712,24 @@ func read_persistent_buffer(name: String) -> PackedByteArray:
 	if _gpu_buffer_manager == null:
 		return PackedByteArray()
 	return _gpu_buffer_manager.read_buffer(name, name)
+
+func sync_climate_cpu_mirror_from_gpu(max_cells: int = CLIMATE_CPU_MIRROR_MAX_CELLS) -> void:
+	"""Sync temperature/moisture CPU arrays from GPU buffers for hover/info coherence."""
+	if not config.use_gpu_all or _gpu_buffer_manager == null:
+		return
+	var size: int = config.width * config.height
+	if size <= 0 or size > max_cells:
+		return
+	var tbytes: PackedByteArray = read_persistent_buffer("temperature")
+	if tbytes.size() > 0:
+		var tvals: PackedFloat32Array = tbytes.to_float32_array()
+		if tvals.size() == size:
+			last_temperature = tvals
+	var mbytes: PackedByteArray = read_persistent_buffer("moisture")
+	if mbytes.size() > 0:
+		var mvals: PackedFloat32Array = mbytes.to_float32_array()
+		if mvals.size() == size:
+			last_moisture = mvals
 
 func get_buffer_memory_stats() -> Dictionary:
 	"""Get GPU buffer memory usage statistics"""

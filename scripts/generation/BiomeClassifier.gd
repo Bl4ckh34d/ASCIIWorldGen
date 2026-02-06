@@ -127,7 +127,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 			# Latitude 0 at equator, 1 at poles
 			var lat: float = abs(float(y) / max(1.0, float(h) - 1.0) - 0.5) * 2.0
 			if is_land[i] == 0:
-				# Ocean ice sheet when very cold (below ~ -10°C ±1°C wiggle)
+				# Ocean ice sheet when very cold (below ~ -10 degC +/-1 degC wiggle)
 				var t_norm_o: float = temperature[i]
 				var t_c: float = temp_min_c + t_norm_o * (temp_max_c - temp_min_c)
 				var wiggle: float = ice_wiggle_field[i] if use_ice_field else ice_noise_o.get_noise_2d(float(x) * xscale, float(y))
@@ -148,7 +148,7 @@ func classify(params: Dictionary, is_land: PackedByteArray, height: PackedFloat3
 
 			# Mountain/polar glacier rule before generic freeze
 			var wig: float = (ice_wiggle_field[i] if use_ice_field else glacier_noise.get_noise_2d(float(x) * xscale, float(y))) * 1.5 # -1.5..1.5
-			var snowline_c: float = -2.0 + wig # -3.5 .. -0.5 °C
+			var snowline_c: float = -2.0 + wig # -3.5 .. -0.5 degC
 			# Candidate for glacier: cold enough at high elevation (or very cold overall) with some moisture
 			var can_glacier: bool = false
 			if elev_m >= 1800.0 and t_c_adj <= snowline_c and m >= 0.25:

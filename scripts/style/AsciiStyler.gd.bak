@@ -100,7 +100,7 @@ func _chars_for_biome(biome: int, is_beach: bool) -> PackedStringArray:
 			# Sparkly bright crust
 			return PackedStringArray(["▫", "·", "□"])
 		BiomeClassifier.Biome.GLACIER:
-			return PackedStringArray(["*", "°", "·"])
+			return PackedStringArray(["*", "o", "·"])
 		BiomeClassifier.Biome.TUNDRA:
 			return PackedStringArray([",", ".", "·"])
 		BiomeClassifier.Biome.SAVANNA:
@@ -112,7 +112,7 @@ func _chars_for_biome(biome: int, is_beach: bool) -> PackedStringArray:
 		BiomeClassifier.Biome.WASTELAND:
 			return PackedStringArray([":", ";", "."])
 		BiomeClassifier.Biome.DESERT_ICE:
-			return PackedStringArray(["*", "°", "·"])
+			return PackedStringArray(["*", "o", "·"])
 		BiomeClassifier.Biome.STEPPE:
 			return PackedStringArray([",", "'", "."])
 		# Meadow/Prairie merged into Grassland
@@ -289,7 +289,7 @@ func build_ascii(w: int, h: int, height: PackedFloat32Array, is_land: PackedByte
 			# Optional lake tint already applied above for draw_as_water branch
 			if ocean_ice:
 				color = Color(1, 1, 1)
-			# Temperature-based whitening for very cold land (<= -10°C)
+			# Temperature-based whitening for very cold land (<= -10 degC)
 			if (not draw_as_water) and temperature.size() == w * h:
 				var t_norm: float = temperature[i]
 				var t_c: float = temp_min_c + t_norm * (temp_max_c - temp_min_c)

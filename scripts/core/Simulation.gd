@@ -3,7 +3,7 @@ extends Node
 
 class_name Simulation
 
-var systems: Array = [] # Array of dictionaries {instance, cadence, last_tick: int, tiles_per_tick: int}
+var systems: Array = [] # Array of dictionaries {instance, cadence, tiles_per_tick, avg_cost_ms, use_time_debt, debt_days, force_next_run, max_catchup_days}
 var tick_counter: int = 0
 var max_systems_per_tick: int = 3
 var max_tick_time_ms: float = 6.0
@@ -17,26 +17,74 @@ var _tick_time_history: Array = []
 
 const _SMOOTH_ALPHA := 0.3
 
-func register_system(instance: Object, cadence: int = 1, tiles_per_tick: int = 0) -> void:
+func register_system(instance: Object, cadence: int = 1, tiles_per_tick: int = 0, use_time_debt: bool = true, max_catchup_days: float = 30.0) -> void:
 	systems.append({
 		"instance": instance,
 		"cadence": max(1, cadence),
 		"last_tick": -1,
 		"tiles_per_tick": max(0, tiles_per_tick),
 		"avg_cost_ms": 0.0,
+		"use_time_debt": bool(use_time_debt),
+		"debt_days": 0.0,
+		"force_next_run": false,
+		"max_catchup_days": max(1e-6, float(max_catchup_days)),
 	})
 
 func clear() -> void:
 	systems.clear()
 	tick_counter = 0
 
+func accumulate_debt(dt_days: float) -> void:
+	var dt: float = max(0.0, float(dt_days))
+	if dt <= 0.0:
+		return
+	for s in systems:
+		if bool(s.get("use_time_debt", true)):
+			s["debt_days"] = float(s.get("debt_days", 0.0)) + dt
+
+func set_system_use_time_debt(instance: Object, enabled: bool) -> void:
+	for s in systems:
+		if s.get("instance", null) == instance:
+			s["use_time_debt"] = bool(enabled)
+			s["debt_days"] = 0.0
+			break
+
+func set_system_catchup_max_days(instance: Object, max_days: float) -> void:
+	for s in systems:
+		if s.get("instance", null) == instance:
+			s["max_catchup_days"] = max(1e-6, float(max_days))
+			break
+
+func request_catchup(instance: Object = null) -> void:
+	for s in systems:
+		if instance == null or s.get("instance", null) == instance:
+			s["force_next_run"] = true
+
+func request_catchup_all() -> void:
+	request_catchup(null)
+
 func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 	tick_counter += 1
+	accumulate_debt(dt_days)
 	var executed: int = 0
 	var start_us: int = Time.get_ticks_usec()
 	_last_tick_start_us = start_us
 	var dirty_set := {}
 	for s in systems:
+		var cadence: int = int(s["cadence"])
+		var use_time_debt: bool = bool(s.get("use_time_debt", true))
+		var force_due: bool = bool(s.get("force_next_run", false))
+		var cadence_due: bool = (tick_counter % cadence == 0)
+		if not cadence_due and not force_due:
+			continue
+		var dt_for_system: float = max(0.0, float(dt_days))
+		if use_time_debt:
+			var debt_days: float = max(0.0, float(s.get("debt_days", 0.0)))
+			var catchup_max: float = max(1e-6, float(s.get("max_catchup_days", 30.0)))
+			dt_for_system = min(debt_days, catchup_max)
+			if dt_for_system <= 0.0:
+				s["force_next_run"] = false
+				continue
 		# Budget check (time or count)
 		if budget_mode_time_ms:
 			var now_us: int = Time.get_ticks_usec()
@@ -49,18 +97,25 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 		else:
 			if executed >= max(1, max_systems_per_tick):
 				break
-		# cadence filter
-		var cadence: int = int(s["cadence"])
-		if tick_counter % cadence != 0:
-			continue
 		if "tick" in s["instance"]:
 			var st_us: int = Time.get_ticks_usec()
-			var ret: Variant = s["instance"].tick(dt_days, world, gpu_ctx)
+			var ret: Variant = s["instance"].tick(dt_for_system, world, gpu_ctx)
 			var en_us: int = Time.get_ticks_usec()
 			var cost_ms: float = float(en_us - st_us) / 1000.0
 			# Update EMA cost
 			var prev: float = float(s.get("avg_cost_ms", 0.0))
 			s["avg_cost_ms"] = (1.0 - _SMOOTH_ALPHA) * prev + _SMOOTH_ALPHA * cost_ms
+			var consumed_dt: bool = true
+			if typeof(ret) == TYPE_DICTIONARY and ret.has("consumed_dt"):
+				consumed_dt = bool(ret["consumed_dt"])
+			if use_time_debt:
+				var remaining: float = max(0.0, float(s.get("debt_days", 0.0)))
+				if consumed_dt:
+					remaining = max(0.0, remaining - dt_for_system)
+				s["debt_days"] = remaining
+				s["force_next_run"] = remaining > 1e-6
+			else:
+				s["force_next_run"] = false
 			# Collect dirty fields if system reported any
 			if typeof(ret) == TYPE_DICTIONARY and ret.has("dirty_fields"):
 				var df: PackedStringArray = ret["dirty_fields"]

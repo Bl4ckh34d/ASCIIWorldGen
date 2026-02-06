@@ -28,16 +28,16 @@ void main(){
     int i = int(x) + int(y) * W;
 
     // Latitude phi in radians
-    float lat_norm = (float(y) / max(1.0, float(H) - 1.0)) - 0.5; // -0.5..+0.5
+    float lat_norm = 0.5 - (float(y) / max(1.0, float(H) - 1.0)); // -0.5..+0.5 (north positive)
     float phi = lat_norm * 3.14159265; // -pi/2..+pi/2
 
-    // Solar declination delta (in radians); Earth tilt 23.44°
+    // Solar declination delta (in radians); Earth tilt 23.44 deg
     // ENHANCED: Make seasonal changes more dramatic and faster
-    float tilt = radians(30.0); // Increased from 23.44° to 30° for more dramatic effect
-    float delta = -tilt * cos(6.2831853 * PC.day_of_year);
+    float tilt = radians(30.0); // Increased from 23.44 deg to 30 deg for more dramatic effect
+    float delta = tilt * cos(6.2831853 * PC.day_of_year);
     
     // Debug: you can see seasonal effect by checking delta value
-    // delta varies from -30° to +30° throughout the year
+    // delta varies from -30 deg to +30 deg throughout the year
 
     // Hour angle H (radians); wrap across width; time_of_day 0..1
     float H_ang = 6.2831853 * (PC.time_of_day + float(x) / float(max(1, W)));

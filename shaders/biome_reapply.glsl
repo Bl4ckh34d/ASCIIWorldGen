@@ -27,7 +27,21 @@ layout(push_constant) uniform Params {
 // Biome IDs (keep in sync with BiomeClassifier.gd)
 const int BIOME_OCEAN = 0;
 const int BIOME_ICE_SHEET = 1;
+const int BIOME_STEPPE = 6;
+const int BIOME_GRASSLAND = 7;
+const int BIOME_MOUNTAINS = 18;
+const int BIOME_ALPINE = 19;
+const int BIOME_TUNDRA = 20;
 const int BIOME_GLACIER = 24;
+const float OCEAN_ICE_HYSTERESIS_C = 4.0;
+const float GLACIER_ELEV_FORM_C = -2.0;
+const float GLACIER_ELEV_HOLD_C = 1.0;
+const float GLACIER_DEEP_FORM_C = -18.0;
+const float GLACIER_DEEP_HOLD_C = -12.0;
+const float GLACIER_ELEV_FORM_MOIST = 0.25;
+const float GLACIER_ELEV_HOLD_MOIST = 0.18;
+const float GLACIER_DEEP_FORM_MOIST = 0.20;
+const float GLACIER_DEEP_HOLD_MOIST = 0.15;
 
 float clamp01(float v){ return clamp(v, 0.0, 1.0); }
 
@@ -50,25 +64,61 @@ void main(){
     float t_c_adj = t_c0 - PC.lapse_c_per_km * (elev_m / 1000.0);
 
     if (!is_land){
-        // Ocean: re-apply ice sheets in very cold seas
-        float threshold_c = PC.ocean_ice_base_thresh_c + wig * PC.ocean_ice_wiggle_amp_c;
-        if (t_c0 <= threshold_c) {
+        // Ocean: apply hysteresis so sea ice is persistent and does not flicker daily.
+        float freeze_threshold_c = PC.ocean_ice_base_thresh_c + wig * PC.ocean_ice_wiggle_amp_c;
+        float thaw_threshold_c = freeze_threshold_c + OCEAN_ICE_HYSTERESIS_C;
+        if (b == BIOME_ICE_SHEET) {
+            if (t_c0 <= thaw_threshold_c) {
+                OutB.out_biome[i] = BIOME_ICE_SHEET;
+                return;
+            }
+            OutB.out_biome[i] = BIOME_OCEAN;
+            return;
+        }
+        if (t_c0 <= freeze_threshold_c) {
             OutB.out_biome[i] = BIOME_ICE_SHEET;
             return;
         }
-        // keep as is (could be ICE_SHEET or OCEAN already)
-        OutB.out_biome[i] = (b == BIOME_ICE_SHEET) ? BIOME_ICE_SHEET : BIOME_OCEAN;
+        OutB.out_biome[i] = BIOME_OCEAN;
         return;
     }
 
-    // Land: re-apply glacier mask when high altitude and cold, or very cold overall
-    bool glacier = false;
-    if (elev_m >= 1800.0 && t_c_adj <= -2.0 && m >= 0.25) {
-        glacier = true;
-    } else if (t_c0 <= -18.0 && m >= 0.20) {
-        glacier = true;
+    // Land: apply hysteresis to glacier persistence to avoid rapid daily flips.
+    bool glacier_form = false;
+    if (elev_m >= 1800.0 && t_c_adj <= GLACIER_ELEV_FORM_C && m >= GLACIER_ELEV_FORM_MOIST) {
+        glacier_form = true;
+    } else if (t_c0 <= GLACIER_DEEP_FORM_C && m >= GLACIER_DEEP_FORM_MOIST) {
+        glacier_form = true;
     }
-    OutB.out_biome[i] = glacier ? BIOME_GLACIER : b;
+    bool glacier_hold = false;
+    if (b == BIOME_GLACIER) {
+        if (elev_m >= 1800.0 && t_c_adj <= GLACIER_ELEV_HOLD_C && m >= GLACIER_ELEV_HOLD_MOIST) {
+            glacier_hold = true;
+        } else if (t_c0 <= GLACIER_DEEP_HOLD_C && m >= GLACIER_DEEP_HOLD_MOIST) {
+            glacier_hold = true;
+        }
+    }
+    bool glacier = glacier_form || glacier_hold;
+    if (glacier) {
+        OutB.out_biome[i] = BIOME_GLACIER;
+        return;
+    }
+
+    // Thaw stale glacier cells when cryosphere is evaluated without full biome reclassification.
+    if (b == BIOME_GLACIER) {
+        if (elev_m >= 2200.0) {
+            OutB.out_biome[i] = BIOME_ALPINE;
+        } else if (elev_m >= 1200.0) {
+            OutB.out_biome[i] = BIOME_MOUNTAINS;
+        } else if (t_c_adj <= 2.0 && m >= 0.30) {
+            OutB.out_biome[i] = BIOME_TUNDRA;
+        } else if (m >= 0.30) {
+            OutB.out_biome[i] = BIOME_GRASSLAND;
+        } else {
+            OutB.out_biome[i] = BIOME_STEPPE;
+        }
+        return;
+    }
+
+    OutB.out_biome[i] = b;
 }
-
-
