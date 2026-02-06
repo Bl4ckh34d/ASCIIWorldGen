@@ -1,7 +1,7 @@
 #[compute]
 #version 450
-// File: res://shaders/intro_bigbang.glsl
-// GPU intro effect for quote + big bang + scene-2 (sun/corona/planet) phases.
+// File: res://shaders/intro_stage2_sun.glsl
+// Dedicated stage-2 (sun + orbital zone) intro compute shader.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -176,8 +176,12 @@ float corona_ring_ray_noise(vec3 ray, vec3 pos, float r, float size, mat3 mr, fl
 	if (c > r) {
 		n = noise4q(vec4(pr * 10.0, -anim + c));
 		ns = noise4q(vec4(pr * 50.0, -anim * 2.5 + c * 2.0)) * 2.0;
+		// Extra octave for finer plasma filaments.
+		ns = ns * 0.55 + noise4q(vec4(pr * 150.0, -anim * 4.0 + c * 3.2)) * 0.45;
 	}
+	float grain = noise4q(vec4(pr * 220.0, -anim * 5.4 + c * 4.6));
 	n = n * n * nd * ns;
+	n *= 0.82 + grain * 0.35;
 	return pow(s, 4.0) + s * s * n;
 }
 
@@ -256,17 +260,15 @@ float sun_bump_height(vec2 p, float t) {
 	float slow_t = t * 0.52;
 	float h = length(sun_sine_warp(p, slow_t)) * 0.7071;
 	h = bump_soft_profile(h);
-	float broad = fbm(p * 0.65 + vec2(slow_t * 0.05, -slow_t * 0.04));
-	float fine = fbm(p * 1.9 + vec2(-slow_t * 0.09, slow_t * 0.07));
-	float comb = honey_cells(p * 1.15, slow_t);
-	float panta0 = noise4q(vec4(vec3(p * 1.10, broad * 2.20 + 0.37), slow_t * 0.38));
-	float panta1 = noise4q(vec4(vec3(p * 4.60 + vec2(83.23, 34.34), comb * 3.10 + 67.453), slow_t * 1.05));
-	h = mix(h, broad, 0.18);
-	h = mix(h, fine, 0.08);
-	h = mix(h, comb, 0.26);
-	h = mix(h, panta0, 0.24);
-	h = mix(h, panta1 * panta1, 0.14);
-	return smoothstep(0.08, 0.96, clamp(h, 0.0, 1.0));
+	float fine0 = fbm(p * 2.8 + vec2(-slow_t * 0.12, slow_t * 0.10));
+	float fine1 = fbm(p * 6.4 + vec2(slow_t * 0.24, -slow_t * 0.20));
+	float comb = honey_cells(p * 2.3, slow_t * 0.78);
+	float micro = noise4q(vec4(vec3(p * 9.5 + vec2(83.23, 34.34), comb * 2.4 + 67.453), slow_t * 1.35));
+	h = mix(h, fine0, 0.22);
+	h = mix(h, fine1, 0.14);
+	h = mix(h, comb, 0.12);
+	h = mix(h, micro, 0.10);
+	return smoothstep(0.12, 0.92, clamp(h, 0.0, 1.0));
 }
 
 vec2 sun_spherical_warp_coord(vec3 n, float t) {
@@ -314,34 +316,13 @@ vec4 sample_mycelium(vec2 uv) {
 	return imageLoad(mycelium_tex, ivec2(px));
 }
 
-vec4 sample_mycelium_morph(vec2 uv, vec2 p, float t) {
-	vec2 w0 = flow_dir(p * 1.45 + vec2(t * 0.19, -t * 0.15), t * 0.71);
-	vec2 w1 = flow_dir(rot2(1.11) * p * 2.05 + vec2(-t * 0.27, t * 0.22) + 9.3, t * 0.93);
-	vec2 w2 = flow_dir(rot2(-0.63) * p * 3.10 + w0 * 1.7 - w1 * 1.2 + vec2(t * 0.31, t * 0.26) - 4.7, t * 1.17);
-	vec2 d0 = w0 * 0.016 + w2 * 0.010;
-	vec2 d1 = w1 * 0.018 - w0 * 0.009;
-	vec2 d2 = w2 * 0.015 + w1 * 0.008;
-	vec2 uv0 = fract(uv + d0);
-	vec2 uv1 = fract(uv + d1);
-	vec2 uv2 = fract(uv + d2);
-	float m0 = fbm(p * 3.3 + vec2(t * 0.29, -t * 0.23) + w0 * 3.0);
-	float m1 = fbm(rot2(0.71) * p * 5.7 + vec2(-t * 0.18, t * 0.27) + w1 * 2.2 + 13.2);
-	float blend_a = smoothstep(0.22, 0.78, m0);
-	float blend_b = smoothstep(0.20, 0.82, m1);
-	vec4 s0 = sample_mycelium(uv0);
-	vec4 s1 = sample_mycelium(uv1);
-	vec4 s2 = sample_mycelium(uv2);
-	vec4 m01 = mix(s0, s1, blend_a);
-	return mix(m01, s2, 0.10 + blend_b * 0.62);
-}
-
 vec3 render_bigbang(vec2 uv, float t) {
 	float progress_raw = max(PC.bigbang_progress, 0.0);
 	float timeline = clamp(progress_raw, 0.0, 1.0);
 	float ignition = 1.0 - pow(1.0 - clamp(timeline / 0.11, 0.0, 1.0), 3.0);
 	// Base expansion during early normalized phase.
 	float s_curve = timeline * timeline * (3.0 - 2.0 * timeline);
-	float expand_accel = pow(s_curve, 1.55);
+	float expand_accel = pow(s_curve, 1.85);
 	float expand = pow(timeline, 1.62);
 	// Keep acceleration rising beyond timeline=1.0 (no late slowdown).
 	float late_tail = max(progress_raw - 0.82, 0.0);
@@ -350,18 +331,13 @@ vec3 render_bigbang(vec2 uv, float t) {
 	vec2 aspect = vec2(float(PC.width) / max(1.0, float(PC.height)), 1.0);
 	vec2 q = (uv - 0.5) * aspect * 2.0;
 	float r = length(q);
-	vec4 my_edge_state = sample_mycelium_morph(uv, q, t);
-	float my_edge_density_raw = clamp(my_edge_state.z, 0.0, 1.0);
-	float edge_n0 = fbm(q * 4.4 + vec2(t * 0.47, -t * 0.39));
-	float edge_n1 = fbm(rot2(0.92) * q * 7.2 + vec2(-t * 0.33, t * 0.41) + edge_n0 * 2.0 + 5.6);
-	float my_edge_density = clamp(my_edge_density_raw * (0.58 + 0.95 * edge_n1), 0.0, 1.0);
+	vec4 my_edge_state = sample_mycelium(uv);
+	float my_edge_density = clamp(my_edge_state.z, 0.0, 1.0);
 	// The whole effect starts as a tiny central singularity and expands outwards.
-	float spread = mix(0.018, 2.30, expand_accel) + 0.95 * late_tail_pow;
+	float spread = mix(0.004, 2.30, expand_accel) + 0.95 * late_tail_pow;
 	float edge_noise = fbm(q * 6.4 + vec2(t * 0.31, -t * 0.27));
 	float edge_irregular = (edge_noise - 0.5) * 0.20 + (my_edge_density - 0.5) * 0.42;
-	float pattern_on = step(0.18, PC.phase_time);
-	float pattern_visible = 0.0;
-	float edge_gate = pattern_on * (1.0 - smoothstep(1.55, 2.35, progress_raw));
+	float edge_gate = smoothstep(0.03, 0.55, timeline) * (1.0 - smoothstep(1.55, 2.35, progress_raw));
 	float local_spread = max(0.006, spread * (1.0 + edge_irregular * edge_gate));
 	float envelope = smoothstep(local_spread + 0.10, local_spread - 0.018, r);
 	vec2 qn = q / max(0.001, local_spread);
@@ -385,10 +361,8 @@ vec3 render_bigbang(vec2 uv, float t) {
 	filaments *= (0.28 + 0.92 * smoothstep(0.01, 0.24, ignition));
 	filaments *= spiral_fade;
 
-	float branch_noise0 = fbm(warp * 6.8 + vec2(t * 0.63, -t * 0.57));
-	float branch_noise1 = fbm(rot2(0.93) * warp * 11.4 + vec2(-t * 0.41, t * 0.46) + 13.4);
-	float branch_mix = branch_noise0 * 0.62 + branch_noise1 * 0.38;
-	float branches = smoothstep(0.70, 0.96, branch_mix);
+	float branch_wave = sin(a * (17.0 - ignition * 5.0) - rn * 18.0 + t * 2.8);
+	float branches = pow(clamp(branch_wave * 0.5 + 0.5, 0.0, 1.0), 9.0);
 	branches *= exp(-rn * 1.5) * (1.0 - expand * 0.25);
 	branches *= spiral_fade;
 
@@ -432,31 +406,19 @@ vec3 render_bigbang(vec2 uv, float t) {
 	col += vec3(0.34, 0.50, 0.92) * post_glow;
 
 	// Mycelium layer from the external feedback simulation texture.
-	vec4 my_state = sample_mycelium_morph(uv, qn, t * 1.12);
-	float my_density_raw = clamp(my_state.z, 0.0, 1.0);
-	float my_morph_noise0 = fbm(qn * 5.2 + vec2(t * 0.68, -t * 0.61));
-	float my_morph_noise1 = fbm(rot2(1.13) * qn * 8.1 + vec2(-t * 0.52, t * 0.57) + my_morph_noise0 * 2.4 + 21.7);
-	float my_morph_noise2 = fbm(qn * 12.0 + vec2(my_morph_noise0, -my_morph_noise1) * 2.8 + vec2(t * 0.94, t * 0.83) - 17.3);
-	float my_struct = clamp(my_morph_noise0 * 0.35 + my_morph_noise1 * 0.40 + my_morph_noise2 * 0.45, 0.0, 1.0);
-	float my_density = clamp(my_density_raw * (0.52 + 1.05 * my_struct) + (my_morph_noise2 - 0.5) * 0.18, 0.0, 1.0);
-	float psy_noise = fbm(qn * 3.6 + vec2(t * 0.42, -t * 0.37));
-	float psy_noise2 = fbm(rot2(0.57) * qn * 6.2 + vec2(-t * 0.35, t * 0.31) + psy_noise * 2.0 + 8.7);
-	float psy_phase = t * 1.05 + (psy_noise * 2.0 - 1.0) * 2.4 + (psy_noise2 * 2.0 - 1.0) * 1.9;
-	float hue_wobble = 0.22 * sin(psy_phase * 1.2) + 0.16 * sin(psy_phase * 2.1 + 1.7);
-	float my_hue = fract(my_state.w + hue_wobble);
-	float my_reveal = pattern_on * pattern_visible * (1.0 - smoothstep(1.08, 2.25, progress_raw));
+	vec4 my_state = my_edge_state;
+	float my_density = clamp(my_state.z, 0.0, 1.0);
+	float my_hue = fract(my_state.w);
+	float my_reveal = smoothstep(0.02, 0.20, timeline) * (1.0 - smoothstep(1.08, 2.25, progress_raw));
 	float my_shell_boost = exp(-abs(rn - shell_r) * mix(22.0, 10.0, expand));
-	float swirl = 0.5 + 0.5 * sin(psy_phase * 1.6 + my_density * 5.0);
-	vec3 my_base = hsv2rgb(vec3(fract(my_hue + 0.10 + 0.08 * sin(psy_phase * 0.8)), 0.78, 1.0));
-	vec3 my_trail = hsv2rgb(vec3(fract(my_hue + 0.34 * swirl), 0.98, 1.0));
-	vec3 my_alt = hsv2rgb(vec3(fract(my_hue + 0.62 - 0.20 * swirl), 0.90, 1.0));
+	vec3 my_base = hsv2rgb(vec3(fract(my_hue + 0.08), 0.60, 0.92));
+	vec3 my_trail = hsv2rgb(vec3(my_hue, 0.90, 1.0));
 	vec3 my_col = mix(my_base, my_trail, clamp(my_density * 0.95, 0.0, 1.0));
-	my_col = mix(my_col, my_alt, 0.32 + 0.24 * sin(psy_phase * 1.3));
 	my_col += vec3(1.0, 0.86, 0.58) * my_shell_boost * my_density * 0.24;
 	float my_alpha = my_density * my_reveal * plasma_alpha * (1.0 - PC.fade_alpha * 0.55);
 	col = col * 0.82 + my_col * (my_alpha * 2.35);
 
-	float my_fringe = smoothstep(0.10, 0.85, my_density) * edge_gate * pattern_visible;
+	float my_fringe = smoothstep(0.10, 0.85, my_density) * edge_gate;
 	float envelope_mix = clamp(envelope + my_fringe * 0.35, 0.0, 1.0);
 	col *= envelope_mix;
 	col = 1.0 - exp(-col * 1.55);
@@ -474,8 +436,8 @@ vec3 render_bigbang(vec2 uv, float t) {
 	col *= (1.0 - core_clear);
 
 	// Singularity flash: center-origin wave reaches full screen in <0.2s, then dies quickly.
-	float flash_expand_t = clamp(PC.phase_time / 0.12, 0.0, 1.0);
-	float flash_decay_t = clamp((PC.phase_time - 0.06) / 0.10, 0.0, 1.0);
+	float flash_expand_t = clamp(PC.phase_time / 0.18, 0.0, 1.0);
+	float flash_decay_t = clamp((PC.phase_time - 0.10) / 0.15, 0.0, 1.0);
 	float flash_intensity = 1.0 - flash_decay_t;
 	float flash_radius = mix(0.015, 2.90, flash_expand_t * flash_expand_t * (3.0 - 2.0 * flash_expand_t));
 	float flash_feather = mix(0.028, 0.24, flash_expand_t);
@@ -497,11 +459,9 @@ vec3 render_bigbang(vec2 uv, float t) {
 	float burst_weight = star_burst * exp(-star_emit_t * 1.45);
 	float drift_blend = smoothstep(0.0, 1.0, clamp(PC.fade_alpha, 0.0, 1.0));
 	float star_gate = max(clamp(PC.star_alpha, 0.0, 1.0), smoothstep(0.02, 0.22, timeline) * 0.72);
-	// Keep twinkle phase continuous across scene-1 -> scene-2 transition.
-	float star_twinkle_t = PC.total_time;
 
-	vec3 base_sky = 1.0 - exp(-stage2_star_sky(uv, star_twinkle_t, 0.0, 1.0) * 1.20);
-	vec3 burst_sky = 1.0 - exp(-stage2_star_sky(uv_burst, star_twinkle_t, 0.0, 1.18) * 1.25);
+	vec3 base_sky = 1.0 - exp(-stage2_star_sky(uv, t, 0.0, 1.0) * 1.20);
+	vec3 burst_sky = 1.0 - exp(-stage2_star_sky(uv_burst, t, 0.0, 1.18) * 1.25);
 	vec3 stars_mix = mix(burst_sky, base_sky, drift_blend);
 	float persistent_reveal = smoothstep(1.20, 1.90, progress_raw);
 	col += (base_sky * persistent_reveal * 1.12 + stars_mix * burst_weight * 1.05) * star_gate;
@@ -535,14 +495,13 @@ vec3 render_stage2(vec2 uv, float t) {
 	// Reveal the sun early in the starfield->sun move so it doesn't look like
 	// a late opacity fade while the camera is already panning.
 	float sun_reveal = space * smoothstep(0.00, 0.12, pan);
-	// Broad backlight behind the sun/corona so thin plasma regions still read hot.
 	float sun_dist = r / max(0.0001, sun_r);
-	float back_halo_wide = exp(-pow(sun_dist * 10.0, 2.0));
-	float back_halo_mid = exp(-pow(sun_dist * 16.0, 2.0));
-	float back_halo_edge = smoothstep(0.93, 1.03, sun_dist);
-	vec3 back_halo = vec3(1.0, 0.40, 0.12) * back_halo_wide * 0.03;
-	back_halo += vec3(1.0, 0.72, 0.26) * back_halo_mid * 0.02;
-	col += back_halo * sun_reveal * back_halo_edge;
+	// Tight back-glow layer behind sun/corona (kept intentionally compact).
+	float back_glow_inner = exp(-pow(sun_dist * 3.6, 2.0));
+	float back_glow_outer = exp(-pow(sun_dist * 2.1, 2.0));
+	vec3 back_glow = vec3(1.0, 0.42, 0.10) * back_glow_inner * 0.14;
+	back_glow += vec3(1.0, 0.72, 0.22) * back_glow_outer * 0.08;
+	col += back_glow * sun_reveal;
 
 	float sun_body = smoothstep(sun_r + 0.0025, sun_r - 0.0015, r);
 	vec2 np = rel / max(0.0001, sun_r);
@@ -564,40 +523,31 @@ vec3 render_stage2(vec2 uv, float t) {
 	float flow0 = filament_field(warp_p * 0.95 + flow_dir(warp_p * 1.2, t * 0.24) * 0.28, t * 0.24, 5.8, 0.34);
 	float flow1 = filament_field(rot2(0.52) * warp_p * 1.20 + vec2(-t * 0.08, t * 0.06), t * 0.19, 7.2, 0.32);
 	float honey_mask = honey_cells(warp_p * 0.92, t * 0.38);
-	float star_lo = noise4q(vec4(sphere_n * 3.60 + vec3(0.0), t * 0.22));
-	star_lo = pow(min(1.0, star_lo * 2.4), 2.0);
-	float star_hi = noise4q(vec4(sphere_n * 15.0 + vec3(83.23, 34.34, 67.453), t * 0.74));
-	star_hi = min(1.0, star_hi * 2.2);
+	float detail_noise = noise4q(vec4(sphere_n * 24.0 + vec3(83.23, 34.34, 67.453), t * 0.78));
+	detail_noise = smoothstep(0.38, 0.92, detail_noise);
 	float veins = smoothstep(0.22, 0.84, mix(flow0, flow1, 0.36));
-	veins = mix(veins, honey_mask, 0.34);
-	veins = mix(veins, star_hi, 0.36);
+	veins = mix(veins, honey_mask, 0.24);
+	veins = mix(veins, detail_noise, 0.10);
 	float core_grad = exp(-r / max(0.0001, sun_r * 0.55));
 	float limb = smoothstep(sun_r * 0.58, sun_r * 0.995, r);
 
-	vec3 sun_deep = vec3(0.47, 0.07, 0.01);
-	vec3 sun_mid = vec3(0.86, 0.28, 0.05);
-	vec3 sun_hot = vec3(1.0, 0.62, 0.14);
-	vec3 sun_core = vec3(1.0, 0.90, 0.70);
-	vec3 panta_lo_col = mix(vec3(1.0, 0.82, 0.20), vec3(1.0), pow(star_lo, 26.0)) * star_lo;
-	vec3 panta_hi_col = mix(
-		mix(vec3(1.0, 0.26, 0.05), vec3(1.0, 0.28, 0.52), pow(star_hi, 2.0)),
-		vec3(1.0),
-		pow(star_hi, 10.0)
-	) * star_hi;
-	float surf_extra = noise4q(vec4(sphere_n * 42.0 + vec3(45.78, 113.04, 28.957), t * 0.58));
-	surf_extra = smoothstep(0.36, 0.96, surf_extra);
-	vec3 surf_extra_col = mix(vec3(0.94, 0.24, 0.04), vec3(1.0, 0.78, 0.20), surf_extra);
-	vec3 base_col = mix(sun_deep, sun_mid, h);
-	base_col = mix(base_col, sun_hot, clamp(h * 0.70 + veins * 0.45, 0.0, 1.0));
-	vec3 plasma = base_col + panta_lo_col * 0.22 + panta_hi_col * 0.12;
-	plasma += surf_extra_col * surf_extra * (0.06 + 0.10 * veins);
-	plasma = mix(plasma, sun_core, clamp(core_grad * 0.55 + pow(ndl, 3.5) * 0.45, 0.0, 1.0));
-	plasma += sun_hot * veins * 0.16;
-	plasma += sun_core * ndl * 0.18;
-	plasma += vec3(1.0, 0.82, 0.32) * fres * 0.28;
-	plasma *= 0.90 + ndl * 0.22;
-	plasma *= (1.0 + limb * 0.14);
-	plasma = 1.0 - exp(-plasma * 1.30);
+	vec3 sun_deep = vec3(0.54, 0.06, 0.00);
+	vec3 sun_mid = vec3(0.98, 0.24, 0.02);
+	vec3 sun_hot = vec3(1.0, 0.72, 0.08);
+	vec3 sun_core = vec3(1.0, 0.84, 0.40);
+	float color_mix0 = clamp(h * 0.42 + veins * 0.58, 0.0, 1.0);
+	vec3 base_col = mix(sun_deep, sun_mid, color_mix0);
+	base_col = mix(base_col, sun_hot, clamp(h * 0.28 + veins * 0.62, 0.0, 1.0));
+	vec3 plasma = base_col;
+	float ember = smoothstep(0.62, 0.98, detail_noise);
+	plasma += vec3(1.0, 0.56, 0.06) * ember * (0.02 + 0.04 * veins);
+	plasma = mix(plasma, sun_core, clamp(core_grad * 0.45 + pow(ndl, 3.5) * 0.35, 0.0, 1.0));
+	plasma += sun_hot * veins * 0.24;
+	plasma += sun_core * ndl * 0.16;
+	plasma += vec3(1.0, 0.82, 0.18) * fres * 0.26;
+	plasma *= 1.00 + ndl * 0.22;
+	plasma *= (1.0 + limb * 0.18);
+	plasma = 1.0 - exp(-plasma * 1.34);
 	col = mix(col, plasma, sun_body * sun_reveal);
 
 	vec2 p_cor = np * 0.70710678;
@@ -605,10 +555,12 @@ vec3 render_stage2(vec2 uv, float t) {
 	vec3 pos_cor = vec3(0.0, 0.0, 3.0);
 	mat3 mr_cor = sun_corona_matrix(t);
 	float s3 = corona_ring_ray_noise(ray_cor, pos_cor, 0.96, 1.0, mr_cor, t);
-	vec3 cor_shell = mix(vec3(1.0, 0.6, 0.1), vec3(1.0, 0.95, 1.0), pow(s3, 3.0)) * s3;
-	vec3 cor_rays = shadertoy_corona(np * 1.35, t);
-	float outside_body = smoothstep(0.90, 1.01, length(np));
-	col += (cor_shell * 0.35 + cor_rays * 2.10) * sun_reveal * outside_body;
+	vec3 cor_add = mix(vec3(1.0, 0.6, 0.1), vec3(1.0, 0.95, 1.0), pow(s3, 3.0)) * s3;
+	float cor_detail = noise4q(vec4(ray_cor * 120.0 + vec3(83.23, 34.34, 67.453), -t * 3.2 + length(np) * 8.0));
+	cor_detail = smoothstep(0.45, 0.95, cor_detail);
+	cor_add *= 0.90 + cor_detail * 0.25;
+	float outside_body = smoothstep(0.97, 1.02, length(np));
+	col += cor_add * sun_reveal * outside_body * 1.08;
 
 	float inner = PC.zone_inner_radius / max(1.0, float(PC.height));
 	float outer = PC.zone_outer_radius / max(1.0, float(PC.height));
@@ -633,9 +585,6 @@ vec3 render_stage2(vec2 uv, float t) {
 	if (PC.intro_phase >= INTRO_PHASE_PLANET_PLACE) {
 		float xpix = uvw.x * float(PC.width);
 		float ypix = uvw.y * float(PC.height);
-		float line = smoothstep(1.5, 0.2, abs(ypix - PC.orbit_y));
-		float seg = step(PC.orbit_x_min, xpix) * step(xpix, PC.orbit_x_max);
-		col += vec3(1.0, 0.93, 0.62) * line * seg * 0.72 * sun_reveal;
 
 		float px = PC.planet_x;
 		if (PC.intro_phase == INTRO_PHASE_PLANET_PLACE && PC.planet_has_position < 0.5) {
@@ -676,14 +625,7 @@ void main() {
 	float t = PC.total_time;
 	vec3 color = vec3(0.0);
 
-	if (PC.phase == SHADER_PHASE_QUOTE) {
-		color = render_quote(uv, PC.phase_time);
-	} else if (PC.phase == SHADER_PHASE_BIG_BANG) {
-		// Use phase-local time so the burst starts from pristine initial state.
-		color = render_bigbang(uv, PC.phase_time);
-	} else if (PC.phase == SHADER_PHASE_STAGE2) {
-		color = render_stage2(uv, t);
-	}
+	color = render_stage2(uv, t);
 
 	color = clamp(color, 0.0, 1.0);
 	imageStore(out_tex, ivec2(gid), vec4(color, 1.0));

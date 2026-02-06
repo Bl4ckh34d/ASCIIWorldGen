@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://d03lnguptqu7s"
+path="res://.godot/imported/intro_mycelium_sim.glsl-0688eb1d741bcaf5ae96a91a9669a566.res"
+
+[deps]
+
+source_file="res://shaders/intro_mycelium_sim.glsl"
+dest_files=["res://.godot/imported/intro_mycelium_sim.glsl-0688eb1d741bcaf5ae96a91a9669a566.res"]
+
+[params]
+

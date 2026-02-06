@@ -41,17 +41,24 @@ const BIG_BANG_SHAKE_RISE_SEC := 0.50
 const BIG_BANG_SHAKE_DECAY_SEC := 3.00
 const STAR_PROMPT_FADE_IN_SEC := 1.20
 const STAR_PROMPT_FADE_OUT_SEC := 0.95
-const SPACE_REVEAL_SEC := 1.10
+const SPACE_REVEAL_SEC := 4.80
 const CAMERA_PAN_SEC := 5.10
 const PLANET_PROMPT_FADE_IN_SEC := 0.95
 const PLANET_PROMPT_FADE_OUT_SEC := 0.95
 const PLANET_ZOOM_SEC := 1.95
 const TRANSITION_SEC := 0.18
 const SUN_PROMPT_PAN_PROGRESS := 0.45
+const GOLDILOCK_REFERENCE_SCALE := 2.35
+const GOLDILOCK_DISTANCE_SCALE := GOLDILOCK_REFERENCE_SCALE * 2.0
+const GOLDILOCK_SCREEN_CENTER_X := 0.50
+const GOLDILOCK_BAND_WIDTH_FACTOR := 0.30
+const GOLDILOCK_BAND_MIN_WIDTH_PX := 360.0
 
 var _phase: int = PHASE_QUOTE
 var _phase_time: float = 0.0
 var _intro_total_time: float = 0.0
+var _sun_prompt_pan_progress: float = SUN_PROMPT_PAN_PROGRESS
+var _camera_pan_duration: float = CAMERA_PAN_SEC
 
 var _star_name: String = ""
 var _planet_name: String = ""
@@ -118,7 +125,7 @@ func _process(delta: float) -> void:
 			if _phase_time >= SPACE_REVEAL_SEC:
 				_set_phase(PHASE_STAR_PROMPT_FADE_IN)
 		PHASE_CAMERA_PAN:
-			if _phase_time >= CAMERA_PAN_SEC:
+			if _phase_time >= _camera_pan_duration:
 				_set_phase(PHASE_PLANET_PLACE)
 		PHASE_PLANET_PROMPT_FADE_IN:
 			if _phase_time >= PLANET_PROMPT_FADE_IN_SEC:
@@ -217,7 +224,7 @@ func _create_ui() -> void:
 	_quote_author_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_quote_author_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_quote_author_label.autowrap_mode = TextServer.AUTOWRAP_OFF
-	_quote_author_label.add_theme_font_size_override("font_size", 29)
+	_quote_author_label.add_theme_font_size_override("font_size", 22)
 	_quote_author_label.add_theme_color_override("font_color", Color(0.90, 0.92, 1.0, 1.0))
 	add_child(_quote_author_label)
 
@@ -233,7 +240,7 @@ func _create_ui() -> void:
 	_planet_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_planet_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_planet_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_planet_hint_label.add_theme_font_size_override("font_size", 7)
+	_planet_hint_label.add_theme_font_size_override("font_size", 18)
 	_planet_hint_label.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0, 1.0))
 	add_child(_planet_hint_label)
 
@@ -242,23 +249,47 @@ func _update_layout() -> void:
 	var h: float = max(1.0, size.y)
 
 	if _quote_label != null:
-		_quote_label.position = Vector2(w * 0.01, h * 0.26)
+		_quote_label.position = Vector2(w * 0.01, h * 0.325)
 		_quote_label.size = Vector2(w * 0.98, h * 0.30)
 	if _quote_author_label != null:
-		_quote_author_label.position = Vector2(w * 0.56, h * 0.452)
+		_quote_author_label.position = Vector2(w * 0.60, h * 0.54)
 		_quote_author_label.size = Vector2(w * 0.40, h * 0.08)
 	if _terminal_label != null:
-		_terminal_label.position = Vector2(w * 0.10, h * 0.28)
-		_terminal_label.size = Vector2(w * 0.80, h * 0.36)
+		_terminal_label.position = Vector2(w * 0.16, h * 0.28)
+		_terminal_label.size = Vector2(w * 0.74, h * 0.36)
 	if _planet_hint_label != null:
-		_planet_hint_label.position = Vector2(w * 0.08, h * 0.82)
-		_planet_hint_label.size = Vector2(w * 0.84, h * 0.14)
+		_planet_hint_label.position = Vector2(w * 0.08, h * 0.78)
+		_planet_hint_label.size = Vector2(w * 0.84, h * 0.18)
 
 	_sun_start_center = Vector2(w * 1.38, h * 0.50)
-	_sun_end_center = Vector2(-w * 0.58, h * 0.50)
+	_sun_end_center = Vector2.ZERO
 	_sun_radius = h * 0.95
-	_zone_inner_radius = w * 1.08
-	_zone_outer_radius = w * 1.36
+	var base_inner: float = w * 1.08
+	var base_outer: float = w * 1.36
+	var base_mid_gap: float = max(0.0, ((base_inner + base_outer) * 0.5) - _sun_radius)
+	var gap_scale: float = max(1.0, GOLDILOCK_DISTANCE_SCALE)
+	var zone_mid_radius: float = _sun_radius + base_mid_gap * gap_scale
+	var band_width: float = max(GOLDILOCK_BAND_MIN_WIDTH_PX, w * GOLDILOCK_BAND_WIDTH_FACTOR)
+	var band_half: float = band_width * 0.5
+	_zone_inner_radius = max(_sun_radius + 4.0, zone_mid_radius - band_half)
+	_zone_outer_radius = _zone_inner_radius + band_width
+	zone_mid_radius = (_zone_inner_radius + _zone_outer_radius) * 0.5
+	_sun_end_center = Vector2(w * GOLDILOCK_SCREEN_CENTER_X - zone_mid_radius, h * 0.50)
+	var pan_denom: float = _sun_end_center.x - _sun_start_center.x
+	if absf(pan_denom) > 0.0001:
+		_sun_prompt_pan_progress = clamp((w * 0.5 - _sun_start_center.x) / pan_denom, 0.0, 1.0)
+	else:
+		_sun_prompt_pan_progress = SUN_PROMPT_PAN_PROGRESS
+	var ref_mid_radius: float = _sun_radius + base_mid_gap * GOLDILOCK_REFERENCE_SCALE
+	var ref_end_x: float = w * GOLDILOCK_SCREEN_CENTER_X - ref_mid_radius
+	var ref_denom: float = ref_end_x - _sun_start_center.x
+	var ref_prompt_pan: float = SUN_PROMPT_PAN_PROGRESS
+	if absf(ref_denom) > 0.0001:
+		ref_prompt_pan = clamp((w * 0.5 - _sun_start_center.x) / ref_denom, 0.0, 1.0)
+	var ref_remaining: float = absf(ref_denom) * max(0.0, 1.0 - ref_prompt_pan)
+	var cur_remaining: float = absf(pan_denom) * max(0.0, 1.0 - _sun_prompt_pan_progress)
+	var pan_ratio: float = cur_remaining / max(1.0, ref_remaining)
+	_camera_pan_duration = CAMERA_PAN_SEC * clamp(pan_ratio, 1.0, 3.5)
 	_orbit_y = h * 0.50
 	_update_orbit_bounds()
 
@@ -325,11 +356,8 @@ func _update_ui_state() -> void:
 		_terminal_label.text = _build_prompt_display_text()
 		_terminal_label.modulate = Color(1.0, 0.97, 0.90, p_alpha)
 
-	_planet_hint_label.visible = (_phase == PHASE_PLANET_PLACE)
-	if _phase == PHASE_PLANET_PLACE:
-		_planet_hint_label.text = _build_planet_hint_text()
-	else:
-		_planet_hint_label.text = ""
+	_planet_hint_label.visible = false
+	_planet_hint_label.text = ""
 
 func _is_prompt_visible_phase() -> bool:
 	return (
@@ -477,7 +505,7 @@ func _update_background_gpu() -> void:
 		pan_progress,
 		zoom_scale,
 		_planet_x,
-			_planet_preview_x,
+		_planet_preview_x,
 		 _orbit_y,
 		_orbit_x_min,
 		_orbit_x_max,
@@ -560,12 +588,12 @@ func _get_space_alpha() -> float:
 func _get_pan_progress() -> float:
 	if _phase == PHASE_SPACE_REVEAL:
 		var t: float = _ease_in_out(clamp(_phase_time / SPACE_REVEAL_SEC, 0.0, 1.0))
-		return lerp(0.0, SUN_PROMPT_PAN_PROGRESS, t)
+		return lerp(0.0, _sun_prompt_pan_progress, t)
 	if _phase == PHASE_STAR_PROMPT_FADE_IN or _phase == PHASE_STAR_PROMPT_INPUT or _phase == PHASE_STAR_PROMPT_FADE_OUT:
-		return SUN_PROMPT_PAN_PROGRESS
+		return _sun_prompt_pan_progress
 	if _phase == PHASE_CAMERA_PAN:
-		var t: float = _ease_in_out(clamp(_phase_time / CAMERA_PAN_SEC, 0.0, 1.0))
-		return lerp(SUN_PROMPT_PAN_PROGRESS, 1.0, t)
+		var t: float = _ease_in_out(clamp(_phase_time / max(0.0001, _camera_pan_duration), 0.0, 1.0))
+		return lerp(_sun_prompt_pan_progress, 1.0, t)
 	if _phase >= PHASE_PLANET_PLACE:
 		return 1.0
 	return 0.0

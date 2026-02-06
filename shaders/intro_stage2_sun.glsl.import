@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cwp3fww4gwbub"
+path="res://.godot/imported/intro_stage2_sun.glsl-d464f1b0bcb88cd6c711a0b36918cf9f.res"
+
+[deps]
+
+source_file="res://shaders/intro_stage2_sun.glsl"
+dest_files=["res://.godot/imported/intro_stage2_sun.glsl-d464f1b0bcb88cd6c711a0b36918cf9f.res"]
+
+[params]
+

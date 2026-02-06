@@ -17,8 +17,8 @@ func reset() -> void:
 	_pending_world_config.clear()
 	_intro_seed_string = ""
 
-func set_intro_selection(name: String, orbit_value: float, world_name: String = "") -> void:
-	star_name = _sanitize_star_name(name)
+func set_intro_selection(star_input: String, orbit_value: float, world_name: String = "") -> void:
+	star_name = _sanitize_star_name(star_input)
 	planet_name = _sanitize_planet_name(world_name)
 	orbit_norm = clamp(float(orbit_value), 0.0, 1.0)
 	_intro_seed_string = "%s|%s|orbit=%.4f" % [star_name, planet_name, orbit_norm]
@@ -40,16 +40,16 @@ func consume_world_config() -> Dictionary:
 func get_intro_seed_string() -> String:
 	return _intro_seed_string
 
-func _sanitize_star_name(name: String) -> String:
-	var cleaned: String = name.strip_edges()
+func _sanitize_star_name(raw_value: String) -> String:
+	var cleaned: String = raw_value.strip_edges()
 	if cleaned.is_empty():
 		return "Unnamed Star"
 	if cleaned.length() > 64:
 		return cleaned.substr(0, 64)
 	return cleaned
 
-func _sanitize_planet_name(name: String) -> String:
-	var cleaned: String = name.strip_edges()
+func _sanitize_planet_name(raw_value: String) -> String:
+	var cleaned: String = raw_value.strip_edges()
 	if cleaned.is_empty():
 		return "Unnamed World"
 	if cleaned.length() > 64:
