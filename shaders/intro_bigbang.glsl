@@ -1,7 +1,7 @@
 #[compute]
 #version 450
 // File: res://shaders/intro_bigbang.glsl
-// GPU intro effect for quote + big bang + scene-2 (sun/corona/planet) phases.
+// GPU intro effect for quote + big-bang phases.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -42,8 +42,6 @@ layout(push_constant) uniform Params {
 const float TAU = 6.28318530718;
 const int SHADER_PHASE_QUOTE = 0;
 const int SHADER_PHASE_BIG_BANG = 1;
-const int SHADER_PHASE_STAGE2 = 2;
-const int INTRO_PHASE_PLANET_PLACE = 7;
 
 float hash12(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -140,142 +138,6 @@ float noise4q(vec4 x) {
 	return r * r * (3.0 - 2.0 * r);
 }
 
-mat3 sun_corona_matrix(float anim) {
-	vec2 rotate = vec2(anim * 0.025, -0.6);
-	vec2 sins = sin(rotate);
-	vec2 coss = cos(rotate);
-	mat3 mr = mat3(
-		vec3(coss.x, 0.0, sins.x),
-		vec3(0.0, 1.0, 0.0),
-		vec3(-sins.x, 0.0, coss.x)
-	);
-	return mat3(
-		vec3(1.0, 0.0, 0.0),
-		vec3(0.0, coss.y, sins.y),
-		vec3(0.0, -sins.y, coss.y)
-	) * mr;
-}
-
-float corona_ring(vec3 ray, vec3 pos, float r, float size) {
-	float b = dot(ray, pos);
-	float c = dot(pos, pos) - b * b;
-	return max(0.0, (1.0 - size * abs(r - sqrt(max(0.0, c)))));
-}
-
-float corona_ring_ray_noise(vec3 ray, vec3 pos, float r, float size, mat3 mr, float anim) {
-	float b = dot(ray, pos);
-	vec3 pr = ray * b - pos;
-	float c = length(pr);
-	pr *= mr;
-	pr = normalize(pr + vec3(1e-6));
-	float s = max(0.0, (1.0 - size * abs(r - c)));
-	float nd = noise4q(vec4(pr * 1.0, -anim + c)) * 2.0;
-	nd = pow(nd, 2.0);
-	float n = 0.4;
-	float ns = 1.0;
-	if (c > r) {
-		n = noise4q(vec4(pr * 10.0, -anim + c));
-		ns = noise4q(vec4(pr * 50.0, -anim * 2.5 + c * 2.0)) * 2.0;
-	}
-	n = n * n * nd * ns;
-	return pow(s, 4.0) + s * s * n;
-}
-
-float corona_ray_fbm(vec2 p) {
-	float z = 2.0;
-	float rz = -0.05;
-	mat2 m2 = mat2(0.80, 0.60, -0.60, 0.80);
-	p *= 0.25;
-	for (int i = 1; i < 6; i++) {
-		rz += abs((value_noise(p * 0.01) - 0.5) * 2.0) / z;
-		z *= 2.0;
-		p = p * 2.0 * m2;
-	}
-	return rz;
-}
-
-vec3 shadertoy_corona(vec2 np, float t) {
-	const float ray_brightness = 10.0;
-	const float gamma = 5.0;
-	const float ray_density = 4.5;
-	const vec3 ray_color_div = vec3(4.0, 1.0, 0.3);
-
-	float rn = length(np);
-	vec2 ndir = np / max(0.0001, rn);
-	float tt = -t * 0.33;
-	float x = dot(ndir, vec2(0.5, 0.0)) + tt;
-	float y = dot(ndir, vec2(0.0, 0.5)) + tt;
-
-	float val = corona_ray_fbm(vec2(rn + y * ray_density, rn + x * ray_density));
-	float g = gamma * 0.02 - 0.1;
-	val = smoothstep(g, ray_brightness + g + 0.001, val);
-	val = sqrt(max(0.0, val));
-
-	vec3 col = vec3(1.0) - (val / ray_color_div);
-	col = clamp(col, 0.0, 1.0);
-
-	// Start right on the solar limb, then stretch outward with a long decay.
-	float limb_fill = smoothstep(0.84, 1.02, rn);
-	float far_decay = 1.0 - smoothstep(2.8, 3.9, rn);
-	float density = limb_fill * far_decay;
-	return col * density;
-}
-
-float bump_soft_profile(float h) {
-	h = clamp(h, 0.0, 1.0);
-	float s = smoothstep(0.14, 0.90, h);
-	return mix(h, s, 0.72);
-}
-
-vec2 sun_sine_warp(vec2 p, float t) {
-	p = (p + 3.0) * 3.2;
-	float tw = t * 0.18 + sin(t * 0.07) * 0.35;
-	for (int i = 0; i < 3; i++) {
-		p += cos(p.yx * 2.0 + vec2(tw, 1.57)) / 3.6;
-		p += sin(p.yx * 0.78 + tw + vec2(1.57, 0.0)) / 2.9;
-		p *= 1.18;
-	}
-	p += fract(sin(p + vec2(13.0, 7.0)) * 500000.0) * 0.008 - 0.004;
-	return mod(p, 2.0) - 1.0;
-}
-
-float honey_cells(vec2 p, float t) {
-	float slow_t = t * 0.16;
-	vec2 q = p * 2.25;
-	q += vec2(sin(slow_t * 0.90), cos(slow_t * 0.70)) * 0.22;
-	float w0 = sin(q.x + slow_t * 0.35);
-	float w1 = sin(dot(q, vec2(0.5, 0.8660254)) - slow_t * 0.28 + 1.10);
-	float w2 = sin(dot(q, vec2(-0.5, 0.8660254)) + slow_t * 0.24 - 0.90);
-	float tri = (w0 + w1 + w2) / 3.0;
-	float cell = smoothstep(0.10, 0.88, 1.0 - abs(tri));
-	float pocket = fbm(q * 0.85 + vec2(2.3, -1.4) + vec2(slow_t * 0.33, -slow_t * 0.27));
-	return clamp(cell * 0.72 + pocket * 0.28, 0.0, 1.0);
-}
-
-float sun_bump_height(vec2 p, float t) {
-	float slow_t = t * 0.52;
-	float h = length(sun_sine_warp(p, slow_t)) * 0.7071;
-	h = bump_soft_profile(h);
-	float broad = fbm(p * 0.65 + vec2(slow_t * 0.05, -slow_t * 0.04));
-	float fine = fbm(p * 1.9 + vec2(-slow_t * 0.09, slow_t * 0.07));
-	float comb = honey_cells(p * 1.15, slow_t);
-	float panta0 = noise4q(vec4(vec3(p * 1.10, broad * 2.20 + 0.37), slow_t * 0.38));
-	float panta1 = noise4q(vec4(vec3(p * 4.60 + vec2(83.23, 34.34), comb * 3.10 + 67.453), slow_t * 1.05));
-	h = mix(h, broad, 0.18);
-	h = mix(h, fine, 0.08);
-	h = mix(h, comb, 0.26);
-	h = mix(h, panta0, 0.24);
-	h = mix(h, panta1 * panta1, 0.14);
-	return smoothstep(0.08, 0.96, clamp(h, 0.0, 1.0));
-}
-
-vec2 sun_spherical_warp_coord(vec3 n, float t) {
-	vec2 p = n.xy / max(0.30, n.z + 0.56);
-	p += flow_dir(p * 1.45, t * 0.12) * 0.020;
-	p += vec2(sin(t * 0.08 + p.y * 1.2), cos(t * 0.07 + p.x * 1.1)) * 0.008;
-	return p;
-}
-
 float filament_field(vec2 p, float t, float scale, float thickness) {
 	vec2 q = p * scale;
 	float n0 = fbm(q + vec2(t * 0.17, -t * 0.13));
@@ -295,7 +157,7 @@ float star_layer(vec2 uv, float t, float scale, float pan_shift, float threshold
 	return s * tw;
 }
 
-vec3 stage2_star_sky(vec2 uv, float t, float pan, float alpha) {
+vec3 intro_star_sky(vec2 uv, float t, float pan, float alpha) {
 	float l0 = star_layer(uv, t, 0.70, pan * 0.035, 0.9982, vec2(17.3, 41.7));
 	float l1 = star_layer(uv, t, 1.25, pan * 0.080, 0.9988, vec2(51.8, 13.4));
 	float l2 = star_layer(uv, t, 1.95, pan * 0.160, 0.9992, vec2(9.6, 77.2));
@@ -500,170 +362,12 @@ vec3 render_bigbang(vec2 uv, float t) {
 	// Keep twinkle phase continuous across scene-1 -> scene-2 transition.
 	float star_twinkle_t = PC.total_time;
 
-	vec3 base_sky = 1.0 - exp(-stage2_star_sky(uv, star_twinkle_t, 0.0, 1.0) * 1.20);
-	vec3 burst_sky = 1.0 - exp(-stage2_star_sky(uv_burst, star_twinkle_t, 0.0, 1.18) * 1.25);
+	vec3 base_sky = 1.0 - exp(-intro_star_sky(uv, star_twinkle_t, 0.0, 1.0) * 1.20);
+	vec3 burst_sky = 1.0 - exp(-intro_star_sky(uv_burst, star_twinkle_t, 0.0, 1.18) * 1.25);
 	vec3 stars_mix = mix(burst_sky, base_sky, drift_blend);
 	float persistent_reveal = smoothstep(1.20, 1.90, progress_raw);
 	col += (base_sky * persistent_reveal * 1.12 + stars_mix * burst_weight * 1.05) * star_gate;
 
-	return col;
-}
-
-vec2 apply_zoom_uv(vec2 uv) {
-	float z = max(1.0, PC.zoom_scale);
-	float px = PC.planet_x;
-	if (PC.intro_phase == INTRO_PHASE_PLANET_PLACE && PC.planet_has_position < 0.5) {
-		px = PC.planet_preview_x;
-	}
-	vec2 center_uv = vec2(px / max(1.0, float(PC.width)), PC.orbit_y / max(1.0, float(PC.height)));
-	return center_uv + (uv - center_uv) / z;
-}
-
-vec3 render_stage2(vec2 uv, float t) {
-	float space = clamp(PC.space_alpha, 0.0, 1.0);
-	float pan = clamp(PC.pan_progress, 0.0, 1.0);
-	vec2 uvw = apply_zoom_uv(uv);
-	vec2 aspect = vec2(float(PC.width) / max(1.0, float(PC.height)), 1.0);
-
-	vec3 col = stage2_star_sky(uvw, t, pan, space);
-
-	vec2 sun_px = mix(vec2(PC.sun_start_x, PC.sun_start_y), vec2(PC.sun_end_x, PC.sun_end_y), pan);
-	vec2 sun_uv = sun_px / vec2(float(PC.width), float(PC.height));
-	vec2 rel = (uvw - sun_uv) * aspect;
-	float r = length(rel);
-	float sun_r = PC.sun_radius / max(1.0, float(PC.height));
-	// Reveal the sun early in the starfield->sun move so it doesn't look like
-	// a late opacity fade while the camera is already panning.
-	float sun_reveal = space * smoothstep(0.00, 0.12, pan);
-	// Broad backlight behind the sun/corona so thin plasma regions still read hot.
-	float sun_dist = r / max(0.0001, sun_r);
-	float back_halo_wide = exp(-pow(sun_dist * 10.0, 2.0));
-	float back_halo_mid = exp(-pow(sun_dist * 16.0, 2.0));
-	float back_halo_edge = smoothstep(0.93, 1.03, sun_dist);
-	vec3 back_halo = vec3(1.0, 0.40, 0.12) * back_halo_wide * 0.03;
-	back_halo += vec3(1.0, 0.72, 0.26) * back_halo_mid * 0.02;
-	col += back_halo * sun_reveal * back_halo_edge;
-
-	float sun_body = smoothstep(sun_r + 0.0025, sun_r - 0.0015, r);
-	vec2 np = rel / max(0.0001, sun_r);
-	float np_len2 = dot(np, np);
-	float hemisphere = sqrt(max(0.0, 1.0 - min(np_len2, 1.0)));
-	vec3 sphere_n = normalize(vec3(np, hemisphere));
-	vec2 warp_p = sun_spherical_warp_coord(sphere_n, t) * 3.0;
-	float h = sun_bump_height(warp_p, t * 0.34);
-	float e = 0.018;
-	float hx = sun_bump_height(warp_p + vec2(e, 0.0), t * 0.34) - h;
-	float hy = sun_bump_height(warp_p + vec2(0.0, e), t * 0.34) - h;
-	vec3 tangent_x = normalize(vec3(1.0, 0.0, -sphere_n.x / max(0.10, sphere_n.z)));
-	vec3 tangent_y = normalize(vec3(0.0, 1.0, -sphere_n.y / max(0.10, sphere_n.z)));
-	float bump_strength = 1.18;
-	vec3 surf_n = normalize(sphere_n - tangent_x * hx * bump_strength - tangent_y * hy * bump_strength);
-	vec3 light_dir = normalize(vec3(cos(t * 0.18) * 0.28, sin(t * 0.14) * 0.22, 0.93));
-	float ndl = clamp(dot(surf_n, light_dir), 0.0, 1.0);
-	float fres = pow(1.0 - clamp(surf_n.z, 0.0, 1.0), 2.2);
-	float flow0 = filament_field(warp_p * 0.95 + flow_dir(warp_p * 1.2, t * 0.24) * 0.28, t * 0.24, 5.8, 0.34);
-	float flow1 = filament_field(rot2(0.52) * warp_p * 1.20 + vec2(-t * 0.08, t * 0.06), t * 0.19, 7.2, 0.32);
-	float honey_mask = honey_cells(warp_p * 0.92, t * 0.38);
-	float star_lo = noise4q(vec4(sphere_n * 3.60 + vec3(0.0), t * 0.22));
-	star_lo = pow(min(1.0, star_lo * 2.4), 2.0);
-	float star_hi = noise4q(vec4(sphere_n * 15.0 + vec3(83.23, 34.34, 67.453), t * 0.74));
-	star_hi = min(1.0, star_hi * 2.2);
-	float veins = smoothstep(0.22, 0.84, mix(flow0, flow1, 0.36));
-	veins = mix(veins, honey_mask, 0.34);
-	veins = mix(veins, star_hi, 0.36);
-	float core_grad = exp(-r / max(0.0001, sun_r * 0.55));
-	float limb = smoothstep(sun_r * 0.58, sun_r * 0.995, r);
-
-	vec3 sun_deep = vec3(0.47, 0.07, 0.01);
-	vec3 sun_mid = vec3(0.86, 0.28, 0.05);
-	vec3 sun_hot = vec3(1.0, 0.62, 0.14);
-	vec3 sun_core = vec3(1.0, 0.90, 0.70);
-	vec3 panta_lo_col = mix(vec3(1.0, 0.82, 0.20), vec3(1.0), pow(star_lo, 26.0)) * star_lo;
-	vec3 panta_hi_col = mix(
-		mix(vec3(1.0, 0.26, 0.05), vec3(1.0, 0.28, 0.52), pow(star_hi, 2.0)),
-		vec3(1.0),
-		pow(star_hi, 10.0)
-	) * star_hi;
-	float surf_extra = noise4q(vec4(sphere_n * 42.0 + vec3(45.78, 113.04, 28.957), t * 0.58));
-	surf_extra = smoothstep(0.36, 0.96, surf_extra);
-	vec3 surf_extra_col = mix(vec3(0.94, 0.24, 0.04), vec3(1.0, 0.78, 0.20), surf_extra);
-	vec3 base_col = mix(sun_deep, sun_mid, h);
-	base_col = mix(base_col, sun_hot, clamp(h * 0.70 + veins * 0.45, 0.0, 1.0));
-	vec3 plasma = base_col + panta_lo_col * 0.22 + panta_hi_col * 0.12;
-	plasma += surf_extra_col * surf_extra * (0.06 + 0.10 * veins);
-	plasma = mix(plasma, sun_core, clamp(core_grad * 0.55 + pow(ndl, 3.5) * 0.45, 0.0, 1.0));
-	plasma += sun_hot * veins * 0.16;
-	plasma += sun_core * ndl * 0.18;
-	plasma += vec3(1.0, 0.82, 0.32) * fres * 0.28;
-	plasma *= 0.90 + ndl * 0.22;
-	plasma *= (1.0 + limb * 0.14);
-	plasma = 1.0 - exp(-plasma * 1.30);
-	col = mix(col, plasma, sun_body * sun_reveal);
-
-	vec2 p_cor = np * 0.70710678;
-	vec3 ray_cor = normalize(vec3(p_cor, 2.0));
-	vec3 pos_cor = vec3(0.0, 0.0, 3.0);
-	mat3 mr_cor = sun_corona_matrix(t);
-	float s3 = corona_ring_ray_noise(ray_cor, pos_cor, 0.96, 1.0, mr_cor, t);
-	vec3 cor_shell = mix(vec3(1.0, 0.6, 0.1), vec3(1.0, 0.95, 1.0), pow(s3, 3.0)) * s3;
-	vec3 cor_rays = shadertoy_corona(np * 1.35, t);
-	float outside_body = smoothstep(0.90, 1.01, length(np));
-	col += (cor_shell * 0.35 + cor_rays * 2.10) * sun_reveal * outside_body;
-
-	float inner = PC.zone_inner_radius / max(1.0, float(PC.height));
-	float outer = PC.zone_outer_radius / max(1.0, float(PC.height));
-	float bw = 0.0035;
-	float band = smoothstep(inner - bw, inner + bw, r) * (1.0 - smoothstep(outer - bw, outer + bw, r));
-	float band_reveal = sun_reveal * smoothstep(0.48, 1.0, pan);
-	float zone_t_r = clamp((r - inner) / max(0.0001, outer - inner), 0.0, 1.0);
-	// Keep gradient anchored to the radial band itself (no screen-space drift).
-	float zone_t = zone_t_r;
-	float zone_theta = atan(rel.y, rel.x);
-	float band_pattern = 0.92 + 0.08 * sin(zone_theta * 12.0 + zone_t * 8.0);
-	vec3 zone_hot = vec3(1.0, 0.30, 0.12);
-	vec3 zone_mid = vec3(1.0, 0.86, 0.28);
-	vec3 zone_cold = vec3(0.34, 0.64, 1.0);
-	float t_hot_mid = smoothstep(0.0, 0.5, zone_t);
-	float t_mid_cold = smoothstep(0.5, 1.0, zone_t);
-	vec3 hot_to_mid = mix(zone_hot, zone_mid, t_hot_mid);
-	vec3 mid_to_cold = mix(zone_mid, zone_cold, t_mid_cold);
-	vec3 zone_col = mix(hot_to_mid, mid_to_cold, step(0.5, zone_t));
-	col += zone_col * band * band_reveal * 0.36 * band_pattern;
-
-	if (PC.intro_phase >= INTRO_PHASE_PLANET_PLACE) {
-		float xpix = uvw.x * float(PC.width);
-		float ypix = uvw.y * float(PC.height);
-		float line = smoothstep(1.5, 0.2, abs(ypix - PC.orbit_y));
-		float seg = step(PC.orbit_x_min, xpix) * step(xpix, PC.orbit_x_max);
-		col += vec3(1.0, 0.93, 0.62) * line * seg * 0.72 * sun_reveal;
-
-		float px = PC.planet_x;
-		if (PC.intro_phase == INTRO_PHASE_PLANET_PLACE && PC.planet_has_position < 0.5) {
-			px = PC.planet_preview_x;
-		}
-		vec2 p_rel = vec2((xpix - px) / max(1.0, float(PC.height)), (ypix - PC.orbit_y) / max(1.0, float(PC.height)));
-		float pr = length(p_rel);
-		float p_rad = 14.0 / max(1.0, float(PC.height));
-		float p_mask = smoothstep(p_rad + 0.002, p_rad - 0.001, pr);
-		float p_noise = fbm(p_rel * 14.0 + vec2(t * 0.45, -t * 0.35));
-		float p_vein = filament_field(p_rel * 8.5 + vec2(t * 0.25, -t * 0.2), t * 0.3, 8.0, 0.24);
-		float p_core = exp(-pr / max(0.0001, p_rad * 0.55));
-		vec3 p_col = mix(vec3(0.55, 0.09, 0.03), vec3(1.0, 0.42, 0.10), p_noise);
-		p_col = mix(p_col, vec3(1.0, 0.72, 0.24), p_vein * 0.45);
-		p_col += vec3(1.0, 0.84, 0.42) * p_core * 0.24;
-		col = mix(col, p_col, p_mask);
-		float p_glow = exp(-max(0.0, pr - p_rad) * 45.0) * step(p_rad, pr);
-		col += vec3(1.0, 0.46, 0.14) * p_glow * 0.30;
-
-		if (PC.intro_phase == INTRO_PHASE_PLANET_PLACE) {
-			float pulse = 0.5 + 0.5 * sin(t * 4.0);
-			float ring = exp(-abs(pr - p_rad * 1.10) * 95.0);
-			col += vec3(1.0, 0.82, 0.35) * ring * (0.18 + 0.12 * pulse);
-		}
-	}
-
-	col *= space;
-	col = 1.0 - exp(-col * 1.20);
 	return col;
 }
 
@@ -673,7 +377,6 @@ void main() {
 		return;
 	}
 	vec2 uv = (vec2(gid) + vec2(0.5)) / vec2(float(PC.width), float(PC.height));
-	float t = PC.total_time;
 	vec3 color = vec3(0.0);
 
 	if (PC.phase == SHADER_PHASE_QUOTE) {
@@ -681,8 +384,6 @@ void main() {
 	} else if (PC.phase == SHADER_PHASE_BIG_BANG) {
 		// Use phase-local time so the burst starts from pristine initial state.
 		color = render_bigbang(uv, PC.phase_time);
-	} else if (PC.phase == SHADER_PHASE_STAGE2) {
-		color = render_stage2(uv, t);
 	}
 
 	color = clamp(color, 0.0, 1.0);

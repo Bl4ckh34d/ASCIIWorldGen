@@ -17,6 +17,7 @@ var _myc_pipeline: RID
 var _texture_rid: RID
 var _myc_tex_a: RID
 var _myc_tex_b: RID
+var _corona_noise_tex: RID
 var _texture: Texture2DRD
 var _width: int = 0
 var _height: int = 0
@@ -93,6 +94,48 @@ func _create_storage_texture(w: int, h: int) -> RID:
 
 	var view := RDTextureView.new()
 	return _rd.texture_create(fmt, view)
+
+func _hash_noise_2d(x: int, y: int) -> float:
+	var n: int = x * 1973 + y * 9277 + 0x7F4A7C15
+	n = ((n << 13) ^ n)
+	var nn: int = n * (n * n * 15731 + 789221) + 1376312589
+	return float(nn & 0x7fffffff) / 2147483647.0
+
+func _create_corona_noise_texture(w: int, h: int) -> RID:
+	var fmt := RDTextureFormat.new()
+	fmt.format = RenderingDevice.DATA_FORMAT_R8G8B8A8_UNORM
+	fmt.width = w
+	fmt.height = h
+	fmt.depth = 1
+	fmt.array_layers = 1
+	fmt.mipmaps = 1
+	fmt.usage_bits = RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
+
+	var pixels := PackedByteArray()
+	pixels.resize(w * h * 4)
+	for y in range(h):
+		for x in range(w):
+			var n0: float = _hash_noise_2d(x, y)
+			var n1: float = _hash_noise_2d(x >> 1, y >> 1)
+			var n2: float = _hash_noise_2d(x >> 2, y >> 2)
+			var g: int = int(clamp((n0 * 0.70 + n1 * 0.22 + n2 * 0.08) * 255.0, 0.0, 255.0))
+			var i: int = (y * w + x) * 4
+			pixels[i] = g
+			pixels[i + 1] = g
+			pixels[i + 2] = g
+			pixels[i + 3] = 255
+
+	var view := RDTextureView.new()
+	var data: Array = [pixels]
+	return _rd.texture_create(fmt, view, data)
+
+func _ensure_corona_noise_texture() -> bool:
+	if _corona_noise_tex.is_valid():
+		return true
+	if _rd == null:
+		return false
+	_corona_noise_tex = _create_corona_noise_texture(1024, 512)
+	return _corona_noise_tex.is_valid()
 
 func _free_rid_if_valid(rid: RID) -> RID:
 	if _rd != null and rid.is_valid():
@@ -291,6 +334,15 @@ func render(
 	if not active_shader.is_valid() or not active_pipeline.is_valid():
 		return null
 
+	if phase == 2:
+		if not _ensure_corona_noise_texture():
+			return null
+		var noise_uniform := RDUniform.new()
+		noise_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+		noise_uniform.binding = 2
+		noise_uniform.add_id(_corona_noise_tex)
+		uniforms.append(noise_uniform)
+
 	var u_set := _rd.uniform_set_create(uniforms, active_shader, 0)
 	if not u_set.is_valid():
 		return null
@@ -358,6 +410,8 @@ func _notification(what: int) -> void:
 			_rd.free_rid(_myc_tex_a)
 		if _myc_tex_b.is_valid():
 			_rd.free_rid(_myc_tex_b)
+		if _corona_noise_tex.is_valid():
+			_rd.free_rid(_corona_noise_tex)
 		if _pipeline.is_valid():
 			_rd.free_rid(_pipeline)
 		if _shader.is_valid():
@@ -373,6 +427,7 @@ func _notification(what: int) -> void:
 	_texture_rid = RID()
 	_myc_tex_a = RID()
 	_myc_tex_b = RID()
+	_corona_noise_tex = RID()
 	_pipeline = RID()
 	_shader = RID()
 	_myc_pipeline = RID()

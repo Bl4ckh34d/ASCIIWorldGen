@@ -7,6 +7,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(rgba32f, set = 0, binding = 0) uniform image2D out_tex;
 layout(rgba32f, set = 0, binding = 1) uniform readonly image2D mycelium_tex;
+layout(rgba8, set = 0, binding = 2) uniform readonly image2D corona_noise_tex;
 
 layout(push_constant) uniform Params {
 	int width;
@@ -185,13 +186,24 @@ float corona_ring_ray_noise(vec3 ray, vec3 pos, float r, float size, mat3 mr, fl
 	return pow(s, 4.0) + s * s * n;
 }
 
+float corona_noise_texture(vec2 x) {
+	ivec2 sz = imageSize(corona_noise_tex);
+	if (sz.x <= 0 || sz.y <= 0) {
+		return 0.5;
+	}
+	vec2 uv = fract(x * 0.01);
+	ivec2 pix = ivec2(floor(uv * vec2(sz)));
+	pix = clamp(pix, ivec2(0), sz - ivec2(1));
+	return imageLoad(corona_noise_tex, pix).r;
+}
+
 float corona_ray_fbm(vec2 p) {
 	float z = 2.0;
 	float rz = -0.05;
 	mat2 m2 = mat2(0.80, 0.60, -0.60, 0.80);
 	p *= 0.25;
 	for (int i = 1; i < 6; i++) {
-		rz += abs((value_noise(p * 0.01) - 0.5) * 2.0) / z;
+		rz += abs((corona_noise_texture(p) - 0.5) * 2.0) / z;
 		z *= 2.0;
 		p = p * 2.0 * m2;
 	}
@@ -199,30 +211,60 @@ float corona_ray_fbm(vec2 p) {
 }
 
 vec3 shadertoy_corona(vec2 np, float t) {
+	// Nimitz-style settings/flow.
 	const float ray_brightness = 10.0;
 	const float gamma = 5.0;
 	const float ray_density = 4.5;
-	const vec3 ray_color_div = vec3(4.0, 1.0, 0.3);
+	const float curvature = 15.0;
+	const float size = 0.1;
 
 	float rn = length(np);
-	vec2 ndir = np / max(0.0001, rn);
-	float tt = -t * 0.33;
-	float x = dot(ndir, vec2(0.5, 0.0)) + tt;
-	float y = dot(ndir, vec2(0.0, 0.5)) + tt;
+	vec2 ndir = np / max(1e-5, rn);
+	// Anchor corona radius to the sun limb instead of the center point.
+	float edge_r = max(0.0, rn - 1.0);
+	vec2 uv = ndir * (edge_r * curvature * size);
+	float r = length(uv);
+	vec2 tangent = vec2(-ndir.y, ndir.x);
+	// Build a non-linear tangential flow field so rays bend as they travel out.
+	float bend0 = corona_noise_texture(ndir * 91.0 + vec2(edge_r * 33.0 + t * 0.23, edge_r * 19.0 - t * 0.17));
+	float bend1 = corona_noise_texture(rot2(0.83) * ndir * 67.0 + vec2(edge_r * 21.0 - t * 0.19, edge_r * 29.0 + t * 0.13));
+	float bend2 = corona_noise_texture(rot2(-0.61) * ndir * 123.0 + vec2(edge_r * 41.0 + t * 0.11, -edge_r * 37.0 - t * 0.15));
+	float bend = (bend0 - 0.5) * 1.10 + (bend1 - 0.5) * 0.72 + (bend2 - 0.5) * 0.44;
+	float bend_gain = 0.22 + smoothstep(0.0, 1.1, edge_r) * 1.35;
+	vec2 ray_dir = normalize(rot2(bend * bend_gain) * ndir);
 
-	float val = corona_ray_fbm(vec2(rn + y * ray_density, rn + x * ray_density));
+	// Radius-dependent lateral drift to avoid perfectly straight spokes.
+	float lateral0 = corona_noise_texture(ray_dir * 73.0 + vec2(edge_r * 55.0 - t * 0.27, edge_r * 18.0 + t * 0.21)) - 0.5;
+	float lateral1 = corona_noise_texture(ray_dir.yx * 59.0 + vec2(-edge_r * 27.0 + t * 0.19, edge_r * 47.0 - t * 0.14)) - 0.5;
+	vec2 lateral = vec2(lateral0, lateral1) * (0.32 + edge_r * 0.88);
+	float tt = -t * 0.33;
+	float x = dot(ray_dir, vec2(0.5, 0.0)) + tt;
+	float y = dot(ray_dir, vec2(0.0, 0.5)) + tt;
+	vec2 sample_p = vec2(r + y * ray_density, r + x * ray_density);
+	sample_p += vec2(dot(lateral, tangent), dot(lateral, ray_dir));
+	sample_p += tangent * (bend * edge_r * 0.42);
+	float val = corona_ray_fbm(sample_p);
+	float val2 = corona_ray_fbm(sample_p * 1.31 + vec2(13.7, -9.2) + ray_dir * 0.75 + tangent * (bend * 0.58));
+	float val3 = corona_ray_fbm(rot2(0.47) * sample_p * 0.87 + vec2(-7.9, 5.4));
+	val = max(val, val2 * 0.93);
+	val = mix(val, val3, 0.24);
 	float g = gamma * 0.02 - 0.1;
 	val = smoothstep(g, ray_brightness + g + 0.001, val);
 	val = sqrt(max(0.0, val));
-
-	vec3 col = vec3(1.0) - (val / ray_color_div);
-	col = clamp(col, 0.0, 1.0);
-
-	// Start right on the solar limb, then stretch outward with a long decay.
-	float limb_fill = smoothstep(0.84, 1.02, rn);
-	float far_decay = 1.0 - smoothstep(2.8, 3.9, rn);
-	float density = limb_fill * far_decay;
-	return col * density;
+	// Keep sharp rays, but add dense filament occupancy for a heavier plasma look.
+	float ray = smoothstep(0.44, 0.95, val);
+	ray = pow(ray, 1.20);
+	float soft = smoothstep(0.26, 0.88, val) * 0.58;
+	float plume = smoothstep(0.62, 0.98, val) * smoothstep(0.04, 0.85, edge_r);
+	float hot = smoothstep(0.86, 1.0, val);
+	vec3 cor_deep = vec3(0.98, 0.24, 0.02);
+	vec3 cor_hot = vec3(1.0, 0.72, 0.08);
+	vec3 cor_core = vec3(1.0, 0.84, 0.40);
+	vec3 col = mix(cor_deep, cor_hot, clamp(ray + soft * 0.4, 0.0, 1.0));
+	col = mix(col, cor_core, hot * 0.85);
+	col += cor_hot * plume * 0.52;
+	col *= (ray + soft + plume * 0.35);
+	return col;
 }
 
 float bump_soft_profile(float h) {
@@ -497,10 +539,12 @@ vec3 render_stage2(vec2 uv, float t) {
 	float sun_reveal = space * smoothstep(0.00, 0.12, pan);
 	float sun_dist = r / max(0.0001, sun_r);
 	// Tight back-glow layer behind sun/corona (kept intentionally compact).
-	float back_glow_inner = exp(-pow(sun_dist * 3.6, 2.0));
-	float back_glow_outer = exp(-pow(sun_dist * 2.1, 2.0));
-	vec3 back_glow = vec3(1.0, 0.42, 0.10) * back_glow_inner * 0.14;
-	back_glow += vec3(1.0, 0.72, 0.22) * back_glow_outer * 0.08;
+	float back_glow_inner = exp(-pow(sun_dist * 2.7, 2.0));
+	float back_glow_outer = exp(-pow(sun_dist * 1.6, 2.0));
+	float back_glow_limb = exp(-abs(sun_dist - 1.0) * 15.0);
+	vec3 back_glow = vec3(1.0, 0.84, 0.18) * back_glow_inner * 0.24;
+	back_glow += vec3(1.0, 0.92, 0.32) * back_glow_outer * 0.17;
+	back_glow += vec3(1.0, 0.74, 0.24) * back_glow_limb * 0.16;
 	col += back_glow * sun_reveal;
 
 	float sun_body = smoothstep(sun_r + 0.0025, sun_r - 0.0015, r);
@@ -550,17 +594,34 @@ vec3 render_stage2(vec2 uv, float t) {
 	plasma = 1.0 - exp(-plasma * 1.34);
 	col = mix(col, plasma, sun_body * sun_reveal);
 
+	float rn = length(np);
+	vec3 cor_rays = shadertoy_corona(np, t);
+	float outside_body = smoothstep(0.985, 1.02, rn);
+	float far_fade = 1.0 - smoothstep(1.55, 2.35, rn);
+	float corona_mask = outside_body * far_fade * sun_reveal;
+	float limb_bridge = exp(-abs(rn - 1.0) * 46.0) * sun_reveal;
+	corona_mask = max(corona_mask, limb_bridge * 0.34);
+
 	vec2 p_cor = np * 0.70710678;
 	vec3 ray_cor = normalize(vec3(p_cor, 2.0));
 	vec3 pos_cor = vec3(0.0, 0.0, 3.0);
 	mat3 mr_cor = sun_corona_matrix(t);
-	float s3 = corona_ring_ray_noise(ray_cor, pos_cor, 0.96, 1.0, mr_cor, t);
-	vec3 cor_add = mix(vec3(1.0, 0.6, 0.1), vec3(1.0, 0.95, 1.0), pow(s3, 3.0)) * s3;
-	float cor_detail = noise4q(vec4(ray_cor * 120.0 + vec3(83.23, 34.34, 67.453), -t * 3.2 + length(np) * 8.0));
-	cor_detail = smoothstep(0.45, 0.95, cor_detail);
-	cor_add *= 0.90 + cor_detail * 0.25;
-	float outside_body = smoothstep(0.97, 1.02, length(np));
-	col += cor_add * sun_reveal * outside_body * 1.08;
+	float s3a = corona_ring_ray_noise(ray_cor, pos_cor, 0.96, 1.0, mr_cor, t);
+	vec3 ray_cor_b = normalize(vec3(rot2(0.31) * p_cor, 2.0));
+	float s3b = corona_ring_ray_noise(ray_cor_b, pos_cor, 1.02, 0.95, mr_cor, t * 1.11 + 0.37);
+	float swirl_raw = max(s3a, s3b * 0.88);
+	float swirl_soft = smoothstep(0.07, 0.72, swirl_raw);
+	float swirl_ridge = pow(smoothstep(0.34, 0.95, swirl_raw), 1.8);
+	float swirl = clamp(swirl_soft * 0.55 + swirl_ridge * 1.25, 0.0, 1.0);
+	float swirl_shell = smoothstep(1.02, 1.82, rn) * (1.0 - smoothstep(1.90, 2.35, rn));
+	vec3 cor_swirl = mix(vec3(0.98, 0.24, 0.02), vec3(1.0, 0.84, 0.40), swirl) * swirl;
+	cor_swirl *= 0.72 + swirl_shell * 0.78;
+	vec3 bridge_col = vec3(1.0, 0.72, 0.22) * limb_bridge * 0.36;
+
+	col += bridge_col;
+	col += cor_rays * corona_mask * mix(1.72, 1.12, swirl * 0.75);
+	col += cor_swirl * corona_mask * 1.62;
+	col += vec3(1.0, 0.78, 0.24) * swirl_ridge * corona_mask * 0.32;
 
 	float inner = PC.zone_inner_radius / max(1.0, float(PC.height));
 	float outer = PC.zone_outer_radius / max(1.0, float(PC.height));
