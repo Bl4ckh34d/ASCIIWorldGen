@@ -321,9 +321,10 @@ func apply_config(dict: Dictionary) -> void:
 	config.use_gpu_clouds = true
 	config.use_gpu_pooling = true
 	_setup_noises()
-	# Only randomize temperature extremes if caller didn't override both
-	var override_extremes: bool = dict.has("temp_min_c") and dict.has("temp_max_c")
-	if not override_extremes:
+	# Keep temperature extremes stable across partial config updates.
+	# Re-roll only on explicit seed changes when caller did not provide temperature values.
+	var caller_set_temp_range: bool = dict.has("temp_min_c") or dict.has("temp_max_c")
+	if seed_changed and not caller_set_temp_range:
 		_setup_temperature_extremes()
 	# Keep WorldState metadata in sync; create on first use
 	if _world_state == null:
@@ -697,32 +698,14 @@ func generate() -> PackedByteArray:
 	last_moisture = climate["moisture"]
 	last_distance_to_coast = last_water_distance
 
-	# Initialize clouds overlay (GPU compute if available)
-	if config.use_gpu_clouds:
-		var cloud_compute: Object = load("res://scripts/systems/CloudOverlayCompute.gd").new()
-		var phase0: float = fposmod(config.season_phase, 1.0)
-		var clouds_init: PackedFloat32Array = cloud_compute.compute_clouds(
-			w,
-			h,
-			last_temperature,
-			last_moisture,
-			last_is_land,
-			last_light,
-			last_biomes,
-			phase0,
-			int(config.rng_seed),
-			false
-		)
-		if clouds_init.size() == w * h:
-			last_clouds = clouds_init
-		else:
-			if last_clouds.size() != w * h:
-				last_clouds.resize(w * h)
-			last_clouds.fill(0.0)
-	else:
-		if last_clouds.size() != w * h:
-			last_clouds.resize(w * h)
-		last_clouds.fill(0.0)
+	# Build initial day/night light field used by cloud generation and rendering.
+	if _climate_compute_gpu != null:
+		var light_init: PackedFloat32Array = _climate_compute_gpu.evaluate_light_field(w, h, params)
+		if light_init.size() == w * h:
+			last_light = light_init
+	if last_light.size() != w * h:
+		last_light.resize(w * h)
+		last_light.fill(0.75)
 
 	# Mountain radiance: run through ClimatePost GPU
 	var climpost: Object = load("res://scripts/systems/ClimatePostCompute.gd").new()
@@ -806,6 +789,33 @@ func generate() -> PackedByteArray:
 					continue
 				# Otherwise keep as Ocean (already set by classifier)
 				pass
+
+	# Initialize clouds after biomes/light are ready to avoid low-detail startup artifacts.
+	if config.use_gpu_clouds:
+		var cloud_compute: Object = load("res://scripts/systems/CloudOverlayCompute.gd").new()
+		var phase0: float = fposmod(config.season_phase, 1.0)
+		var clouds_init: PackedFloat32Array = cloud_compute.compute_clouds(
+			w,
+			h,
+			last_temperature,
+			last_moisture,
+			last_is_land,
+			last_light,
+			last_biomes,
+			phase0,
+			int(config.rng_seed),
+			false
+		)
+		if clouds_init.size() == w * h:
+			last_clouds = clouds_init
+		else:
+			if last_clouds.size() != w * h:
+				last_clouds.resize(w * h)
+			last_clouds.fill(0.0)
+	else:
+		if last_clouds.size() != w * h:
+			last_clouds.resize(w * h)
+		last_clouds.fill(0.0)
 
 	# Step 5: rivers (post-climate so we can freeze-gate; cooperate with PoolingSystem lakes)
 	if config.rivers_enabled:

@@ -1381,6 +1381,7 @@ func _generate_and_draw() -> void:
 	}
 	generator.apply_config(scaled_cfg)
 	generator.generate()
+	_prime_startup_cloud_overrides()
 	_refresh_plate_masks_for_current_size()
 	_sync_sea_slider_to_generator()
 	_redraw_ascii_from_current_state()
@@ -1392,6 +1393,27 @@ func _generate_and_draw() -> void:
 		generator._world_state.simulation_time_days = float(time_system.simulation_time_days)
 		generator._world_state.time_scale = float(time_system.time_scale)
 		generator._world_state.tick_days = float(time_system.tick_days)
+
+func _prime_startup_cloud_overrides() -> void:
+	# Ensure first render uses the same cloud texture path as runtime (no pre-play mismatch).
+	if not use_gpu_rendering or gpu_ascii_renderer == null:
+		return
+	if generator == null or _clouds_sys == null:
+		return
+	if not ("_world_state" in generator) or generator._world_state == null:
+		return
+	if time_system and "simulation_time_days" in time_system:
+		generator._world_state.simulation_time_days = float(time_system.simulation_time_days)
+		generator._world_state.time_scale = float(time_system.time_scale)
+		generator._world_state.tick_days = float(time_system.tick_days)
+	if "request_full_resync" in _clouds_sys:
+		_clouds_sys.request_full_resync()
+	if "tick" in _clouds_sys:
+		_clouds_sys.tick(0.0, generator._world_state, {})
+	if "cloud_texture_override" in generator and generator.cloud_texture_override:
+		gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
+	if "light_texture_override" in generator and generator.light_texture_override:
+		gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
 
 func _refresh_plate_masks_for_current_size() -> void:
 	"""Rebuild plate masks immediately after generation so boundary overlay matches current map size."""
