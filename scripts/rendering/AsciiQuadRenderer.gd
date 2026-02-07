@@ -22,6 +22,8 @@ var biome_texture_override: Texture2D
 var lava_texture_override: Texture2D
 var world_data_1_override: Texture2D
 var world_data_2_override: Texture2D
+var _fallback_black_tex: Texture2D
+var _fallback_white_tex: Texture2D
 
 # Data managers
 var font_atlas_generator: Object
@@ -97,11 +99,30 @@ func _create_quad_mesh() -> void:
 	quad_mesh = QuadMesh.new()
 	quad_mesh.size = cell_size
 
+func _build_solid_texture(color: Color) -> Texture2D:
+	var img := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+	img.fill(color)
+	var tex := ImageTexture.new()
+	tex.set_image(img)
+	return tex
+
+func _ensure_fallback_textures() -> void:
+	if _fallback_black_tex == null:
+		_fallback_black_tex = _build_solid_texture(Color(0, 0, 0, 1))
+	if _fallback_white_tex == null:
+		_fallback_white_tex = _build_solid_texture(Color(1, 1, 1, 1))
+
+func _safe_tex(tex: Texture2D, fallback: Texture2D) -> Texture2D:
+	if tex != null and is_instance_valid(tex):
+		return tex
+	return fallback
+
 func _create_material() -> void:
 	"""Create shader material for ASCII rendering"""
 	# Try to load the ASCII rendering shader
 	var shader = load("res://shaders/rendering/ascii_quad_render.gdshader")
 	var cloud_shader = load("res://shaders/rendering/cloud_overlay.gdshader")
+	_ensure_fallback_textures()
 	
 	if shader:
 		quad_material = ShaderMaterial.new()
@@ -127,22 +148,17 @@ func _create_material() -> void:
 		quad_material.set_shader_parameter("use_biome_texture", 0)
 		quad_material.set_shader_parameter("use_lava_texture", 0)
 
-		# Provide safe default textures to avoid null uniforms before first update
-		var black_img := Image.create(1, 1, false, Image.FORMAT_RGBA8)
-		black_img.fill(Color(0, 0, 0, 1))
-		var white_img := Image.create(1, 1, false, Image.FORMAT_RGBA8)
-		white_img.fill(Color(1, 1, 1, 1))
-		var tex_black := ImageTexture.new(); tex_black.set_image(black_img)
-		var tex_white := ImageTexture.new(); tex_white.set_image(white_img)
-		quad_material.set_shader_parameter("world_data_1", tex_black)
-		quad_material.set_shader_parameter("world_data_2", tex_black)
-		quad_material.set_shader_parameter("world_data_3", tex_black)
-		quad_material.set_shader_parameter("world_data_4", tex_black)
-		quad_material.set_shader_parameter("color_palette", tex_white)
-		quad_material.set_shader_parameter("light_texture", tex_black)
-		quad_material.set_shader_parameter("river_texture", tex_black)
-		quad_material.set_shader_parameter("biome_texture", tex_black)
-		quad_material.set_shader_parameter("lava_texture", tex_black)
+		# Provide safe default textures to avoid null sampler bindings.
+		quad_material.set_shader_parameter("world_data_1", _fallback_black_tex)
+		quad_material.set_shader_parameter("world_data_2", _fallback_black_tex)
+		quad_material.set_shader_parameter("world_data_3", _fallback_black_tex)
+		quad_material.set_shader_parameter("world_data_4", _fallback_black_tex)
+		quad_material.set_shader_parameter("color_palette", _fallback_white_tex)
+		quad_material.set_shader_parameter("cloud_texture", _fallback_black_tex)
+		quad_material.set_shader_parameter("light_texture", _fallback_black_tex)
+		quad_material.set_shader_parameter("river_texture", _fallback_black_tex)
+		quad_material.set_shader_parameter("biome_texture", _fallback_black_tex)
+		quad_material.set_shader_parameter("lava_texture", _fallback_black_tex)
 		
 		# Render directly on the display rect to avoid SubViewport black-screen issues
 		if display_rect:
@@ -159,13 +175,10 @@ func _create_material() -> void:
 				cloud_rect.material = cloud_material
 				cloud_rect.visible = true
 			# Default uniforms to safe textures
-			var black_img2 := Image.create(1, 1, false, Image.FORMAT_RGBA8)
-			black_img2.fill(Color(0, 0, 0, 1))
-			var tex_black2 := ImageTexture.new(); tex_black2.set_image(black_img2)
 			if cloud_material is ShaderMaterial:
 				var cloud_mat := cloud_material as ShaderMaterial
-				cloud_mat.set_shader_parameter("world_data_1", tex_black2)
-				cloud_mat.set_shader_parameter("world_data_3", tex_black2)
+				cloud_mat.set_shader_parameter("world_data_1", _fallback_black_tex)
+				cloud_mat.set_shader_parameter("world_data_3", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
 				cloud_mat.set_shader_parameter("cloud_opacity", 1.0)
 				cloud_mat.set_shader_parameter("cloud_min", 0.06)
@@ -173,7 +186,8 @@ func _create_material() -> void:
 				cloud_mat.set_shader_parameter("cloud_power", 0.7)
 				cloud_mat.set_shader_parameter("cloud_brightness", 1.1)
 				cloud_mat.set_shader_parameter("cloud_night_alpha", 0.35)
-				cloud_mat.set_shader_parameter("light_texture", tex_black2)
+				cloud_mat.set_shader_parameter("cloud_texture", _fallback_black_tex)
+				cloud_mat.set_shader_parameter("light_texture", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("use_cloud_texture", 0)
 				cloud_mat.set_shader_parameter("use_light_texture", 0)
 		else:
@@ -279,6 +293,7 @@ func _update_material_uniforms() -> void:
 	"""Update shader uniforms with current textures"""
 	if not quad_material or not font_atlas_generator:
 		return
+	_ensure_fallback_textures()
 	
 	# Only set shader parameters if using ShaderMaterial
 	if quad_material is ShaderMaterial:
@@ -295,20 +310,16 @@ func _update_material_uniforms() -> void:
 		var t3 = texture_manager.get_data_texture_3()
 		var t4 = texture_manager.get_data_texture_4()
 		var pal = texture_manager.get_color_palette_texture()
-		if world_data_1_override:
-			shader_mat.set_shader_parameter("world_data_1", world_data_1_override)
-		elif t1:
-			shader_mat.set_shader_parameter("world_data_1", t1)
-		if world_data_2_override:
-			shader_mat.set_shader_parameter("world_data_2", world_data_2_override)
-		elif t2:
-			shader_mat.set_shader_parameter("world_data_2", t2)
-		if t3:
-			shader_mat.set_shader_parameter("world_data_3", t3)
-		if t4:
-			shader_mat.set_shader_parameter("world_data_4", t4)
-		if pal:
-			shader_mat.set_shader_parameter("color_palette", pal)
+		var tex_w1: Texture2D = _safe_tex(world_data_1_override, _safe_tex(t1, _fallback_black_tex))
+		var tex_w2: Texture2D = _safe_tex(world_data_2_override, _safe_tex(t2, _fallback_black_tex))
+		var tex_w3: Texture2D = _safe_tex(t3, _fallback_black_tex)
+		var tex_w4: Texture2D = _safe_tex(t4, _fallback_black_tex)
+		var tex_pal: Texture2D = _safe_tex(pal, _fallback_white_tex)
+		shader_mat.set_shader_parameter("world_data_1", tex_w1)
+		shader_mat.set_shader_parameter("world_data_2", tex_w2)
+		shader_mat.set_shader_parameter("world_data_3", tex_w3)
+		shader_mat.set_shader_parameter("world_data_4", tex_w4)
+		shader_mat.set_shader_parameter("color_palette", tex_pal)
 		
 		# Set map dimensions
 		shader_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
@@ -318,57 +329,63 @@ func _update_material_uniforms() -> void:
 		var atlas_uv_size = font_atlas_generator.get_uv_dimensions()
 		shader_mat.set_shader_parameter("atlas_uv_size", atlas_uv_size)
 		# Optional cloud texture override
-		if cloud_texture_override:
+		if cloud_texture_override and is_instance_valid(cloud_texture_override):
 			shader_mat.set_shader_parameter("cloud_texture", cloud_texture_override)
 			shader_mat.set_shader_parameter("use_cloud_texture", 1)
 		else:
+			shader_mat.set_shader_parameter("cloud_texture", _fallback_black_tex)
 			shader_mat.set_shader_parameter("use_cloud_texture", 0)
 		# Optional light texture override
-		if light_texture_override:
+		if light_texture_override and is_instance_valid(light_texture_override):
 			shader_mat.set_shader_parameter("light_texture", light_texture_override)
 			shader_mat.set_shader_parameter("use_light_texture", 1)
 		else:
+			shader_mat.set_shader_parameter("light_texture", _fallback_black_tex)
 			shader_mat.set_shader_parameter("use_light_texture", 0)
 		# Optional river texture override
-		if river_texture_override:
+		if river_texture_override and is_instance_valid(river_texture_override):
 			shader_mat.set_shader_parameter("river_texture", river_texture_override)
 			shader_mat.set_shader_parameter("use_river_texture", 1)
 		else:
+			shader_mat.set_shader_parameter("river_texture", _fallback_black_tex)
 			shader_mat.set_shader_parameter("use_river_texture", 0)
 		# Optional biome texture override
-		if biome_texture_override:
+		if biome_texture_override and is_instance_valid(biome_texture_override):
 			shader_mat.set_shader_parameter("biome_texture", biome_texture_override)
 			shader_mat.set_shader_parameter("use_biome_texture", 1)
 		else:
+			shader_mat.set_shader_parameter("biome_texture", _fallback_black_tex)
 			shader_mat.set_shader_parameter("use_biome_texture", 0)
 		# Optional lava texture override
-		if lava_texture_override:
+		if lava_texture_override and is_instance_valid(lava_texture_override):
 			shader_mat.set_shader_parameter("lava_texture", lava_texture_override)
 			shader_mat.set_shader_parameter("use_lava_texture", 1)
 		else:
+			shader_mat.set_shader_parameter("lava_texture", _fallback_black_tex)
 			shader_mat.set_shader_parameter("use_lava_texture", 0)
 	else:
 		pass
 	_update_cloud_uniforms()
 
 func _update_cloud_uniforms() -> void:
+	_ensure_fallback_textures()
 	if cloud_material and cloud_material is ShaderMaterial:
 		var cloud_mat := cloud_material as ShaderMaterial
 		var t1 = world_data_1_override if world_data_1_override else texture_manager.get_data_texture_1()
 		var t3 = texture_manager.get_data_texture_3()
-		if t1:
-			cloud_mat.set_shader_parameter("world_data_1", t1)
-		if t3:
-			cloud_mat.set_shader_parameter("world_data_3", t3)
-		if cloud_texture_override:
+		cloud_mat.set_shader_parameter("world_data_1", _safe_tex(t1, _fallback_black_tex))
+		cloud_mat.set_shader_parameter("world_data_3", _safe_tex(t3, _fallback_black_tex))
+		if cloud_texture_override and is_instance_valid(cloud_texture_override):
 			cloud_mat.set_shader_parameter("cloud_texture", cloud_texture_override)
 			cloud_mat.set_shader_parameter("use_cloud_texture", 1)
 		else:
+			cloud_mat.set_shader_parameter("cloud_texture", _fallback_black_tex)
 			cloud_mat.set_shader_parameter("use_cloud_texture", 0)
-		if light_texture_override:
+		if light_texture_override and is_instance_valid(light_texture_override):
 			cloud_mat.set_shader_parameter("light_texture", light_texture_override)
 			cloud_mat.set_shader_parameter("use_light_texture", 1)
 		else:
+			cloud_mat.set_shader_parameter("light_texture", _fallback_black_tex)
 			cloud_mat.set_shader_parameter("use_light_texture", 0)
 		if cloud_rect:
 			cloud_rect.visible = (t3 != null) or (cloud_texture_override != null)
@@ -376,47 +393,52 @@ func _update_cloud_uniforms() -> void:
 
 func _update_light_uniform() -> void:
 	"""Update only the light texture uniform"""
+	_ensure_fallback_textures()
 	if quad_material and quad_material is ShaderMaterial:
 		var shader_mat = quad_material as ShaderMaterial
 		var t1 = world_data_1_override if world_data_1_override else texture_manager.get_data_texture_1()
-		if t1:
-			shader_mat.set_shader_parameter("world_data_1", t1)
-		if light_texture_override:
+		shader_mat.set_shader_parameter("world_data_1", _safe_tex(t1, _fallback_black_tex))
+		if light_texture_override and is_instance_valid(light_texture_override):
 			shader_mat.set_shader_parameter("light_texture", light_texture_override)
 			shader_mat.set_shader_parameter("use_light_texture", 1)
 		else:
+			shader_mat.set_shader_parameter("light_texture", _fallback_black_tex)
 			shader_mat.set_shader_parameter("use_light_texture", 0)
-		if river_texture_override:
+		if river_texture_override and is_instance_valid(river_texture_override):
 			shader_mat.set_shader_parameter("river_texture", river_texture_override)
 			shader_mat.set_shader_parameter("use_river_texture", 1)
 		else:
+			shader_mat.set_shader_parameter("river_texture", _fallback_black_tex)
 			shader_mat.set_shader_parameter("use_river_texture", 0)
-		if biome_texture_override:
+		if biome_texture_override and is_instance_valid(biome_texture_override):
 			shader_mat.set_shader_parameter("biome_texture", biome_texture_override)
 			shader_mat.set_shader_parameter("use_biome_texture", 1)
 		else:
+			shader_mat.set_shader_parameter("biome_texture", _fallback_black_tex)
 			shader_mat.set_shader_parameter("use_biome_texture", 0)
-		if lava_texture_override:
+		if lava_texture_override and is_instance_valid(lava_texture_override):
 			shader_mat.set_shader_parameter("lava_texture", lava_texture_override)
 			shader_mat.set_shader_parameter("use_lava_texture", 1)
 		else:
+			shader_mat.set_shader_parameter("lava_texture", _fallback_black_tex)
 			shader_mat.set_shader_parameter("use_lava_texture", 0)
 	if cloud_material and cloud_material is ShaderMaterial:
 		var cloud_mat := cloud_material as ShaderMaterial
 		var t1c = world_data_1_override if world_data_1_override else texture_manager.get_data_texture_1()
-		if t1c:
-			cloud_mat.set_shader_parameter("world_data_1", t1c)
-		if light_texture_override:
+		cloud_mat.set_shader_parameter("world_data_1", _safe_tex(t1c, _fallback_black_tex))
+		if light_texture_override and is_instance_valid(light_texture_override):
 			cloud_mat.set_shader_parameter("light_texture", light_texture_override)
 			cloud_mat.set_shader_parameter("use_light_texture", 1)
 		else:
+			cloud_mat.set_shader_parameter("light_texture", _fallback_black_tex)
 			cloud_mat.set_shader_parameter("use_light_texture", 0)
 	if quad_material and quad_material is ShaderMaterial:
 		var shader_mat3 := quad_material as ShaderMaterial
-		if cloud_texture_override:
+		if cloud_texture_override and is_instance_valid(cloud_texture_override):
 			shader_mat3.set_shader_parameter("cloud_texture", cloud_texture_override)
 			shader_mat3.set_shader_parameter("use_cloud_texture", 1)
 		else:
+			shader_mat3.set_shader_parameter("cloud_texture", _fallback_black_tex)
 			shader_mat3.set_shader_parameter("use_cloud_texture", 0)
 
 func set_cloud_texture_override(tex: Texture2D) -> void:
@@ -437,9 +459,11 @@ func set_biome_texture_override(tex: Texture2D) -> void:
 
 func set_lava_texture_override(tex: Texture2D) -> void:
 	lava_texture_override = tex
+	_update_light_uniform()
 
 func set_world_data_1_override(tex: Texture2D) -> void:
 	world_data_1_override = tex
+	_update_material_uniforms()
 
 func set_world_data_2_override(tex: Texture2D) -> void:
 	world_data_2_override = tex

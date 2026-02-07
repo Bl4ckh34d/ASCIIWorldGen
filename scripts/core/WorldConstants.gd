@@ -80,9 +80,10 @@ const ARRAY_PROCESSING_CHUNK_SIZE: int = 10000  # 10k elements per chunk
 # How often (in simulation days) each system updates
 const CADENCE_CLIMATE: int = 1        # Climate: every day (real-time changes)
 const CADENCE_HYDRO: int = 30         # Hydro: monthly changes
+const CADENCE_EROSION: int = 30       # Erosion: monthly cadence, world-time accumulated
 const CADENCE_CLOUDS: int = 7         # Clouds: weekly weather patterns
 const CADENCE_BIOMES: int = 30        # Biomes: slower vegetation/ecoregion drift
-const CADENCE_CRYOSPHERE: int = 5     # Cryosphere: faster seasonal ice advance/recede
+const CADENCE_CRYOSPHERE: int = 90    # Cryosphere: moderate cadence to avoid day/night flicker
 const CADENCE_PLATES: int = 365       # Plates: yearly geological changes
 const CADENCE_VOLCANISM: int = 3      # Volcanism: rapid geological events
 
@@ -196,6 +197,8 @@ static func get_system_cadence(system_name: String) -> int:
 			return CADENCE_CLIMATE
 		"hydro", "hydrological":
 			return CADENCE_HYDRO
+		"erosion", "rain_erosion":
+			return CADENCE_EROSION
 		"clouds", "wind":
 			return CADENCE_CLOUDS
 		"biomes", "biome":

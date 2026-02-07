@@ -162,6 +162,10 @@ var biome_phase: float = 0.0
 # Exposed by PlateSystem for coupling (GPU boundary mask as i32)
 var _plates_boundary_mask_i32: PackedInt32Array = PackedInt32Array()
 var _plates_boundary_mask_render_u8: PackedByteArray = PackedByteArray()
+var _plates_cell_id_i32: PackedInt32Array = PackedInt32Array()
+var _plates_vel_u: PackedFloat32Array = PackedFloat32Array()
+var _plates_vel_v: PackedFloat32Array = PackedFloat32Array()
+var _plates_buoyancy: PackedFloat32Array = PackedFloat32Array()
 
 # Tectonic activity statistics
 var tectonic_stats: Dictionary = {}
@@ -419,6 +423,152 @@ func _lake_fill_strength(ocean_frac: float) -> float:
 	var ref: float = max(0.0001, config.lake_fill_ocean_ref)
 	return clamp(ocean_frac / ref, 0.0, 1.0)
 
+func _tectonic_hash01(x: int, y: int, seed: int) -> float:
+	var n: float = float(x) * 12.9898 + float(y) * 78.233 + float(seed) * 0.0137
+	var s: float = sin(n) * 43758.5453
+	return s - floor(s)
+
+func _apply_tectonic_foundation(w: int, h: int) -> void:
+	var size: int = w * h
+	if size <= 0:
+		return
+	if last_height.size() != size:
+		return
+	if _plates_cell_id_i32.size() != size:
+		return
+	if _plates_boundary_mask_i32.size() != size:
+		return
+	var plate_count: int = min(_plates_buoyancy.size(), min(_plates_vel_u.size(), _plates_vel_v.size()))
+	if plate_count <= 0:
+		return
+	var out_h: PackedFloat32Array = last_height.duplicate()
+	var tect_delta := PackedFloat32Array()
+	tect_delta.resize(size)
+	tect_delta.fill(0.0)
+	var seed: int = int(config.rng_seed) ^ 0x5EEDC0DE
+
+	# Plate-scale base relief: buoyant plates tend to host continents, denser plates ocean basins.
+	for i in range(size):
+		var pid: int = _plates_cell_id_i32[i]
+		if pid < 0 or pid >= plate_count:
+			continue
+		var b: float = clamp(_plates_buoyancy[pid], 0.0, 1.0)
+		var plate_base: float = (b - 0.5) * 0.18
+		var x: int = i % w
+		var y: int = int(i / max(1, w))
+		var jitter: float = (_tectonic_hash01(x, y, seed ^ (pid * 911)) - 0.5) * 0.012
+		out_h[i] = clamp(out_h[i] + plate_base + jitter, -1.0, 2.0)
+
+	# Boundary belts: convergent => mountain arcs/trenches, divergent => ridges/rifts.
+	for y in range(h):
+		for x in range(w):
+			var i2: int = x + y * w
+			if _plates_boundary_mask_i32[i2] == 0:
+				continue
+			var pid2: int = _plates_cell_id_i32[i2]
+			if pid2 < 0 or pid2 >= plate_count:
+				continue
+
+			var nx_sel: int = x
+			var ny_sel: int = y
+			var found: bool = false
+			for oy in range(-1, 2):
+				for ox in range(-1, 2):
+					if abs(ox) + abs(oy) != 1:
+						continue
+					var nx: int = x + ox
+					var ny: int = y + oy
+					if nx < 0:
+						nx = w - 1
+					elif nx >= w:
+						nx = 0
+					if ny < 0 or ny >= h:
+						continue
+					var j: int = nx + ny * w
+					if _plates_cell_id_i32[j] != pid2:
+						nx_sel = nx
+						ny_sel = ny
+						found = true
+						break
+				if found:
+					break
+			if not found:
+				continue
+
+			var dirx: float = float(nx_sel - x)
+			if dirx > float(w) * 0.5:
+				dirx -= float(w)
+			elif dirx < -float(w) * 0.5:
+				dirx += float(w)
+			var diry: float = float(ny_sel - y)
+			var dlen: float = max(0.0001, sqrt(dirx * dirx + diry * diry))
+			dirx /= dlen
+			diry /= dlen
+
+			var other_pid: int = _plates_cell_id_i32[nx_sel + ny_sel * w]
+			if other_pid < 0 or other_pid >= plate_count:
+				continue
+
+			var u1: float = _plates_vel_u[pid2]
+			var v1: float = _plates_vel_v[pid2]
+			var u2: float = _plates_vel_u[other_pid]
+			var v2: float = _plates_vel_v[other_pid]
+			var rel_u: float = u2 - u1
+			var rel_v: float = v2 - v1
+			var approach: float = -(rel_u * dirx + rel_v * diry)
+			var shear: float = abs(rel_u * (-diry) + rel_v * dirx)
+			var b1: float = clamp(_plates_buoyancy[pid2], 0.0, 1.0)
+			var b2: float = clamp(_plates_buoyancy[other_pid], 0.0, 1.0)
+			var buoy_contrast: float = abs(b1 - b2)
+
+			var delta_center: float = 0.0
+			if approach > 0.05:
+				var conv: float = min(2.0, approach - 0.05)
+				var uplift: float = 0.018 * conv * (0.70 + buoy_contrast * 1.10)
+				var trench: float = 0.012 * conv * (0.65 + buoy_contrast * 1.20)
+				var self_subducts: bool = (b1 + 0.03) < b2
+				var other_subducts: bool = (b2 + 0.03) < b1
+				if self_subducts:
+					delta_center -= trench
+					delta_center += uplift * 0.35
+				elif other_subducts:
+					delta_center += uplift
+				else:
+					delta_center += uplift * 0.72
+			elif approach < -0.05:
+				var div: float = min(2.0, -approach - 0.05)
+				delta_center += 0.009 * div
+				delta_center -= 0.005 * div
+			else:
+				var n: float = (_tectonic_hash01(x, y, seed ^ (pid2 * 31337)) - 0.5)
+				delta_center += n * 0.004 * (0.35 + shear)
+
+			# Spread deformation into a broader, organic belt around the fault.
+			var belt_radius: int = 4
+			for by in range(-belt_radius, belt_radius + 1):
+				for bx in range(-belt_radius, belt_radius + 1):
+					var dist: float = sqrt(float(bx * bx + by * by))
+					if dist > float(belt_radius):
+						continue
+					var xx: int = x + bx
+					var yy: int = y + by
+					if xx < 0:
+						xx = w - 1
+					elif xx >= w:
+						xx = 0
+					if yy < 0 or yy >= h:
+						continue
+					var ii: int = xx + yy * w
+					var falloff: float = pow(clamp(1.0 - dist / float(belt_radius), 0.0, 1.0), 1.35)
+					var organic: float = 0.62 + 0.76 * _tectonic_hash01(xx, yy, seed ^ (pid2 * 15731 + other_pid * 789221))
+					tect_delta[ii] += delta_center * falloff * organic * 0.22
+
+	for i3 in range(size):
+		out_h[i3] = clamp(out_h[i3] + tect_delta[i3], -1.0, 2.0)
+
+	last_height = out_h
+	last_height_final = out_h
+
 func _compute_river_seed_threshold(
 		flow_accum: PackedFloat32Array,
 		is_land: PackedByteArray,
@@ -478,6 +628,12 @@ func clear() -> void:
 	last_biomes.clear()
 	last_clouds.clear()
 	last_light.clear()
+	_plates_boundary_mask_i32.clear()
+	_plates_boundary_mask_render_u8.clear()
+	_plates_cell_id_i32.clear()
+	_plates_vel_u.clear()
+	_plates_vel_v.clear()
+	_plates_buoyancy.clear()
 	world_data_1_override = null
 	world_data_2_override = null
 	cloud_texture_override = null
@@ -565,7 +721,9 @@ func generate() -> PackedByteArray:
 		_terrain_compute = TerrainCompute.new()
 	terrain = _terrain_compute.generate(w, h, params)
 	last_height = terrain["height"]
-	# Final surface height used for sea-level classification (after erosion). Initialized to base height.
+	# Tectonic foundation pass: align large-scale topology with plate bodies/boundaries.
+	_apply_tectonic_foundation(w, h)
+	# Final surface height used for sea-level classification.
 	last_height_final = last_height
 	last_is_land = terrain["is_land"]
 	# Clamp sea level if it would eliminate nearly all oceans, then recompute land mask.
@@ -1692,6 +1850,9 @@ func ensure_persistent_buffers(refresh: bool = true) -> void:
 	# Slow-moving climate buffers for biome evolution
 	_gpu_buffer_manager.ensure_buffer("biome_temp", float_size, last_temperature.to_byte_array() if refresh else PackedByteArray())
 	_gpu_buffer_manager.ensure_buffer("biome_moist", float_size, last_moisture.to_byte_array() if refresh else PackedByteArray())
+	# Medium-timescale climate buffers for cryosphere decisions (filter out day/night flicker).
+	_gpu_buffer_manager.ensure_buffer("cryo_temp", float_size, last_temperature.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("cryo_moist", float_size, last_moisture.to_byte_array() if refresh else PackedByteArray())
 	_gpu_buffer_manager.ensure_buffer("flow_dir", int_size, last_flow_dir.to_byte_array() if refresh else PackedByteArray())
 	_gpu_buffer_manager.ensure_buffer("flow_accum", float_size, last_flow_accum.to_byte_array() if refresh else PackedByteArray())
 	_gpu_buffer_manager.ensure_buffer("biome_id", int_size, last_biomes.to_byte_array() if refresh else PackedByteArray())

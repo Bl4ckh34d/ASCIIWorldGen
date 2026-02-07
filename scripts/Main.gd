@@ -6,6 +6,7 @@ const WorldConstants = preload("res://scripts/core/WorldConstants.gd")
 # --- Performance toggles (turn off heavy systems for faster world map) ---
 const ENABLE_SEASONAL_CLIMATE: bool = true
 const ENABLE_HYDRO: bool = true
+const ENABLE_EROSION: bool = true
 const ENABLE_CLOUDS: bool = true
 const ENABLE_PLATES: bool = true
 const ENABLE_BIOMES_TICK: bool = true
@@ -17,6 +18,8 @@ const GPU_TILE_SCALE: float = 2.0
 const SPEED_PRESETS: Array = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0]
 const SPEED_CLOUDS_PAUSE_THRESHOLD: float = 100000.0
 const SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD: float = 10000.0
+const STARTUP_ACCLIMATE_STEPS: int = 2
+const STARTUP_ACCLIMATE_STEP_DAYS: float = 0.25
 
 # UI References - will be set in _initialize_ui_nodes()
 var play_button: Button
@@ -73,6 +76,7 @@ var ocean_damp_value_label: Label
 var _sim_tick_counter: int = 0
 var _seasonal_sys: Object
 var _hydro_sys: Object
+var _erosion_sys: Object
 var _clouds_sys: Object
 var _biome_sys: Object
 var _cryosphere_sys: Object
@@ -153,6 +157,7 @@ var _last_speed_time_scale: float = 1.0
 var _speed_lod_clouds_paused: bool = false
 var _top_speed_buttons: Array = []
 var _simulation_speed_buttons: Array = []
+var _entered_from_intro: bool = false
 
 func _initialize_ui_nodes() -> void:
 	"""Initialize all UI node references with the new layout"""
@@ -623,21 +628,21 @@ func _sync_temp_slider_from_config() -> void:
 	temp_slider.set_block_signals(false)
 	_update_temp_label()
 
-func _apply_intro_startup_config() -> void:
+func _apply_intro_startup_config() -> bool:
 	if generator == null:
-		return
+		return false
 	var startup_state: Node = get_node_or_null("/root/StartupState")
 	if startup_state == null:
-		return
+		return false
 	if not ("has_pending_world_config" in startup_state):
-		return
+		return false
 	if not startup_state.has_pending_world_config():
-		return
+		return false
 	if not ("consume_world_config" in startup_state):
-		return
+		return false
 	var cfg: Dictionary = startup_state.consume_world_config()
 	if cfg.is_empty():
-		return
+		return false
 	generator.apply_config(cfg)
 	if sea_slider:
 		sea_signal_blocked = true
@@ -657,6 +662,7 @@ func _apply_intro_startup_config() -> void:
 	if seed_used_label:
 		seed_used_label.text = "Used: %d" % int(generator.config.rng_seed)
 	_update_top_seed_label()
+	return true
 
 # Additional callback functions for the new UI
 func _on_play_pressed() -> void:
@@ -847,6 +853,8 @@ func _on_cloud_coupling_changed(enabled: bool) -> void:
 
 func _force_initial_generation() -> void:
 	# debug removed
+	if _plates_sys and "_build_plates" in _plates_sys:
+		_plates_sys._build_plates()
 	generator.generate()
 	_refresh_plate_masks_for_current_size()
 	_redraw_ascii_from_current_state()
@@ -895,6 +903,13 @@ func _ready() -> void:
 			_hydro_sys.tiles_per_tick = 1  # Process 1 tile per tick instead of 2
 		if "register_system" in simulation:
 			simulation.register_system(_hydro_sys, 30, 0, false, 20.0)  # Hydro: cadence-driven (no time debt catch-up)
+	# Register rainfall-driven erosion (uses moisture + runoff, world-time accumulated)
+	if ENABLE_EROSION:
+		_erosion_sys = load("res://scripts/systems/RainErosionSystem.gd").new()
+		if "initialize" in _erosion_sys:
+			_erosion_sys.initialize(generator)
+		if "register_system" in simulation:
+			simulation.register_system(_erosion_sys, WorldConstants.CADENCE_EROSION, 0, true, 14.0)
 	# Register cloud/wind overlay updater (visual only for now)
 	if ENABLE_CLOUDS:
 		_clouds_sys = load("res://scripts/systems/CloudWindSystem.gd").new()
@@ -1311,7 +1326,7 @@ func _ready() -> void:
 				_redraw_ascii_from_current_state()
 	)
 	# debug removed
-	_apply_intro_startup_config()
+	_entered_from_intro = _apply_intro_startup_config()
 	_generate_and_draw()
 	# capture base dimensions for scaling
 	base_width = generator.config.width
@@ -1321,7 +1336,18 @@ func _ready() -> void:
 	
 	# Connect viewport resize to reposition floating button
 	get_viewport().size_changed.connect(_on_viewport_resized)
+	if _entered_from_intro:
+		_selected_speed_scale = 1.0
 	_set_simulation_speed(_selected_speed_scale, true)
+	if _entered_from_intro:
+		if not panel_hidden:
+			if hide_button and bottom_panel:
+				_on_hide_panel_pressed()
+			elif bottom_panel:
+				panel_hidden = true
+				bottom_panel.hide()
+		if not is_running:
+			_start_simulation()
 	_play_scene_fade_in()
 
 func _play_scene_fade_in() -> void:
@@ -1380,7 +1406,12 @@ func _generate_and_draw() -> void:
 		"height": max(1, base_height * map_scale),
 	}
 	generator.apply_config(scaled_cfg)
+	# Build tectonic plates first so terrain generation can use the same plate layout
+	# as a structural foundation (coastline/mountain alignment).
+	if _plates_sys and "_build_plates" in _plates_sys:
+		_plates_sys._build_plates()
 	generator.generate()
+	_acclimate_generated_world()
 	_prime_startup_cloud_overrides()
 	_refresh_plate_masks_for_current_size()
 	_sync_sea_slider_to_generator()
@@ -1393,6 +1424,78 @@ func _generate_and_draw() -> void:
 		generator._world_state.simulation_time_days = float(time_system.simulation_time_days)
 		generator._world_state.time_scale = float(time_system.time_scale)
 		generator._world_state.tick_days = float(time_system.tick_days)
+
+func _acclimate_generated_world() -> void:
+	# Run a tiny hidden warm-up so the first visible frame matches the immediate post-Play state.
+	if generator == null or not ("_world_state" in generator) or generator._world_state == null:
+		return
+	if simulation == null:
+		return
+	var world_state = generator._world_state
+	if time_system:
+		world_state.simulation_time_days = float(time_system.simulation_time_days)
+		world_state.time_scale = float(time_system.time_scale)
+		world_state.tick_days = float(time_system.tick_days)
+	# Temporarily unthrottle the simulation scheduler so warm-up reaches a stable state.
+	var prev_budget_mode_time: bool = true
+	var prev_max_systems: int = 2
+	var prev_max_tick_ms: float = 12.0
+	if "budget_mode_time_ms" in simulation:
+		prev_budget_mode_time = bool(simulation.budget_mode_time_ms)
+	if "max_systems_per_tick" in simulation:
+		prev_max_systems = int(simulation.max_systems_per_tick)
+	if "max_tick_time_ms" in simulation:
+		prev_max_tick_ms = float(simulation.max_tick_time_ms)
+	if "set_budget_mode_time" in simulation:
+		simulation.set_budget_mode_time(false)
+	if "set_max_systems_per_tick" in simulation:
+		var sys_count: int = 8
+		if "systems" in simulation:
+			sys_count = max(8, int(simulation.systems.size()) + 4)
+		simulation.set_max_systems_per_tick(sys_count)
+	if "set_max_tick_time_ms" in simulation:
+		simulation.set_max_tick_time_ms(max(prev_max_tick_ms, 1000.0))
+	var dt_days: float = STARTUP_ACCLIMATE_STEP_DAYS
+	if time_system and "tick_days" in time_system:
+		dt_days = max(dt_days, float(time_system.tick_days))
+	dt_days = clamp(dt_days, 1.0 / 1440.0, 0.5)
+	var warmup_steps: int = max(1, STARTUP_ACCLIMATE_STEPS)
+	if "systems" in simulation:
+		warmup_steps = max(warmup_steps, int(simulation.systems.size()) + 2)
+	if simulation and "request_catchup_all" in simulation:
+		simulation.request_catchup_all()
+	for wi in range(warmup_steps):
+		if _seasonal_sys and "tick" in _seasonal_sys:
+			_seasonal_sys.tick(dt_days, world_state, {})
+		if simulation and "on_tick" in simulation:
+			simulation.on_tick(dt_days, world_state, {})
+		if _clouds_sys and "request_full_resync" in _clouds_sys:
+			_clouds_sys.request_full_resync()
+		if _clouds_sys and "tick" in _clouds_sys:
+			_clouds_sys.tick(dt_days, world_state, {})
+		world_state.simulation_time_days += dt_days
+		# Early out once all forced catch-up flags have been consumed.
+		if "systems" in simulation and wi >= max(0, STARTUP_ACCLIMATE_STEPS - 1):
+			var has_pending_forced: bool = false
+			for sys_state in simulation.systems:
+				if bool(sys_state.get("force_next_run", false)):
+					has_pending_forced = true
+					break
+			if not has_pending_forced:
+				break
+	# Restore scheduler settings.
+	if "set_budget_mode_time" in simulation:
+		simulation.set_budget_mode_time(prev_budget_mode_time)
+	if "set_max_systems_per_tick" in simulation:
+		simulation.set_max_systems_per_tick(prev_max_systems)
+	if "set_max_tick_time_ms" in simulation:
+		simulation.set_max_tick_time_ms(prev_max_tick_ms)
+	if time_system:
+		time_system.simulation_time_days = float(world_state.simulation_time_days)
+	if "sync_climate_cpu_mirror_from_gpu" in generator:
+		generator.sync_climate_cpu_mirror_from_gpu()
+	if year_label and time_system and "get_year_float" in time_system:
+		year_label.text = "Year: %.2f" % float(time_system.get_year_float())
 
 func _prime_startup_cloud_overrides() -> void:
 	# Ensure first render uses the same cloud texture path as runtime (no pre-play mismatch).
@@ -1433,9 +1536,8 @@ func _on_sim_tick(_dt_days: float) -> void:
 		if abs(ts_now - _last_speed_time_scale) > 0.001:
 			_apply_speed_lod_policy(ts_now, false)
 	
-	# Check if we have enough frame time budget for simulation work
+	# Track frame start for lightweight redraw budgeting later in this tick.
 	var frame_start_time = Time.get_ticks_usec()
-	var available_frame_time_ms = 16.67  # Target 60fps = 16.67ms per frame
 	
 	# For now, only update Year label if present and refresh climate season phase into next generation params
 	# Redraw ASCII less frequently to avoid heavy load; could throttle with a frame counter
@@ -1455,10 +1557,6 @@ func _on_sim_tick(_dt_days: float) -> void:
 				gpu_ascii_renderer.update_light_only(generator.last_light)
 		
 	
-	# Check frame time budget before heavy simulation work
-	var current_time = Time.get_ticks_usec()
-	var elapsed_ms = float(current_time - frame_start_time) / 1000.0
-	
 	# CRITICAL: Always run essential systems like day-night cycle, even if frame budget is tight
 	# This ensures the day-night cycle never freezes due to performance budgeting
 	if _seasonal_sys and "tick" in _seasonal_sys and "_world_state" in generator:
@@ -1467,44 +1565,40 @@ func _on_sim_tick(_dt_days: float) -> void:
 	# Always increment counter for consistent timing regardless of frame budget
 	_sim_tick_counter += 1
 	
-	# Only do full simulation work if we have frame time budget left
+	# Always run orchestrated simulation systems.
+	# They already have their own internal time budget and cadence controls.
 	var simulation_ran: bool = false
-	if elapsed_ms < available_frame_time_ms * 0.8:  # Use only 80% of frame budget
-		# Drive registered systems via orchestrator (MVP)
-		if simulation and "on_tick" in simulation and "_world_state" in generator:
-			simulation.on_tick(_dt_days, generator._world_state, {})
-			simulation_ran = true
-			# If clouds updated, refresh just the GPU cloud texture
-			if use_gpu_rendering and gpu_ascii_renderer and simulation.last_dirty_fields.has("clouds"):
-				if not ("cloud_texture_override" in generator and generator.cloud_texture_override):
-					gpu_ascii_renderer.update_clouds_only(
-						generator.last_turquoise_strength,
-						generator.last_shelf_value_noise_field,
-						generator.last_clouds,
-						_get_plate_boundary_mask()
-					)
-			# GPU cloud texture override (no CPU readback path)
-			if use_gpu_rendering and gpu_ascii_renderer and "cloud_texture_override" in generator and generator.cloud_texture_override:
-				gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
-			# GPU light texture override (no CPU readback path)
-			if use_gpu_rendering and gpu_ascii_renderer and "light_texture_override" in generator and generator.light_texture_override:
-				gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
-			# GPU river texture override (no CPU readback path)
-			if use_gpu_rendering and gpu_ascii_renderer and "river_texture_override" in generator and generator.river_texture_override:
-				gpu_ascii_renderer.set_river_texture_override(generator.river_texture_override)
-			# GPU biome/lava texture overrides (no CPU readback path)
-			if use_gpu_rendering and gpu_ascii_renderer and "biome_texture_override" in generator and generator.biome_texture_override:
-				gpu_ascii_renderer.set_biome_texture_override(generator.biome_texture_override)
-			if use_gpu_rendering and gpu_ascii_renderer and "lava_texture_override" in generator and generator.lava_texture_override:
-				gpu_ascii_renderer.set_lava_texture_override(generator.lava_texture_override)
-			
-			# Debug performance every 30 ticks and auto-tune
-			if _sim_tick_counter % 30 == 0:
-				_log_performance_stats()
-				_auto_tune_performance()
-	else:
-		# Skip heavy simulation systems this frame to maintain UI responsiveness
-		pass
+	if simulation and "on_tick" in simulation and "_world_state" in generator:
+		simulation.on_tick(_dt_days, generator._world_state, {})
+		simulation_ran = true
+		# If clouds updated, refresh just the GPU cloud texture
+		if use_gpu_rendering and gpu_ascii_renderer and simulation.last_dirty_fields.has("clouds"):
+			if not ("cloud_texture_override" in generator and generator.cloud_texture_override):
+				gpu_ascii_renderer.update_clouds_only(
+					generator.last_turquoise_strength,
+					generator.last_shelf_value_noise_field,
+					generator.last_clouds,
+					_get_plate_boundary_mask()
+				)
+		# GPU cloud texture override (no CPU readback path)
+		if use_gpu_rendering and gpu_ascii_renderer and "cloud_texture_override" in generator and generator.cloud_texture_override:
+			gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
+		# GPU light texture override (no CPU readback path)
+		if use_gpu_rendering and gpu_ascii_renderer and "light_texture_override" in generator and generator.light_texture_override:
+			gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
+		# GPU river texture override (no CPU readback path)
+		if use_gpu_rendering and gpu_ascii_renderer and "river_texture_override" in generator and generator.river_texture_override:
+			gpu_ascii_renderer.set_river_texture_override(generator.river_texture_override)
+		# GPU biome/lava texture overrides (no CPU readback path)
+		if use_gpu_rendering and gpu_ascii_renderer and "biome_texture_override" in generator and generator.biome_texture_override:
+			gpu_ascii_renderer.set_biome_texture_override(generator.biome_texture_override)
+		if use_gpu_rendering and gpu_ascii_renderer and "lava_texture_override" in generator and generator.lava_texture_override:
+			gpu_ascii_renderer.set_lava_texture_override(generator.lava_texture_override)
+		
+		# Debug performance every 30 ticks and auto-tune
+		if _sim_tick_counter % 30 == 0:
+			_log_performance_stats()
+			_auto_tune_performance()
 	# Ensure clouds still animate even when simulation budget skips systems
 	if _clouds_sys and "tick" in _clouds_sys and "_world_state" in generator:
 		var allow_fallback_cloud_tick: bool = (time_system and "time_scale" in time_system and float(time_system.time_scale) <= 10.0)
@@ -1777,72 +1871,83 @@ func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 		light_interval = 1
 	if _seasonal_sys and "set_update_intervals" in _seasonal_sys:
 		_seasonal_sys.set_update_intervals(climate_interval, light_interval)
-	# Throttle other heavy systems by speed tier.
-	var hydro_cad: int = max(WorldConstants.CADENCE_HYDRO, 120)
-	var biome_cad: int = max(WorldConstants.CADENCE_BIOMES, 480)
-	# Keep cryosphere near-live at normal speeds; throttle only at extreme presets.
-	var cryosphere_cad: int = 2
-	var volcanism_cad: int = max(WorldConstants.CADENCE_VOLCANISM, 45)
-	var plates_cadence: int = int((time_system.get_days_per_year() * 2.0) if time_system and "get_days_per_year" in time_system else (WorldConstants.CADENCE_PLATES * 2))
+	# Keep long-term evolution systems active even at high speed.
+	# Cadence units are simulation ticks (not days), so over-throttling here can freeze evolution.
+	var hydro_cad: int = max(1, WorldConstants.CADENCE_HYDRO)
+	var erosion_cad: int = max(1, WorldConstants.CADENCE_EROSION)
+	var biome_cad: int = max(1, WorldConstants.CADENCE_BIOMES)
+	var cryosphere_cad: int = max(1, WorldConstants.CADENCE_CRYOSPHERE)
+	var volcanism_cad: int = max(1, WorldConstants.CADENCE_VOLCANISM)
+	var plates_cadence: int = int(time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else WorldConstants.CADENCE_PLATES)
 	if ts >= 1000000.0:
-		hydro_cad = 28800
-		biome_cad = 57600
-		cryosphere_cad = 96
-		volcanism_cad = 5760
-		plates_cadence *= 32
+		hydro_cad = 240
+		erosion_cad = 320
+		biome_cad = 180
+		cryosphere_cad = 24
+		volcanism_cad = 30
+		plates_cadence *= 4
 	elif ts >= 100000.0:
-		hydro_cad = 14400
-		biome_cad = 28800
-		cryosphere_cad = 48
-		volcanism_cad = 2880
-		plates_cadence *= 24
+		hydro_cad = 180
+		erosion_cad = 260
+		biome_cad = 120
+		cryosphere_cad = 22
+		volcanism_cad = 24
+		plates_cadence *= 3
 	elif ts >= 10000.0:
-		hydro_cad = 7200
-		biome_cad = 14400
-		cryosphere_cad = 18
-		volcanism_cad = 1440
-		plates_cadence *= 16
-	elif ts >= SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD:
-		hydro_cad = 2400
-		biome_cad = 7200
-		cryosphere_cad = 18
-		volcanism_cad = 480
-		plates_cadence *= 8
-	elif ts >= 1000.0:
-		hydro_cad = 900
-		biome_cad = 2400
-		cryosphere_cad = 4
-		volcanism_cad = 180
-		plates_cadence *= 4
-	elif ts >= 100.0:
-		hydro_cad = 900
-		biome_cad = 2400
-		cryosphere_cad = 2
-		volcanism_cad = 180
-		plates_cadence *= 4
-	elif ts >= 10.0:
-		hydro_cad = 300
-		biome_cad = 900
-		cryosphere_cad = 2
-		volcanism_cad = 90
+		hydro_cad = 120
+		erosion_cad = 180
+		biome_cad = 90
+		cryosphere_cad = 20
+		volcanism_cad = 18
 		plates_cadence *= 2
+	elif ts >= SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD:
+		hydro_cad = 90
+		erosion_cad = 140
+		biome_cad = 60
+		cryosphere_cad = 18
+		volcanism_cad = 12
+		plates_cadence *= 2
+	elif ts >= 1000.0:
+		hydro_cad = 60
+		erosion_cad = 90
+		biome_cad = 45
+		cryosphere_cad = 16
+		volcanism_cad = 10
+		plates_cadence = int(float(plates_cadence) * 1.5)
+	elif ts >= 100.0:
+		hydro_cad = 45
+		erosion_cad = 60
+		biome_cad = 36
+		cryosphere_cad = 14
+		volcanism_cad = 8
+		plates_cadence = int(float(plates_cadence) * 1.25)
+	elif ts >= 10.0:
+		hydro_cad = 36
+		erosion_cad = 45
+		biome_cad = 30
+		cryosphere_cad = 12
+		volcanism_cad = 6
 	if simulation and "set_system_use_time_debt" in simulation:
 		if _hydro_sys:
-			simulation.set_system_use_time_debt(_hydro_sys, false)
+			simulation.set_system_use_time_debt(_hydro_sys, true)
+		if _erosion_sys:
+			simulation.set_system_use_time_debt(_erosion_sys, true)
 		for biome_sys in _biome_like_systems:
 			if biome_sys:
-				simulation.set_system_use_time_debt(biome_sys, false)
+				simulation.set_system_use_time_debt(biome_sys, true)
 		if _biome_like_systems.is_empty() and _biome_sys:
-			simulation.set_system_use_time_debt(_biome_sys, false)
+			simulation.set_system_use_time_debt(_biome_sys, true)
 		if _cryosphere_sys:
-			simulation.set_system_use_time_debt(_cryosphere_sys, false)
+			simulation.set_system_use_time_debt(_cryosphere_sys, true)
 		if _plates_sys:
-			simulation.set_system_use_time_debt(_plates_sys, false)
+			simulation.set_system_use_time_debt(_plates_sys, true)
 		if _volcanism_sys:
-			simulation.set_system_use_time_debt(_volcanism_sys, false)
+			simulation.set_system_use_time_debt(_volcanism_sys, true)
 	if simulation and "update_cadence" in simulation:
 		if _hydro_sys:
 			simulation.update_cadence(_hydro_sys, hydro_cad)
+		if _erosion_sys:
+			simulation.update_cadence(_erosion_sys, erosion_cad)
 		for biome_sys in _biome_like_systems:
 			if biome_sys:
 				simulation.update_cadence(biome_sys, biome_cad)

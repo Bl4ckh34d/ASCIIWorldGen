@@ -79,23 +79,31 @@ void main() {
         return;
     }
 
-    // Find a neighbor of a different plate to approximate boundary normal
+    // Find nearest different-plate cell in a configurable band.
     int nx_sel = int(x);
     int ny_sel = int(y);
+    float nearest_d = 1e9;
     bool found = false;
     int W = PC.width;
     int H = PC.height;
-    for (int dy = -1; dy <= 1 && !found; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
-            if (abs(dx) + abs(dy) != 1) continue;
+    int band = max(1, PC.band_cells);
+    for (int dy = -band; dy <= band; ++dy) {
+        for (int dx = -band; dx <= band; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            float dd = length(vec2(float(dx), float(dy)));
+            if (dd > float(band) + 0.001) continue;
             int nx = int(x) + dx;
             int ny = int(y) + dy;
             // wrap-x, clamp-y
             if (nx < 0) nx = W - 1; else if (nx >= W) nx = 0;
             if (ny < 0 || ny >= H) continue;
             int j = nx + ny * W;
-            if (PID.plate_id[j] != pid) {
-                nx_sel = nx; ny_sel = ny; found = true; break;
+            int pj = PID.plate_id[j];
+            if (pj != pid && dd < nearest_d) {
+                nearest_d = dd;
+                nx_sel = nx;
+                ny_sel = ny;
+                found = true;
             }
         }
     }
@@ -121,6 +129,9 @@ void main() {
     float rel_v = v2 - v1;
     float shear = abs(rel_u * (-diry) + rel_v * dirx);
     float approach = -(rel_u * dirx + rel_v * diry);
+    float belt_w = 1.0 - smoothstep(1.0, float(band) + 0.6, nearest_d);
+    belt_w = clamp(belt_w, 0.0, 1.0);
+    float organic = 0.72 + 0.56 * fract(sin(dot(vec2(float(x), float(y)) + vec2(float(pid), float(p_other)) * 0.37 + vec2(PC.seed_phase), vec2(27.19, 91.07))) * 13758.5453);
 
     float delta_h = 0.0;
     const float conv_thresh = 0.08;
@@ -145,17 +156,17 @@ void main() {
         delta_h -= PC.trench_rate_per_day * PC.dt_days * div * 0.30;
     } else {
         // cheap hash noise based on coordinates
-        float n = fract(sin(dot(vec2(x,y) + PC.seed_phase, vec2(12.9898,78.233))) * 43758.5453);
+        float n = fract(sin(dot(vec2(float(x), float(y)) + vec2(PC.seed_phase), vec2(12.9898,78.233))) * 43758.5453);
         delta_h += PC.transform_roughness_per_day * PC.dt_days * (n - 0.5);
     }
 
     // Transform zones add rough strike-slip textures rather than major elevation jumps.
     if (approach >= div_thresh && approach <= conv_thresh) {
-        float n2 = fract(sin(dot(vec2(x + 31u, y + 17u) + PC.seed_phase, vec2(21.9898,43.233))) * 24634.6345);
+        float n2 = fract(sin(dot(vec2(float(x) + 31.0, float(y) + 17.0) + vec2(PC.seed_phase), vec2(21.9898,43.233))) * 24634.6345);
         delta_h += PC.transform_roughness_per_day * PC.dt_days * shear * ((n2 - 0.5) * 1.8);
     }
 
+    delta_h *= belt_w * organic;
     float h_out = clamp(h_base + delta_h, -1.0, 2.0);
     HOut.height_out[i] = h_out;
 }
-

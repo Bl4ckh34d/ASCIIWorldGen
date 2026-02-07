@@ -244,7 +244,7 @@ func classify(w: int, h: int,
 				float(params.get("temp_max_c", 70.0)),
 				float(params.get("height_scale_m", 6000.0)),
 				float(params.get("lapse_c_per_km", 5.5)),
-				-10.0, 1.0, # ocean ice threshold and wiggle amplitude
+				-7.0, 2.2, # ocean ice threshold and wiggle amplitude
 			])
 			pc_r.append_array(ints_r.to_byte_array()); pc_r.append_array(floats_r.to_byte_array())
 			var pad_r := (16 - (pc_r.size() % 16)) % 16
@@ -381,8 +381,8 @@ func reapply_cryosphere_to_buffer(
 		temp_max_c: float,
 		height_scale_m: float = 6000.0,
 		lapse_c_per_km: float = 5.5,
-		ocean_ice_base_thresh_c: float = -10.0,
-		ocean_ice_wiggle_amp_c: float = 1.0
+		ocean_ice_base_thresh_c: float = -7.0,
+		ocean_ice_wiggle_amp_c: float = 2.2
 	) -> bool:
 	_ensure()
 	if not _reapply_pipeline.is_valid():

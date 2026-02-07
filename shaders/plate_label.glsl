@@ -1,8 +1,8 @@
 #[compute]
 #version 450
 // File: res://shaders/plate_label.glsl
-// Assign plate ids using a warped weighted Voronoi field (wrap-X), producing
-// curved irregular boundaries without fuzzy/noisy edge dithering.
+// Assign plate ids using a strongly warped weighted Voronoi field (wrap-X).
+// The warp is multi-scale and flow-like to avoid straight Voronoi seams.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -75,6 +75,25 @@ vec2 warp_field(vec2 p){
     return vec2(a + 0.55 * c, b + 0.45 * d);
 }
 
+vec2 flow_warp(vec2 p){
+    float wf = max(0.00001, PC.warp_frequency);
+    // Low frequency steering
+    vec2 drift = vec2(
+        fbm2(p * (wf * 0.43) + vec2(101.0, -37.0)),
+        fbm2(p * (wf * 0.41) + vec2(-83.0, 59.0))
+    );
+    // Mid/high frequency deformation
+    vec2 adv = vec2(
+        fbm2(p * (wf * 1.35) + vec2(13.0, 27.0)),
+        fbm2(p * (wf * 1.58) + vec2(-29.0, 11.0))
+    );
+    return drift * 0.78 + adv * 0.46;
+}
+
+float site_hash(int s, float salt){
+    return fract(sin(float(s) * 12.9898 + float(PC.seed) * 0.017 + salt) * 43758.5453);
+}
+
 void main() {
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
@@ -86,23 +105,39 @@ void main() {
     float lat_abs = abs(lat01 - 0.5) * 2.0;
     float lat_scale = mix(1.0, clamp(PC.lat_anisotropy, 0.2, 2.5), smoothstep(0.15, 0.95, lat_abs));
     vec2 p = vec2(float(x), float(y));
-    vec2 warped = p + warp_field(p) * PC.warp_strength_cells;
+    float ws = max(0.0, PC.warp_strength_cells);
+    vec2 warped = p;
+    // Layered advection-style warping for organic, plate-like outlines.
+    vec2 w0 = warp_field(warped) + flow_warp(warped + vec2(17.0, -11.0)) * 0.65;
+    warped += w0 * (ws * 0.70);
+    vec2 w1 = warp_field(warped * 1.17 + vec2(43.0, -29.0)) + flow_warp(warped * 1.09 + vec2(-61.0, 37.0)) * 0.60;
+    warped += w1 * (ws * 0.42);
+    vec2 w2 = warp_field(warped * 1.71 + vec2(-97.0, 53.0));
+    warped += w2 * (ws * 0.22);
 
     float best_d2 = 3.4e38;
     int best_idx = 0;
-    for (int p = 0; p < PC.num_sites; ++p) {
-        float sx = float(SX.site_x[p]);
-        float sy = float(SY.site_y[p]);
+    for (int s = 0; s < PC.num_sites; ++s) {
+        float sx = float(SX.site_x[s]);
+        float sy = float(SY.site_y[s]);
         float dx = warped.x - sx;
         // wrap-x shortest distance
         if (dx > float(W) * 0.5) dx -= float(W);
         else if (dx < -float(W) * 0.5) dx += float(W);
-        float dy = (warped.y - sy) * lat_scale;
+        float dy = warped.y - sy;
+        float h0 = site_hash(s, 3.7);
+        float h1 = site_hash(s, 9.1);
+        float site_ax = mix(0.82, 1.26, h0);
+        float site_ay = mix(0.82, 1.26, h1);
+        dx *= site_ax;
+        dy *= lat_scale * site_ay;
         float d2 = dx * dx + dy * dy;
-        float weight = clamp(SW.site_weight[p], 0.65, 1.35);
+        float weight = clamp(SW.site_weight[s], 0.20, 3.40);
+        // Site-specific exponent adds shape diversity beyond pure Euclidean Voronoi.
+        float pwr = mix(0.88, 1.22, site_hash(s, 17.3));
+        d2 = pow(max(1e-6, d2), pwr);
         d2 *= weight;
-        if (d2 < best_d2) { best_d2 = d2; best_idx = p; }
+        if (d2 < best_d2) { best_d2 = d2; best_idx = s; }
     }
     Out.out_plate_id[i] = best_idx;
 }
-

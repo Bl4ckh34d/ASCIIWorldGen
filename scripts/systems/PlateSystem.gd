@@ -19,7 +19,7 @@ var transform_roughness_per_day: float = 0.0004
 var subduction_rate_per_day: float = 0.0016
 var trench_rate_per_day: float = 0.0012
 var drift_cells_per_day: float = 0.02
-var boundary_band_cells: int = 1
+var boundary_band_cells: int = 3
 
 # State
 var plate_site_x: PackedInt32Array = PackedInt32Array()
@@ -28,6 +28,10 @@ var plate_site_weight: PackedFloat32Array = PackedFloat32Array()
 var plate_vel_u: PackedFloat32Array = PackedFloat32Array() # per-plate
 var plate_vel_v: PackedFloat32Array = PackedFloat32Array() # per-plate
 var plate_buoyancy: PackedFloat32Array = PackedFloat32Array() # per-plate (0 oceanic .. 1 continental)
+var plate_turn_bias_rad_per_day: PackedFloat32Array = PackedFloat32Array() # signed long-term turning drift
+var plate_turn_amp_rad_per_day: PackedFloat32Array = PackedFloat32Array() # oscillatory turning component
+var plate_turn_freq_cycles_per_day: PackedFloat32Array = PackedFloat32Array() # per-plate turning tempo
+var plate_turn_phase: PackedFloat32Array = PackedFloat32Array()
 var cell_plate_id: PackedInt32Array = PackedInt32Array()
 var boundary_mask: PackedByteArray = PackedByteArray()
 var boundary_mask_render: PackedByteArray = PackedByteArray()
@@ -55,7 +59,7 @@ func initialize(gen: Object) -> void:
 	_shelf = ContinentalShelfCompute.new()
 	_land_mask_compute = load("res://scripts/systems/LandMaskCompute.gd").new()
 
-func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
+func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null:
 		return {}
 	var w: int = generator.config.width
@@ -65,6 +69,7 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	# Refresh boundary mask lazily if dims changed
 	if cell_plate_id.size() != w * h:
 		_build_plates()
+	_update_plate_direction(dt_days, world)
 	# Prefer GPU update if pipeline available
 	if _gpu_update == null:
 		_gpu_update = PlateUpdateCompute.new()
@@ -148,6 +153,13 @@ func _build_plates() -> void:
 	plate_vel_u.resize(n)
 	plate_vel_v.resize(n)
 	plate_buoyancy.resize(n)
+	plate_turn_bias_rad_per_day.resize(n)
+	plate_turn_amp_rad_per_day.resize(n)
+	plate_turn_freq_cycles_per_day.resize(n)
+	plate_turn_phase.resize(n)
+	var guaranteed_large_idx: int = rng.randi_range(0, max(0, n - 1))
+	var half_span: int = max(1, int(n / 2))
+	var guaranteed_small_idx: int = (guaranteed_large_idx + half_span) % max(1, n)
 	for p in range(n):
 		plate_site_x[p] = rng.randi_range(0, max(0, w - 1))
 		plate_site_y[p] = rng.randi_range(0, max(0, h - 1))
@@ -155,9 +167,24 @@ func _build_plates() -> void:
 		var is_cont: bool = rng.randf() < 0.42
 		var buoy: float = rng.randf_range(0.58, 0.92) if is_cont else rng.randf_range(0.15, 0.46)
 		plate_buoyancy[p] = buoy
-		# Smaller weight -> larger Voronoi region. Keep mild spread for realistic plate size diversity.
-		var size_bias: float = -0.10 if is_cont else 0.08
-		plate_site_weight[p] = clamp(1.0 + size_bias + rng.randf_range(-0.08, 0.08), 0.70, 1.30)
+		# Smaller weight -> larger Voronoi region.
+		# Use a broad distribution so a few major plates coexist with many smaller ones.
+		var w_plate: float = 1.0
+		if p == guaranteed_large_idx:
+			w_plate = rng.randf_range(0.22, 0.46)
+		elif p == guaranteed_small_idx:
+			w_plate = rng.randf_range(2.00, 3.20)
+		else:
+			var tier_roll: float = rng.randf()
+			if tier_roll < 0.24:
+				w_plate = rng.randf_range(0.28, 0.75) # major plates
+			elif tier_roll > 0.82:
+				w_plate = rng.randf_range(1.45, 2.85) # microplates
+			else:
+				w_plate = rng.randf_range(0.78, 1.55) # mid-size plates
+		# Mild buoyancy influence: buoyant/continental plates tend to be slightly larger.
+		w_plate *= (0.90 - (buoy - 0.5) * 0.12)
+		plate_site_weight[p] = clamp(w_plate, 0.20, 3.40)
 		var u: float = (rng.randf() * 2.0 - 1.0)
 		var v: float = (rng.randf() * 2.0 - 1.0) * 0.3
 		if lat < 0.3:
@@ -168,6 +195,19 @@ func _build_plates() -> void:
 			u -= 0.4
 		plate_vel_u[p] = u
 		plate_vel_v[p] = v
+		# Per-plate drift-direction evolution profile.
+		# Fast outliers change direction noticeably sooner than slow, stable plates.
+		var fast_turner: bool = rng.randf() < 0.22
+		var bias_mag: float = rng.randf_range(4.0e-7, 4.0e-6)
+		var amp_mag: float = rng.randf_range(1.0e-6, 1.2e-5)
+		if fast_turner:
+			bias_mag *= rng.randf_range(1.6, 3.2)
+			amp_mag *= rng.randf_range(1.7, 3.4)
+		plate_turn_bias_rad_per_day[p] = bias_mag * (-1.0 if rng.randf() < 0.5 else 1.0)
+		plate_turn_amp_rad_per_day[p] = amp_mag * (-1.0 if rng.randf() < 0.5 else 1.0)
+		# Period range: ~35 to ~500 years (in sim-days) with plate-specific phase.
+		plate_turn_freq_cycles_per_day[p] = rng.randf_range(1.0 / 180000.0, 1.0 / 13000.0)
+		plate_turn_phase[p] = rng.randf_range(-PI, PI)
 	cell_plate_id.resize(size)
 	boundary_mask.resize(size)
 	for i in range(size):
@@ -177,9 +217,10 @@ func _build_plates() -> void:
 	if _gpu_update == null:
 		_gpu_update = PlateUpdateCompute.new()
 	var seed: int = (int(generator.config.rng_seed) ^ 0x6A09E667)
-	var warp_strength_cells: float = clamp(float(min(w, h)) * 0.03, 5.0, 12.0)
-	var warp_frequency: float = 0.013
-	var lat_anisotropy: float = 1.15
+	# Stronger, multi-scale warp to avoid straight Voronoi-looking plate seams.
+	var warp_strength_cells: float = clamp(float(min(w, h)) * 0.12, 8.0, 28.0)
+	var warp_frequency: float = 0.010
+	var lat_anisotropy: float = 1.22
 	var built: Dictionary = _gpu_update.build_voronoi_and_boundary(
 		w,
 		h,
@@ -201,6 +242,29 @@ func _build_plates() -> void:
 			for k in range(size):
 				boundary_mask[k] = (1 if bnd[k] != 0 else 0)
 	_build_boundary_render_mask(w, h)
+	# Expose raw plate fields so terrain generation can use the same tectonic structure.
+	if generator:
+		if "_plates_cell_id_i32" in generator:
+			generator._plates_cell_id_i32 = cell_plate_id.duplicate()
+		if "_plates_vel_u" in generator:
+			generator._plates_vel_u = plate_vel_u.duplicate()
+		if "_plates_vel_v" in generator:
+			generator._plates_vel_v = plate_vel_v.duplicate()
+		if "_plates_buoyancy" in generator:
+			generator._plates_buoyancy = plate_buoyancy.duplicate()
+		if "_plates_boundary_mask_i32" in generator:
+			var mask_i32 := PackedInt32Array()
+			mask_i32.resize(size)
+			var boundary_count: int = 0
+			for bi in range(size):
+				var v: int = (1 if boundary_mask[bi] != 0 else 0)
+				mask_i32[bi] = v
+				if v == 1:
+					boundary_count += 1
+			generator._plates_boundary_mask_i32 = mask_i32
+			if "tectonic_stats" in generator:
+				generator.tectonic_stats["boundary_cells"] = boundary_count
+				generator.tectonic_stats["total_plates"] = num_plates
 	# Update GPU buffers for plates/boundaries
 	if generator and "_gpu_buffer_manager" in generator and generator._gpu_buffer_manager != null:
 		var size_bytes := size * 4
@@ -210,13 +274,91 @@ func _build_plates() -> void:
 	if generator and "_plates_boundary_mask_render_u8" in generator:
 		generator._plates_boundary_mask_render_u8 = boundary_mask_render
 
+func _update_plate_direction(dt_days: float, world: Object) -> void:
+	if dt_days <= 0.0:
+		return
+	var n: int = min(
+		plate_vel_u.size(),
+		min(
+			plate_vel_v.size(),
+			min(
+				plate_turn_bias_rad_per_day.size(),
+				min(plate_turn_amp_rad_per_day.size(), min(plate_turn_freq_cycles_per_day.size(), plate_turn_phase.size()))
+			)
+		)
+	)
+	if n <= 0:
+		return
+	var sim_days: float = 0.0
+	if world != null and "simulation_time_days" in world:
+		sim_days = float(world.simulation_time_days)
+	else:
+		sim_days = float(Time.get_ticks_msec()) / 1000.0
+	var tau: float = PI * 2.0
+	for p in range(n):
+		var u: float = plate_vel_u[p]
+		var v: float = plate_vel_v[p]
+		var speed0: float = sqrt(max(1e-9, u * u + v * v))
+		var freq: float = max(1.0e-8, plate_turn_freq_cycles_per_day[p])
+		var phase: float = plate_turn_phase[p]
+		var osc0: float = sin(sim_days * freq * tau + phase)
+		var osc1: float = sin(sim_days * freq * tau * 0.47 + phase * 1.83)
+		var turn_rate: float = plate_turn_bias_rad_per_day[p] + plate_turn_amp_rad_per_day[p] * (0.70 * osc0 + 0.30 * osc1)
+		var dtheta: float = clamp(turn_rate * dt_days, -0.28, 0.28)
+		if abs(dtheta) <= 1.0e-9:
+			continue
+		var cs: float = cos(dtheta)
+		var sn: float = sin(dtheta)
+		var un: float = u * cs - v * sn
+		var vn: float = u * sn + v * cs
+		# Keep drift magnitudes stable; only change direction.
+		var speed1: float = sqrt(max(1e-9, un * un + vn * vn))
+		var sfix: float = speed0 / speed1
+		plate_vel_u[p] = un * sfix
+		plate_vel_v[p] = vn * sfix
+	# Mirror evolved velocities for systems that sample generator plate state.
+	if generator:
+		if "_plates_vel_u" in generator:
+			generator._plates_vel_u = plate_vel_u.duplicate()
+		if "_plates_vel_v" in generator:
+			generator._plates_vel_v = plate_vel_v.duplicate()
+
 func _build_boundary_render_mask(w: int, h: int) -> void:
 	var size: int = w * h
 	if size <= 0 or boundary_mask.size() != size:
 		return
 	boundary_mask_render.resize(size)
-	for i in range(size):
-		boundary_mask_render[i] = boundary_mask[i]
+	var band: int = max(1, boundary_band_cells)
+	for y in range(h):
+		for x in range(w):
+			var i: int = x + y * w
+			if boundary_mask[i] != 0:
+				boundary_mask_render[i] = 1
+				continue
+			var nearest_md: int = band + 1
+			for oy in range(-band, band + 1):
+				for ox in range(-band, band + 1):
+					var md: int = abs(ox) + abs(oy)
+					if md == 0 or md > band:
+						continue
+					var nx: int = x + ox
+					var ny: int = y + oy
+					if nx < 0:
+						nx = w - 1
+					elif nx >= w:
+						nx = 0
+					if ny < 0 or ny >= h:
+						continue
+					var j: int = nx + ny * w
+					if boundary_mask[j] != 0 and md < nearest_md:
+						nearest_md = md
+			if nearest_md > band:
+				boundary_mask_render[i] = 0
+				continue
+			var t: float = 1.0 - float(nearest_md - 1) / float(max(1, band))
+			var n: float = _boundary_noise.get_noise_2d(float(x) * 0.37, float(y) * 0.37) * 0.5 + 0.5
+			var keep: float = clamp(t * 0.78 + n * 0.22 - 0.12, 0.0, 1.0)
+			boundary_mask_render[i] = (1 if keep > 0.42 else 0)
 
 func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 	var size: int = w * h

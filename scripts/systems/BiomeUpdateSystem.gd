@@ -9,13 +9,23 @@ var _blend: Object = null
 var _biome_compute: Object = null
 var _biome_post_compute: Object = null
 var biome_climate_tau_days: float = 1825.0 # ~5 years for slow biome drift
+var biome_transition_tau_days: float = 60.0
+var cryosphere_transition_tau_days: float = 8.0
+var cryosphere_climate_tau_days: float = 14.0
+var biome_transition_max_step: float = 0.45
+var cryosphere_transition_max_step: float = 0.8
+var ocean_ice_base_thresh_c: float = -9.5
+var ocean_ice_wiggle_amp_c: float = 1.1
 var _last_update_sim_days: float = -1.0
 var _height_min_cache: float = 0.0
 var _height_max_cache: float = 1.0
 var _height_cache_size: int = -1
 var _height_cache_refresh_counter: int = 0
+var _transition_epoch: int = 0
 const HEIGHT_MINMAX_REFRESH_INTERVAL: int = 24
 const CPU_MIRROR_MAX_CELLS: int = 250000
+const BIOME_ICE_SHEET_ID: int = 1
+const BIOME_GLACIER_ID: int = 24
 
 var run_full_biome: bool = true
 var run_cryosphere: bool = true
@@ -56,6 +66,8 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var moist_now_buf: RID = generator.get_persistent_buffer("moisture")
 	var slow_temp_buf: RID = generator.get_persistent_buffer("biome_temp")
 	var slow_moist_buf: RID = generator.get_persistent_buffer("biome_moist")
+	var cryo_temp_buf: RID = generator.get_persistent_buffer("cryo_temp")
+	var cryo_moist_buf: RID = generator.get_persistent_buffer("cryo_moist")
 	var beach_buf: RID = generator.get_persistent_buffer("beach")
 	var desert_buf: RID = generator.get_persistent_buffer("desert_noise")
 	var biome_buf: RID = generator.get_persistent_buffer("biome_id")
@@ -73,16 +85,31 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if _biome_post_compute == null:
 		_biome_post_compute = load("res://scripts/systems/BiomePostCompute.gd").new()
 
+	var dt_sim: float = _compute_sim_dt(world, dt_days)
+	var old_biome_bytes: PackedByteArray = PackedByteArray()
+	var old_lava_bytes: PackedByteArray = PackedByteArray()
+	if "read_persistent_buffer" in generator:
+		old_biome_bytes = generator.read_persistent_buffer("biome_id")
+		if lava_buf.is_valid():
+			old_lava_bytes = generator.read_persistent_buffer("lava")
+
 	var biome_changed: bool = false
 	var lava_changed: bool = false
+	var temp_for_cryosphere: RID = temp_now_buf
+	var moist_for_cryosphere: RID = moist_now_buf
+	# Always keep a smoothed cryosphere climate signal available, even when this
+	# instance is running in full-biome mode only. This prevents full biome passes
+	# from stripping ice/glacier states between dedicated cryosphere ticks.
+	if _blend and cryo_temp_buf.is_valid() and cryo_moist_buf.is_valid():
+		var alpha_cryo: float = 0.0
+		if dt_sim > 0.0 and cryosphere_climate_tau_days > 0.0:
+			alpha_cryo = 1.0 - exp(-dt_sim / max(0.001, cryosphere_climate_tau_days))
+		alpha_cryo = clamp(alpha_cryo, 0.0, 1.0)
+		if _blend.apply(w, h, temp_now_buf, moist_now_buf, cryo_temp_buf, cryo_moist_buf, alpha_cryo):
+			temp_for_cryosphere = cryo_temp_buf
+			moist_for_cryosphere = cryo_moist_buf
 
 	if run_full_biome:
-		var dt_sim: float = dt_days
-		if world != null and "simulation_time_days" in world:
-			var cur_days: float = float(world.simulation_time_days)
-			if _last_update_sim_days >= 0.0:
-				dt_sim = max(0.0, cur_days - _last_update_sim_days)
-			_last_update_sim_days = cur_days
 		var params := {
 			"width": w,
 			"height": h,
@@ -163,24 +190,29 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		if not ok_post:
 			return {}
 		lava_changed = true
-		if run_cryosphere:
-			var ok_reapply: bool = _reapply_cryosphere(
-				w,
-				h,
-				biome_tmp,
-				biome_buf,
-				land_buf,
-				height_buf,
-				temp_now_buf,
-				moist_now_buf
-			)
-			if not ok_reapply:
-				if not _copy_u32_buffer(biome_tmp, biome_buf, size):
-					return {}
-		else:
+		# Reapply cryosphere masks after every full-biome pass to avoid
+		# periodic ice/glacier popping from cadence mismatch between systems.
+		var ok_reapply: bool = _reapply_cryosphere(
+			w,
+			h,
+			biome_tmp,
+			biome_buf,
+			land_buf,
+			height_buf,
+			temp_for_cryosphere,
+			moist_for_cryosphere
+		)
+		if not ok_reapply:
 			if not _copy_u32_buffer(biome_tmp, biome_buf, size):
 				return {}
-		biome_changed = true
+		var biome_step: float = _compute_transition_fraction(dt_sim, biome_transition_tau_days, biome_transition_max_step)
+		biome_changed = _apply_temporal_biome_transition(
+			old_biome_bytes,
+			old_lava_bytes,
+			size,
+			biome_step,
+			lava_changed
+		)
 	elif run_cryosphere:
 		# Cryosphere-only path: reapply seasonal ice/glacier masks to current biomes.
 		if not _copy_u32_buffer(biome_buf, biome_tmp, size):
@@ -192,13 +224,15 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			biome_buf,
 			land_buf,
 			height_buf,
-			temp_now_buf,
-			moist_now_buf
+			temp_for_cryosphere,
+			moist_for_cryosphere
 		)
 		if not ok_reapply_only:
 			if not _copy_u32_buffer(biome_tmp, biome_buf, size):
 				return {}
-		biome_changed = true
+		# Do not stochastic-blend cryosphere-only updates at tiny dt steps (1x speed),
+		# otherwise sparse random ice pixels can pop in/out between ticks.
+		biome_changed = _did_biome_buffer_change(old_biome_bytes, size)
 
 	if biome_changed and _biome_tex:
 		var btex: Texture2D = _biome_tex.update_from_buffer(w, h, biome_buf)
@@ -222,6 +256,116 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if dirty.size() == 0:
 		return {}
 	return {"dirty_fields": dirty}
+
+func _compute_sim_dt(world: Object, dt_days: float) -> float:
+	var dt_sim: float = max(0.0, dt_days)
+	if world != null and "simulation_time_days" in world:
+		var cur_days: float = float(world.simulation_time_days)
+		if _last_update_sim_days >= 0.0:
+			dt_sim = max(0.0, cur_days - _last_update_sim_days)
+		_last_update_sim_days = cur_days
+	return dt_sim
+
+func _compute_transition_fraction(dt_sim: float, tau_days: float, max_step: float) -> float:
+	if dt_sim <= 0.0:
+		return 0.0
+	if tau_days <= 0.0:
+		return clamp(max_step, 0.0, 1.0)
+	var raw: float = 1.0 - exp(-dt_sim / max(0.001, tau_days))
+	return clamp(raw, 0.0, clamp(max_step, 0.0, 1.0))
+
+func _apply_temporal_biome_transition(
+		old_biome_bytes: PackedByteArray,
+		old_lava_bytes: PackedByteArray,
+		size: int,
+		step_fraction: float,
+		blend_lava: bool
+	) -> bool:
+	if generator == null or size <= 0:
+		return false
+	step_fraction = clamp(step_fraction, 0.0, 1.0)
+	if step_fraction >= 0.999:
+		return true
+	if old_biome_bytes.size() <= 0 or not ("read_persistent_buffer" in generator):
+		return true
+	var new_biome_bytes: PackedByteArray = generator.read_persistent_buffer("biome_id")
+	if new_biome_bytes.size() <= 0:
+		return false
+	var old_ids: PackedInt32Array = old_biome_bytes.to_int32_array()
+	var new_ids: PackedInt32Array = new_biome_bytes.to_int32_array()
+	if old_ids.size() != size or new_ids.size() != size:
+		return true
+
+	_transition_epoch += 1
+	var epoch: int = _transition_epoch
+	var seed: int = int(generator.config.rng_seed) ^ 0x6E624EB7
+	var merged_ids: PackedInt32Array = old_ids.duplicate()
+	var has_target_diff: bool = false
+	var changed_any: bool = false
+	for i in range(size):
+		var old_id: int = old_ids[i]
+		var new_id: int = new_ids[i]
+		if old_id == new_id:
+			continue
+		# Cryosphere transitions should be deterministic to avoid visible pixel popping.
+		if _is_cryosphere_biome(old_id) or _is_cryosphere_biome(new_id):
+			merged_ids[i] = new_id
+			changed_any = true
+			has_target_diff = true
+			continue
+		has_target_diff = true
+		if _hash01_temporal(i, epoch, seed) < step_fraction:
+			merged_ids[i] = new_id
+			changed_any = true
+
+	# Restore partial blend into the authoritative biome GPU buffer.
+	if "update_persistent_buffer" in generator:
+		generator.update_persistent_buffer("biome_id", merged_ids.to_byte_array())
+
+	# Keep lava coherent with temporal biome adoption when full biome pass produced new lava.
+	if blend_lava and old_lava_bytes.size() > 0 and "read_persistent_buffer" in generator and "update_persistent_buffer" in generator:
+		var new_lava_bytes: PackedByteArray = generator.read_persistent_buffer("lava")
+		if new_lava_bytes.size() > 0:
+			var old_lava: PackedFloat32Array = old_lava_bytes.to_float32_array()
+			var new_lava: PackedFloat32Array = new_lava_bytes.to_float32_array()
+			if old_lava.size() == size and new_lava.size() == size:
+				var merged_lava: PackedFloat32Array = old_lava.duplicate()
+				for li in range(size):
+					if old_ids[li] == new_ids[li]:
+						merged_lava[li] = new_lava[li]
+					elif _hash01_temporal(li, epoch, seed) < step_fraction:
+						merged_lava[li] = new_lava[li]
+				generator.update_persistent_buffer("lava", merged_lava.to_byte_array())
+
+	if size <= CPU_MIRROR_MAX_CELLS:
+		generator.last_biomes = merged_ids
+
+	# If target had no diff, there was no visible biome transition this tick.
+	if not has_target_diff:
+		return false
+	return changed_any
+
+func _hash01_temporal(cell_index: int, epoch: int, seed: int) -> float:
+	var n: float = float(cell_index) * 0.61803398875 + float(epoch) * 12.9898 + float(seed) * 0.00137
+	var s: float = sin(n) * 43758.5453
+	return s - floor(s)
+
+func _is_cryosphere_biome(biome_id: int) -> bool:
+	return biome_id == BIOME_ICE_SHEET_ID or biome_id == BIOME_GLACIER_ID
+
+func _did_biome_buffer_change(old_biome_bytes: PackedByteArray, size: int) -> bool:
+	if generator == null or size <= 0:
+		return false
+	if old_biome_bytes.size() <= 0:
+		return true
+	if not ("read_persistent_buffer" in generator):
+		return true
+	var new_biome_bytes: PackedByteArray = generator.read_persistent_buffer("biome_id")
+	if new_biome_bytes.size() <= 0:
+		return false
+	if new_biome_bytes.size() != old_biome_bytes.size():
+		return true
+	return new_biome_bytes != old_biome_bytes
 
 func _reapply_cryosphere(
 		w: int,
@@ -250,8 +394,8 @@ func _reapply_cryosphere(
 		generator.config.temp_max_c,
 		generator.config.height_scale_m,
 		5.5,
-		-10.0,
-		1.0
+		ocean_ice_base_thresh_c,
+		ocean_ice_wiggle_amp_c
 	)
 
 func _copy_u32_buffer(src: RID, dst: RID, count: int) -> bool:

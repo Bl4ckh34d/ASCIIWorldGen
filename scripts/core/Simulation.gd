@@ -91,9 +91,13 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 			var elapsed_ms: float = float(now_us - start_us) / 1000.0
 			var predicted_ms: float = float(s.get("avg_cost_ms", 0.0))
 			if elapsed_ms + predicted_ms > max(0.0, max_tick_time_ms):
-				# Try to fit other systems this tick; skip this one
-				_skipped_systems_count += 1
-				continue
+				# Starvation guard:
+				# 1) Always allow one due system to run each tick.
+				# 2) Mark skipped systems for immediate retry on the next tick.
+				if executed > 0:
+					_skipped_systems_count += 1
+					s["force_next_run"] = true
+					continue
 		else:
 			if executed >= max(1, max_systems_per_tick):
 				break
