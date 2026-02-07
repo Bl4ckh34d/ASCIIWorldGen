@@ -4,8 +4,97 @@ extends Control
 const IntroBigBangCompute = preload("res://scripts/intro/IntroBigBangCompute.gd")
 
 const TARGET_VIEWPORT_SIZE := Vector2i(1770, 830)
-const QUOTE_TEXT := "\"If you wish to make an apple pie from scratch,\nyou must first invent the universe\""
-const QUOTE_AUTHOR_TEXT := "- Carl Sagan"
+const DEFAULT_INTRO_QUOTE_TEXT := "\"If you wish to make an apple pie from scratch,\nyou must first invent the universe\""
+const DEFAULT_INTRO_QUOTE_AUTHOR := "- Carl Sagan"
+const INTRO_FLAGS_PATH := "user://intro_flags.cfg"
+const INTRO_FLAGS_SECTION := "intro"
+const INTRO_FLAGS_KEY_FIRST_QUOTE_SHOWN := "first_quote_shown"
+const INTRO_QUOTES := [
+	{
+		"text": DEFAULT_INTRO_QUOTE_TEXT,
+		"author": DEFAULT_INTRO_QUOTE_AUTHOR
+	},
+	{
+		"text": "\"Two things are infinite: the universe and human stupidity;\nand I'm not sure about the universe.\"",
+		"author": "- Albert Einstein"
+	},
+	{
+		"text": "\"Two possibilities exist: either we are alone in the Universe or we are not.\nBoth are equally terrifying.\"",
+		"author": "- Arthur C. Clarke"
+	},
+	{
+		"text": "\"I'm sure the universe is full of intelligent life.\nIt's just been too intelligent to come here.\"",
+		"author": "- Arthur C. Clarke"
+	},
+	{
+		"text": "\"The more clearly we can focus our attention on the wonders and realities\nof the universe about us, the less taste we shall have for destruction.\"",
+		"author": "- Rachel Carson"
+	},
+	{
+		"text": "\"Nothing happens until something moves.\"",
+		"author": "- Albert Einstein"
+	},
+	{
+		"text": "\"We are an impossibility in an impossible universe.\"",
+		"author": "- Ray Bradbury"
+	},
+	{
+		"text": "\"The universe is a pretty big place. If it's just us,\nseems like an awful waste of space.\"",
+		"author": "- Carl Sagan"
+	},
+	{
+		"text": "\"Do you think the universe fights for souls to be together?\nSome things are too strange and strong to be coincidences.\"",
+		"author": "- Emery Allen"
+	},
+	{
+		"text": "\"You are a function of what the whole universe is doing in the same way\nthat a wave is a function of what the whole ocean is doing.\"",
+		"author": "- Alan Watts"
+	},
+	{
+		"text": "\"The Universe is under no obligation to make sense to you.\"",
+		"author": "- Neil deGrasse Tyson"
+	},
+	{
+		"text": "\"If you think this Universe is bad,\nyou should see some of the others.\"",
+		"author": "- Philip K. Dick"
+	},
+	{
+		"text": "\"The universe doesn't give you what you ask for with your thoughts -\nit gives you what you demand with your actions.\"",
+		"author": "- Steve Maraboli"
+	},
+	{
+		"text": "\"The universe seems neither benign nor hostile, merely indifferent.\"",
+		"author": "- Carl Sagan"
+	},
+	{
+		"text": "\"We are the cosmos made conscious and life is the means by which\nthe universe understands itself.\"",
+		"author": "- Brian Cox"
+	},
+	{
+		"text": "\"You may think I'm small,\nbut I have a universe inside my mind.\"",
+		"author": "- Yoko Ono"
+	},
+	{
+		"text": "\"She who saves a single soul, saves the universe.\"",
+		"author": "- American McGee"
+	},
+	{
+		"text": "\"The Universe is not only queerer than we suppose,\nbut queerer than we can suppose.\"",
+		"author": "- J.B.S. Haldane"
+	},
+	{
+		"text": "\"I don't want to rule the universe.\nI just think it could be more sensibly organised.\"",
+		"author": "- Eliezer Yudkowsky"
+	},
+	{
+		"text": "\"...in an infinite universe, anything that could be imagined\nmight somewhere exist.\"",
+		"author": "- Dean Koontz"
+	},
+	{
+		"text": "\"The stars up there at night are closer than you think.\"",
+		"author": "- Doug Dillon"
+	}
+]
 const STAR_PROMPT_TEXT := "Then there was light and this goddess of life had a name: "
 const PLANET_PROMPT_TEXT := "A new world was born and her\nname was: "
 const MAX_NAME_LENGTH: int = 48
@@ -201,6 +290,8 @@ var _moon_seed: float = 0.0
 var _moon_names: Array[String] = []
 var _planet_name_suggestion: String = ""
 var _name_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+var _selected_quote_text: String = DEFAULT_INTRO_QUOTE_TEXT
+var _selected_quote_author: String = DEFAULT_INTRO_QUOTE_AUTHOR
 
 var _bigbang_compute: RefCounted = null
 var _bg_texture: Texture2D = null
@@ -214,6 +305,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_name_rng.randomize()
+	_select_intro_quote()
 	_configure_pixel_viewport()
 	_create_ui()
 	_update_layout()
@@ -222,6 +314,38 @@ func _ready() -> void:
 	_update_ui_state()
 	set_process(true)
 	queue_redraw()
+
+func _select_intro_quote() -> void:
+	if INTRO_QUOTES.is_empty():
+		_set_selected_quote({})
+		return
+	if _is_first_intro_quote_start():
+		_set_selected_quote(INTRO_QUOTES[0])
+		_mark_first_intro_quote_shown()
+		return
+	var idx: int = _name_rng.randi_range(0, INTRO_QUOTES.size() - 1)
+	_set_selected_quote(INTRO_QUOTES[idx])
+
+func _set_selected_quote(entry: Dictionary) -> void:
+	_selected_quote_text = str(entry.get("text", "")).strip_edges()
+	_selected_quote_author = str(entry.get("author", "")).strip_edges()
+	if _selected_quote_text.is_empty():
+		_selected_quote_text = DEFAULT_INTRO_QUOTE_TEXT
+	if _selected_quote_author.is_empty():
+		_selected_quote_author = DEFAULT_INTRO_QUOTE_AUTHOR
+
+func _is_first_intro_quote_start() -> bool:
+	var cfg := ConfigFile.new()
+	var err: int = cfg.load(INTRO_FLAGS_PATH)
+	if err != OK:
+		return true
+	return not bool(cfg.get_value(INTRO_FLAGS_SECTION, INTRO_FLAGS_KEY_FIRST_QUOTE_SHOWN, false))
+
+func _mark_first_intro_quote_shown() -> void:
+	var cfg := ConfigFile.new()
+	var _err: int = cfg.load(INTRO_FLAGS_PATH)
+	cfg.set_value(INTRO_FLAGS_SECTION, INTRO_FLAGS_KEY_FIRST_QUOTE_SHOWN, true)
+	cfg.save(INTRO_FLAGS_PATH)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
@@ -336,7 +460,7 @@ func _configure_pixel_viewport() -> void:
 
 func _create_ui() -> void:
 	_quote_label = Label.new()
-	_quote_label.text = QUOTE_TEXT
+	_quote_label.text = _selected_quote_text
 	_quote_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_quote_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_quote_label.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -346,7 +470,7 @@ func _create_ui() -> void:
 	add_child(_quote_label)
 
 	_quote_author_label = Label.new()
-	_quote_author_label.text = QUOTE_AUTHOR_TEXT
+	_quote_author_label.text = _selected_quote_author
 	_quote_author_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_quote_author_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_quote_author_label.autowrap_mode = TextServer.AUTOWRAP_OFF

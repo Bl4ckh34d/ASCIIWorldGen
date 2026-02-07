@@ -24,7 +24,7 @@ layout(push_constant) uniform Params {
 const float PI = 3.14159265359;
 const float TAU = 6.28318530718;
 // Temporary test mode: force a daily eclipse pass so shadow behavior can be validated quickly.
-const bool DEBUG_FORCE_DAILY_ECLIPSE = true;
+const bool DEBUG_FORCE_DAILY_ECLIPSE = false;
 
 float clamp01(float v){ return clamp(v, 0.0, 1.0); }
 

@@ -411,6 +411,15 @@ float filament_field(vec2 p, float t, float scale, float thickness) {
 	return line * line;
 }
 
+float planet_surface_height(vec2 s, float t) {
+	float n0 = fbm(s * 8.2 + vec2(7.1, -4.3) + vec2(t * 0.03, -t * 0.02));
+	float n1 = fbm(rot2(0.67) * s * 14.6 + vec2(-t * 0.06, t * 0.05) + vec2(-2.6, 3.8));
+	vec2 drift = flow_dir(s * 2.4, t * 0.22) * 0.20;
+	float veins = filament_field(s * 6.6 + drift, t * 0.25, 8.8, 0.23);
+	float patch_val = smoothstep(0.20, 0.88, fbm(s * 4.8 + vec2(t * 0.05, -t * 0.04) + 11.3));
+	return clamp(n0 * 0.46 + n1 * 0.24 + veins * 0.20 + patch_val * 0.10, 0.0, 1.0);
+}
+
 float flare_rnd(float w) {
 	return fract(sin(w) * 1000.0);
 }
@@ -840,17 +849,57 @@ vec3 render_stage2(vec2 uv, float t) {
 
 		vec2 p_rel = vec2((xpix - px) / max(1.0, float(PC.height)), (ypix - PC.orbit_y) / max(1.0, float(PC.height)));
 		float pr = length(p_rel);
+		vec2 sun_rel_planet = vec2(
+			(sun_px.x - px) / max(1.0, float(PC.height)),
+			(sun_px.y - PC.orbit_y) / max(1.0, float(PC.height))
+		);
 		float p_rad = 17.0 / max(1.0, float(PC.height));
 		float p_mask = smoothstep(p_rad + 0.002, p_rad - 0.001, pr);
-		float p_noise = fbm(p_rel * 14.0 + vec2(t * 0.45, -t * 0.35));
-		float p_vein = filament_field(p_rel * 8.5 + vec2(t * 0.25, -t * 0.2), t * 0.3, 8.0, 0.24);
-		float p_core = exp(-pr / max(0.0001, p_rad * 0.55));
-		vec3 p_col = mix(vec3(0.55, 0.09, 0.03), vec3(1.0, 0.42, 0.10), p_noise);
-		p_col = mix(p_col, vec3(1.0, 0.72, 0.24), p_vein * 0.45);
-		p_col += vec3(1.0, 0.84, 0.42) * p_core * 0.24;
+
+		vec2 p_local = p_rel / max(0.0001, p_rad);
+		float p_l2 = dot(p_local, p_local);
+		float p_z = sqrt(max(0.0, 1.0 - min(p_l2, 1.0)));
+		vec3 p_norm = normalize(vec3(p_local, p_z));
+
+		float p_spin = t * 0.07;
+		vec2 p_surf = p_norm.xy / max(0.24, p_norm.z + 0.54);
+		p_surf.x += p_spin;
+		p_surf += flow_dir(p_surf * 2.3, t * 0.16) * 0.010;
+
+		float p_h = planet_surface_height(p_surf, t);
+		float p_eps = 0.022;
+		float p_hx = planet_surface_height(p_surf + vec2(p_eps, 0.0), t) - p_h;
+		float p_hy = planet_surface_height(p_surf + vec2(0.0, p_eps), t) - p_h;
+
+		vec3 p_tangent_x = normalize(vec3(1.0, 0.0, -p_norm.x / max(0.10, p_norm.z)));
+		vec3 p_tangent_y = normalize(vec3(0.0, 1.0, -p_norm.y / max(0.10, p_norm.z)));
+		vec3 p_surf_n = normalize(p_norm - p_tangent_x * p_hx * 0.56 - p_tangent_y * p_hy * 0.56);
+
+		float p_vein = filament_field(p_surf * 6.2 + flow_dir(p_surf * 3.1, t * 0.22) * 0.20, t * 0.27, 8.6, 0.24);
+		float p_core = pow(max(0.0, p_norm.z), 1.9);
+		vec3 p_dark = vec3(0.34, 0.08, 0.03);
+		vec3 p_mid = vec3(0.78, 0.24, 0.08);
+		vec3 p_hot = vec3(1.0, 0.62, 0.20);
+		vec3 p_core_col = vec3(1.0, 0.84, 0.42);
+		vec3 p_col = mix(p_dark, p_mid, p_h);
+		p_col = mix(p_col, p_hot, clamp(p_h * 0.68 + p_vein * 0.42, 0.0, 1.0));
+		p_col = mix(p_col, p_core_col, p_core * 0.20);
+
+		vec3 planet_light_dir = normalize(vec3(sun_rel_planet, 0.92));
+		float p_ndl = clamp(dot(p_surf_n, planet_light_dir), 0.0, 1.0);
+		float p_wrap = clamp((dot(p_surf_n, planet_light_dir) + 0.30) / 1.30, 0.0, 1.0);
+		float p_fres = pow(1.0 - clamp(p_surf_n.z, 0.0, 1.0), 2.2);
+		float p_center = smoothstep(0.0, 0.96, p_norm.z);
+		float p_shade = 0.22 + p_wrap * 0.86;
+		p_col *= p_shade;
+		p_col *= mix(0.64, 1.0, p_center);
+		p_col += p_hot * p_fres * 0.08;
+		p_col += p_core_col * pow(p_ndl, 2.6) * 0.12;
+		p_col = 1.0 - exp(-p_col * 1.12);
+
 		col = mix(col, p_col, p_mask);
 		float p_glow = exp(-max(0.0, pr - p_rad) * 45.0) * step(p_rad, pr);
-		col += vec3(1.0, 0.46, 0.14) * p_glow * 0.30;
+		col += vec3(1.0, 0.46, 0.14) * p_glow * 0.24;
 
 		int moon_count = clamp(int(floor(PC.moon_count + 0.5)), 0, 3);
 		float moon_seed = max(0.0001, PC.moon_seed);
@@ -931,7 +980,8 @@ vec3 render_stage2(vec2 uv, float t) {
 			float tint_amt = 0.02 + h5 * 0.05;
 			albedo *= 0.86 + (h4 - 0.5) * 0.34;
 
-			vec3 moon_light_dir = normalize(vec3(-0.30 + h1 * 0.20, 0.22 + h2 * 0.16, 0.92));
+			vec2 moon_to_sun = sun_rel_planet - m_off;
+			vec3 moon_light_dir = normalize(vec3(moon_to_sun, 0.92));
 			float moon_ndl = clamp(dot(m_norm, moon_light_dir), 0.0, 1.0);
 			float moon_fres = pow(1.0 - clamp(m_norm.z, 0.0, 1.0), 2.4);
 			float moon_shade = 0.42 + moon_ndl * (0.60 + h2 * 0.16) + moon_fres * 0.10;
