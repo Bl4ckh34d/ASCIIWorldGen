@@ -53,7 +53,8 @@ func color_for_biome(biome: int, is_beach: bool) -> Color:
 		BiomeClassifier.Biome.FROZEN_MARSH:
 			return Color(0.90, 0.95, 0.98)
 		BiomeClassifier.Biome.FROZEN_GRASSLAND:
-			return Color(0.82, 0.90, 0.95)
+			# Keep frozen grass in the same cool, desaturated family as frozen forest/steppe.
+			return Color(0.87, 0.93, 0.95)
 		BiomeClassifier.Biome.FROZEN_STEPPE:
 			return Color(0.85, 0.90, 0.96)
 		# Frozen Meadow/Prairie merged into Frozen Grassland

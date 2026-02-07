@@ -24,6 +24,7 @@ var world_data_1_override: Texture2D
 var world_data_2_override: Texture2D
 var _fallback_black_tex: Texture2D
 var _fallback_white_tex: Texture2D
+var _render_bedrock_view: bool = false
 
 # Data managers
 var font_atlas_generator: Object
@@ -142,6 +143,7 @@ func _create_material() -> void:
 		quad_material.set_shader_parameter("cloud_light_strength", 0.25)
 		quad_material.set_shader_parameter("cloud_shadow_offset", Vector2(1.5, 1.0))
 		quad_material.set_shader_parameter("use_glyphs", 0)
+		quad_material.set_shader_parameter("bedrock_only_mode", 0)
 		quad_material.set_shader_parameter("use_cloud_texture", 0)
 		quad_material.set_shader_parameter("use_light_texture", 0)
 		quad_material.set_shader_parameter("use_river_texture", 0)
@@ -180,12 +182,12 @@ func _create_material() -> void:
 				cloud_mat.set_shader_parameter("world_data_1", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("world_data_3", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
-				cloud_mat.set_shader_parameter("cloud_opacity", 1.0)
-				cloud_mat.set_shader_parameter("cloud_min", 0.06)
-				cloud_mat.set_shader_parameter("cloud_levels", 8.0)
-				cloud_mat.set_shader_parameter("cloud_power", 0.7)
-				cloud_mat.set_shader_parameter("cloud_brightness", 1.1)
-				cloud_mat.set_shader_parameter("cloud_night_alpha", 0.35)
+				cloud_mat.set_shader_parameter("cloud_opacity", 0.90)
+				cloud_mat.set_shader_parameter("cloud_min", 0.18)
+				cloud_mat.set_shader_parameter("cloud_levels", 10.0)
+				cloud_mat.set_shader_parameter("cloud_power", 0.95)
+				cloud_mat.set_shader_parameter("cloud_brightness", 1.0)
+				cloud_mat.set_shader_parameter("cloud_night_alpha", 0.08)
 				cloud_mat.set_shader_parameter("cloud_texture", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("light_texture", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("use_cloud_texture", 0)
@@ -239,6 +241,7 @@ func update_world_data(
 	
 	# Always call into texture_manager so lightweight resources (notably the color
 	# palette texture) stay valid in GPU-only mode when base/aux texture packing is skipped.
+	_render_bedrock_view = use_bedrock_view
 	texture_manager.update_world_data(
 		map_width, map_height,
 		height_data, temperature_data, moisture_data, light_data,
@@ -324,6 +327,7 @@ func _update_material_uniforms() -> void:
 		# Set map dimensions
 		shader_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
 		shader_mat.set_shader_parameter("cell_size", cell_size)
+		shader_mat.set_shader_parameter("bedrock_only_mode", 1 if _render_bedrock_view else 0)
 		
 		# Set atlas parameters
 		var atlas_uv_size = font_atlas_generator.get_uv_dimensions()
@@ -398,6 +402,7 @@ func _update_light_uniform() -> void:
 		var shader_mat = quad_material as ShaderMaterial
 		var t1 = world_data_1_override if world_data_1_override else texture_manager.get_data_texture_1()
 		shader_mat.set_shader_parameter("world_data_1", _safe_tex(t1, _fallback_black_tex))
+		shader_mat.set_shader_parameter("bedrock_only_mode", 1 if _render_bedrock_view else 0)
 		if light_texture_override and is_instance_valid(light_texture_override):
 			shader_mat.set_shader_parameter("light_texture", light_texture_override)
 			shader_mat.set_shader_parameter("use_light_texture", 1)

@@ -36,6 +36,7 @@ const FERTILITY_FLOW_SCALE: float = 64.0
 
 var run_full_biome: bool = true
 var run_cryosphere: bool = true
+var enable_runtime_cpu_mirror_sync: bool = false
 
 func initialize(gen: Object) -> void:
 	generator = gen
@@ -99,8 +100,8 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		_fertility_compute = load("res://scripts/systems/FertilityLithologyCompute.gd").new()
 
 	var dt_sim: float = _compute_sim_dt(world, dt_days)
-	var use_temporal_transition: bool = _should_use_temporal_transition(world, dt_sim, size)
-	var allow_cpu_sync: bool = _allow_cpu_mirror_sync(world, size)
+	var allow_cpu_sync: bool = enable_runtime_cpu_mirror_sync and _allow_cpu_mirror_sync(world, size)
+	var use_temporal_transition: bool = allow_cpu_sync and _should_use_temporal_transition(world, dt_sim, size)
 	var old_biome_bytes: PackedByteArray = PackedByteArray()
 	var old_lava_bytes: PackedByteArray = PackedByteArray()
 	if use_temporal_transition and "read_persistent_buffer" in generator:
@@ -295,7 +296,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				return {}
 		# Do not stochastic-blend cryosphere-only updates at tiny dt steps (1x speed),
 		# otherwise sparse random ice pixels can pop in/out between ticks.
-		if old_biome_bytes.size() > 0:
+		if use_temporal_transition and old_biome_bytes.size() > 0:
 			biome_changed = _did_biome_buffer_change(old_biome_bytes, size)
 		else:
 			biome_changed = true
@@ -489,16 +490,9 @@ func _reapply_cryosphere(
 func _copy_u32_buffer(src: RID, dst: RID, count: int) -> bool:
 	if not src.is_valid() or not dst.is_valid() or count <= 0:
 		return false
-	if generator._flow_compute == null:
-		generator._flow_compute = load("res://scripts/systems/FlowCompute.gd").new()
-	if generator._flow_compute == null:
-		return false
-	if "_ensure" in generator._flow_compute:
-		generator._flow_compute._ensure()
-	if not ("_dispatch_copy_u32" in generator._flow_compute):
-		return false
-	generator._flow_compute._dispatch_copy_u32(src, dst, count)
-	return true
+	if "dispatch_copy_u32" in generator:
+		return bool(generator.dispatch_copy_u32(src, dst, count))
+	return false
 
 func _sync_cpu_biomes_from_gpu(size: int) -> void:
 	if generator == null or size <= 0 or size > CPU_MIRROR_MAX_CELLS:

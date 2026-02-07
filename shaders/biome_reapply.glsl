@@ -29,10 +29,31 @@ const int BIOME_OCEAN = 0;
 const int BIOME_ICE_SHEET = 1;
 const int BIOME_STEPPE = 6;
 const int BIOME_GRASSLAND = 7;
+const int BIOME_SWAMP = 10;
+const int BIOME_TROPICAL_FOREST = 11;
+const int BIOME_BOREAL_FOREST = 12;
+const int BIOME_CONIFER_FOREST = 13;
+const int BIOME_TEMPERATE_FOREST = 14;
+const int BIOME_RAINFOREST = 15;
+const int BIOME_HILLS = 16;
+const int BIOME_FOOTHILLS = 17;
 const int BIOME_MOUNTAINS = 18;
 const int BIOME_ALPINE = 19;
+const int BIOME_SAVANNA = 21;
+const int BIOME_FROZEN_FOREST = 22;
+const int BIOME_FROZEN_MARSH = 23;
 const int BIOME_TUNDRA = 20;
 const int BIOME_GLACIER = 24;
+const int BIOME_FROZEN_GRASSLAND = 29;
+const int BIOME_FROZEN_STEPPE = 30;
+const int BIOME_FROZEN_SAVANNA = 33;
+const int BIOME_FROZEN_HILLS = 34;
+const int BIOME_FROZEN_FOOTHILLS = 35;
+const int BIOME_SCORCHED_GRASSLAND = 36;
+const int BIOME_SCORCHED_STEPPE = 37;
+const int BIOME_SCORCHED_SAVANNA = 40;
+const int BIOME_SCORCHED_HILLS = 41;
+const int BIOME_SCORCHED_FOOTHILLS = 42;
 const float GLACIER_ELEV_FORM_C = -4.5;
 const float GLACIER_ELEV_HOLD_C = 1.8;
 const float GLACIER_DEEP_FORM_C = -20.0;
@@ -70,6 +91,48 @@ float fbm3(vec2 p){
         a *= 0.5;
     }
     return v;
+}
+
+bool is_frozen_family(int b) {
+    return b == BIOME_FROZEN_FOREST
+        || b == BIOME_FROZEN_MARSH
+        || b == BIOME_FROZEN_GRASSLAND
+        || b == BIOME_FROZEN_STEPPE
+        || b == BIOME_FROZEN_SAVANNA
+        || b == BIOME_FROZEN_HILLS
+        || b == BIOME_FROZEN_FOOTHILLS;
+}
+
+int thaw_to_base(int b) {
+    if (b == BIOME_FROZEN_FOREST) return BIOME_BOREAL_FOREST;
+    if (b == BIOME_FROZEN_MARSH) return BIOME_SWAMP;
+    if (b == BIOME_FROZEN_GRASSLAND) return BIOME_GRASSLAND;
+    if (b == BIOME_FROZEN_STEPPE) return BIOME_STEPPE;
+    if (b == BIOME_FROZEN_SAVANNA) return BIOME_SAVANNA;
+    if (b == BIOME_FROZEN_HILLS) return BIOME_HILLS;
+    if (b == BIOME_FROZEN_FOOTHILLS) return BIOME_FOOTHILLS;
+    return b;
+}
+
+int normalize_hot_variants(int b) {
+    if (b == BIOME_SCORCHED_GRASSLAND) return BIOME_GRASSLAND;
+    if (b == BIOME_SCORCHED_STEPPE) return BIOME_STEPPE;
+    if (b == BIOME_SCORCHED_SAVANNA) return BIOME_SAVANNA;
+    if (b == BIOME_SCORCHED_HILLS) return BIOME_HILLS;
+    if (b == BIOME_SCORCHED_FOOTHILLS) return BIOME_FOOTHILLS;
+    return b;
+}
+
+int freeze_target(int b) {
+    if (b == BIOME_SWAMP) return BIOME_FROZEN_MARSH;
+    if (b == BIOME_BOREAL_FOREST || b == BIOME_CONIFER_FOREST || b == BIOME_TEMPERATE_FOREST
+        || b == BIOME_RAINFOREST || b == BIOME_TROPICAL_FOREST) return BIOME_FROZEN_FOREST;
+    if (b == BIOME_GRASSLAND) return BIOME_FROZEN_GRASSLAND;
+    if (b == BIOME_STEPPE) return BIOME_FROZEN_STEPPE;
+    if (b == BIOME_SAVANNA) return BIOME_FROZEN_SAVANNA;
+    if (b == BIOME_HILLS) return BIOME_FROZEN_HILLS;
+    if (b == BIOME_FOOTHILLS) return BIOME_FROZEN_FOOTHILLS;
+    return b;
 }
 
 void main(){
@@ -176,6 +239,29 @@ void main(){
             OutB.out_biome[i] = BIOME_STEPPE;
         }
         return;
+    }
+
+    // Frozen-family coupling: cryosphere drives freeze/thaw variants with hysteresis.
+    // This runs both in full-biome and cryosphere-only passes, keeping frozen ecology
+    // coherent with cryosphere climate smoothing.
+    int base_b = normalize_hot_variants(thaw_to_base(b));
+    float frozen_form_c = -5.0 + temperate * 0.6 + polar * 1.0 - equator * 1.4;
+    float frozen_hold_c = frozen_form_c + 2.0;
+    int frozen_b = freeze_target(base_b);
+    bool can_freeze_family = (frozen_b != base_b);
+    if (can_freeze_family) {
+        if (is_frozen_family(b)) {
+            if (t_c_adj <= frozen_hold_c) {
+                OutB.out_biome[i] = freeze_target(base_b);
+            } else {
+                OutB.out_biome[i] = base_b;
+            }
+            return;
+        }
+        if (t_c_adj <= frozen_form_c) {
+            OutB.out_biome[i] = frozen_b;
+            return;
+        }
     }
 
     OutB.out_biome[i] = b;

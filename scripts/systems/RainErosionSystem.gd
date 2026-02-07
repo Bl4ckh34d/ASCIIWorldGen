@@ -23,6 +23,8 @@ const CRYO_EROSION_CAP_SCALE: float = 1.55
 const CPU_SYNC_INTERVAL_STEPS: int = 90
 const CPU_SYNC_MAX_CELLS: int = 250000
 
+var enable_runtime_cpu_mirror_sync: bool = false
+
 func initialize(gen: Object) -> void:
 	generator = gen
 	_step_counter = 0
@@ -94,11 +96,11 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		return {}
 
 	# Commit height_tmp -> height (bitwise copy as u32 words).
-	if generator._flow_compute == null:
-		generator._flow_compute = load("res://scripts/systems/FlowCompute.gd").new()
-	if "_ensure" in generator._flow_compute:
-		generator._flow_compute._ensure()
-	generator._flow_compute._dispatch_copy_u32(height_tmp, height_buf, size)
+	if "dispatch_copy_u32" in generator:
+		if not bool(generator.dispatch_copy_u32(height_tmp, height_buf, size)):
+			return {}
+	else:
+		return {}
 
 	# Rebuild land mask from updated terrain on GPU.
 	if _land_mask_compute == null:
@@ -106,9 +108,10 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	_land_mask_compute.update_from_height(w, h, height_buf, float(generator.config.sea_level), land_buf)
 
 	_step_counter += 1
-	var sync_interval: int = _cpu_sync_interval_for_world(world)
-	if _step_counter % max(1, sync_interval) == 0:
-		_sync_cpu_mirror(size)
+	if enable_runtime_cpu_mirror_sync:
+		var sync_interval: int = _cpu_sync_interval_for_world(world)
+		if _step_counter % max(1, sync_interval) == 0:
+			_sync_cpu_mirror(size)
 
 	return {
 		"dirty_fields": PackedStringArray(["height", "is_land"]),

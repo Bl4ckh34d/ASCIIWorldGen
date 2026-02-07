@@ -1,7 +1,8 @@
 # File: res://scripts/systems/WorldData2TextureCompute.gd
 extends RefCounted
 
-# Packs biome/is_land/beach buffers into an RGBA32F texture (char_index set to 0).
+# Packs surface/is_land/beach buffers into an RGBA32F texture (char_index set to 0).
+# Surface source can be biome_id (default) or rock_type (bedrock mode).
 
 var DATA2_TEX_SHADER: RDShaderFile = load("res://shaders/world_data2_from_buffers.glsl")
 
@@ -66,12 +67,21 @@ func _ensure_texture(w: int, h: int) -> void:
 		_tex_rid = RID()
 		push_error("Texture2DRD has no RD texture setter; GPU-only mode disables CPU texture fallback.")
 
-func update_from_buffers(w: int, h: int, biome_buf: RID, land_buf: RID, beach_buf: RID) -> Texture2D:
+func update_from_buffers(
+	w: int,
+	h: int,
+	biome_buf: RID,
+	land_buf: RID,
+	beach_buf: RID,
+	rock_buf: RID = RID(),
+	use_rock: bool = false
+) -> Texture2D:
 	_ensure_pipeline()
 	if not _pipeline.is_valid():
 		return null
 	if not biome_buf.is_valid() or not land_buf.is_valid() or not beach_buf.is_valid():
 		return null
+	var use_rock_local: bool = use_rock and rock_buf.is_valid()
 	_ensure_texture(w, h)
 	if _tex == null:
 		return null
@@ -91,6 +101,11 @@ func update_from_buffers(w: int, h: int, biome_buf: RID, land_buf: RID, beach_bu
 	u.binding = 2
 	u.add_id(beach_buf)
 	uniforms.append(u)
+	u = RDUniform.new()
+	u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u.binding = 4
+	u.add_id(rock_buf if use_rock_local else biome_buf)
+	uniforms.append(u)
 	var img_u := RDUniform.new()
 	img_u.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 	img_u.binding = 3
@@ -98,7 +113,7 @@ func update_from_buffers(w: int, h: int, biome_buf: RID, land_buf: RID, beach_bu
 	uniforms.append(img_u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 	var pc := PackedByteArray()
-	var ints := PackedInt32Array([w, h])
+	var ints := PackedInt32Array([w, h, (1 if use_rock_local else 0), 0])
 	pc.append_array(ints.to_byte_array())
 	var pad := (16 - (pc.size() % 16)) % 16
 	if pad > 0:

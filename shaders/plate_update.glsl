@@ -136,6 +136,8 @@ void main() {
     float organic = 0.72 + 0.56 * fract(sin(dot(vec2(float(x), float(y)) + vec2(float(pid), float(p_other)) * 0.37 + vec2(PC.seed_phase), vec2(27.19, 91.07))) * 13758.5453);
 
     float delta_h = 0.0;
+    bool divergent = false;
+    float divergence_floor = -1.0;
     const float conv_thresh = 0.08;
     const float div_thresh = -0.08;
     if (approach > conv_thresh) {
@@ -157,25 +159,21 @@ void main() {
             delta_h -= PC.trench_rate_per_day * PC.dt_days * conv * 0.08;
         }
     } else if (approach < div_thresh) {
+        divergent = true;
         float div = (-approach) - (-div_thresh);
-        boundary_w = pow(belt_w, 1.65);
+        // Keep divergent deformation narrow so rifts do not widen into giant basins.
+        boundary_w = pow(belt_w, 2.25);
         float land_factor = smoothstep(PC.sea_level - 0.02, PC.sea_level + 0.35, h_base);
-        float ridge_gain = mix(0.58, 0.20, land_factor);
-        float sink_gain = mix(0.82, 1.24, land_factor);
+        // Mid-ocean divergence should trend toward elevated young crust, not endlessly deepen.
+        float rift_target = mix(PC.sea_level - 0.16, PC.sea_level - 0.08, land_factor);
+        float to_target = rift_target - h_base;
+        float settle_rate = PC.subduction_rate_per_day * PC.dt_days * div * mix(0.40, 0.26, land_factor);
+        delta_h += clamp(to_target, -settle_rate, settle_rate);
+        // Add subtle upwelling so active ridge axes stay visible.
+        float ridge_gain = mix(0.44, 0.16, land_factor);
         delta_h += PC.ridge_rate_per_day * PC.dt_days * div * ridge_gain;
-        delta_h -= PC.trench_rate_per_day * PC.dt_days * div * sink_gain;
-        // Magma infill is limited so active rifts retain relief.
-        float rift_target = mix(PC.sea_level - 0.20, PC.sea_level - 0.10, land_factor);
-        float to_target = rift_target - (h_base + delta_h);
-        float infill_rate = PC.ridge_rate_per_day * PC.dt_days * div * mix(0.48, 0.32, land_factor);
-        delta_h += clamp(to_target, -infill_rate * 0.22, infill_rate);
-        if (land_factor > 0.55) {
-            float min_land_rift = PC.sea_level - 0.14;
-            float proposed = h_base + delta_h;
-            if (proposed < min_land_rift) {
-                delta_h += (min_land_rift - proposed);
-            }
-        }
+        // Hard floor to prevent runaway abyssal deepening on persistent divergent seams.
+        divergence_floor = mix(PC.sea_level - 0.24, PC.sea_level - 0.12, land_factor);
     } else {
         // cheap hash noise based on coordinates
         float n = fract(sin(dot(vec2(float(x), float(y)) + vec2(PC.seed_phase), vec2(12.9898,78.233))) * 43758.5453);
@@ -190,5 +188,8 @@ void main() {
 
     delta_h *= boundary_w * organic;
     float h_out = clamp(h_base + delta_h, -1.0, 2.0);
+    if (divergent) {
+        h_out = max(h_out, divergence_floor);
+    }
     HOut.height_out[i] = h_out;
 }

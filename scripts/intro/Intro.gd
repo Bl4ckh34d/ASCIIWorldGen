@@ -99,6 +99,13 @@ const INTRO_QUOTES := [
 const STAR_PROMPT_TEXT := "Space, time and gravity gave birth to %s \nand she in turn gave life to a tiny world."
 const PLANET_PROMPT_TEXT := "This world was called %s by its inhabitants."
 const MAX_NAME_LENGTH: int = 48
+const SUN_NAME_COLOR_HEX: String = "#7A3BE0"
+const PLANET_NAME_COLOR_HEX: String = "#4F82D1"
+const MOON_NAME_COLOR_HEX: String = "#5D5D5D"
+const PROMPT_LABEL_WIDTH_FACTOR := 0.84
+const PROMPT_LABEL_MIN_HEIGHT_FACTOR := 0.10
+const PROMPT_LABEL_MAX_HEIGHT_FACTOR := 0.26
+const PROMPT_LABEL_VERTICAL_PADDING_PX := 18.0
 
 const PROMPT_NONE := 0
 const PROMPT_STAR := 1
@@ -300,8 +307,8 @@ var _skip_to_planet_fade_active: bool = false
 
 var _quote_label: Label
 var _quote_author_label: Label
-var _terminal_label: Label
-var _planet_hint_label: Label
+var _terminal_label: RichTextLabel
+var _planet_hint_label: RichTextLabel
 var _habitable_zone_label: Label
 
 func _ready() -> void:
@@ -494,20 +501,22 @@ func _create_ui() -> void:
 	_quote_author_label.add_theme_color_override("font_color", Color(0.90, 0.92, 1.0, 1.0))
 	add_child(_quote_author_label)
 
-	_terminal_label = Label.new()
-	_terminal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_terminal_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_terminal_label = RichTextLabel.new()
+	_terminal_label.bbcode_enabled = true
+	_terminal_label.scroll_active = false
+	_terminal_label.fit_content = false
+	_terminal_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_terminal_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_terminal_label.add_theme_font_size_override("font_size", 32)
-	_terminal_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 1.0))
+	_terminal_label.add_theme_font_size_override("normal_font_size", 32)
 	add_child(_terminal_label)
 
-	_planet_hint_label = Label.new()
-	_planet_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_planet_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_planet_hint_label = RichTextLabel.new()
+	_planet_hint_label.bbcode_enabled = true
+	_planet_hint_label.scroll_active = false
+	_planet_hint_label.fit_content = false
+	_planet_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_planet_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_planet_hint_label.add_theme_font_size_override("font_size", 32)
-	_planet_hint_label.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0, 1.0))
+	_planet_hint_label.add_theme_font_size_override("normal_font_size", 32)
 	add_child(_planet_hint_label)
 
 	_habitable_zone_label = Label.new()
@@ -530,11 +539,9 @@ func _update_layout() -> void:
 		_quote_author_label.position = Vector2(w * 0.60, h * 0.54)
 		_quote_author_label.size = Vector2(w * 0.40, h * 0.08)
 	if _terminal_label != null:
-		_terminal_label.position = Vector2(w * 0.08, h * 0.20)
-		_terminal_label.size = Vector2(w * 0.84, h * 0.24)
+		_layout_centered_prompt_label(_terminal_label, w, h)
 	if _planet_hint_label != null:
-		_planet_hint_label.position = Vector2(w * 0.08, h * 0.58)
-		_planet_hint_label.size = Vector2(w * 0.84, h * 0.20)
+		_layout_centered_prompt_label(_planet_hint_label, w, h)
 	if _habitable_zone_label != null:
 		_habitable_zone_label.size = Vector2(w * 0.30, h * 0.08)
 
@@ -574,6 +581,20 @@ func _update_layout() -> void:
 	_orbit_y = h * 0.50
 	_update_orbit_bounds()
 	_update_habitable_zone_label_position()
+
+func _layout_centered_prompt_label(label: RichTextLabel, w: float, h: float) -> void:
+	if label == null:
+		return
+	var label_w: float = w * PROMPT_LABEL_WIDTH_FACTOR
+	var content_h: float = float(label.get_content_height())
+	var min_h: float = h * PROMPT_LABEL_MIN_HEIGHT_FACTOR
+	var max_h: float = h * PROMPT_LABEL_MAX_HEIGHT_FACTOR
+	var label_h: float = clamp(content_h + PROMPT_LABEL_VERTICAL_PADDING_PX, min_h, max_h)
+	label.size = Vector2(label_w, label_h)
+	label.position = Vector2(
+		(w - label_w) * 0.5,
+		(h - label_h) * 0.5
+	)
 
 func _update_orbit_bounds() -> void:
 	var inner_x: float = _circle_positive_x_at(_zone_inner_radius, _orbit_y, _sun_end_center)
@@ -643,27 +664,30 @@ func _update_ui_state() -> void:
 
 	_terminal_label.visible = false
 	_planet_hint_label.visible = false
-	_planet_hint_label.text = ""
+	_set_rich_label_text(_planet_hint_label, "")
 
 	var star_text_visible: bool = (_phase == PHASE_SPACE_REVEAL or _phase == PHASE_CAMERA_PAN)
 	if star_text_visible:
 		var star_alpha: float = _get_prompt_alpha()
 		_terminal_label.visible = star_alpha > 0.001
 		if _terminal_label.visible:
-			_terminal_label.text = _build_prompt_display_text()
+			_set_rich_label_text(_terminal_label, _build_prompt_display_text())
 			_terminal_label.modulate = Color(1.0, 1.0, 1.0, star_alpha)
 	elif _phase == PHASE_PLANET_PROMPT_FADE_IN:
 		var primary_alpha: float = _get_prompt_alpha()
 		_terminal_label.visible = primary_alpha > 0.001
 		if _terminal_label.visible:
-			_terminal_label.text = _build_planet_story_primary_line()
+			_set_rich_label_text(_terminal_label, _build_planet_story_primary_line())
 			_terminal_label.modulate = Color(1.0, 0.97, 0.90, primary_alpha)
 	elif _phase == PHASE_PLANET_PROMPT_INPUT and _moon_count > 0:
 		var secondary_alpha: float = _get_prompt_alpha()
 		_planet_hint_label.visible = secondary_alpha > 0.001
 		if _planet_hint_label.visible:
-			_planet_hint_label.text = _build_planet_story_secondary_line()
+			_set_rich_label_text(_planet_hint_label, _build_planet_story_secondary_line())
 			_planet_hint_label.modulate = Color(0.96, 0.96, 1.0, secondary_alpha)
+
+	_layout_centered_prompt_label(_terminal_label, max(1.0, size.x), max(1.0, size.y))
+	_layout_centered_prompt_label(_planet_hint_label, max(1.0, size.x), max(1.0, size.y))
 	var zone_label_visible: bool = (
 		_phase == PHASE_PLANET_PLACE
 		or _phase == PHASE_PLANET_PROMPT_FADE_IN
@@ -736,7 +760,9 @@ func _get_prompt_alpha() -> float:
 func _build_prompt_display_text() -> String:
 	if _active_prompt_kind == PROMPT_STAR:
 		_ensure_star_name_generated()
-		return STAR_PROMPT_TEXT % [_star_name]
+		var plain: String = STAR_PROMPT_TEXT % [_star_name]
+		var colored: String = _replace_first(plain, _star_name, _colorize_name(_star_name, SUN_NAME_COLOR_HEX))
+		return "[center]%s[/center]" % colored
 	if _active_prompt_kind == PROMPT_PLANET:
 		if _phase == PHASE_PLANET_PROMPT_FADE_IN:
 			return _build_planet_story_primary_line()
@@ -1041,7 +1067,7 @@ func _build_moon_prompt_line() -> String:
 
 func _build_planet_story_primary_line() -> String:
 	_ensure_planet_name_generated()
-	return PLANET_PROMPT_TEXT % [_planet_name]
+	return "[center]%s[/center]" % (PLANET_PROMPT_TEXT % [_colorize_name(_planet_name, PLANET_NAME_COLOR_HEX)])
 
 func _build_planet_story_secondary_line() -> String:
 	if _moon_count <= 0:
@@ -1051,9 +1077,34 @@ func _build_planet_story_secondary_line() -> String:
 	var noun: String = "moon" if _moon_count == 1 else "moons"
 	var moon_names: Array[String] = []
 	for moon_name in _moon_names:
-		moon_names.append(String(moon_name))
+		moon_names.append(_colorize_name(String(moon_name), MOON_NAME_COLOR_HEX))
 	var joined_names: String = _join_with_and(moon_names)
-	return "%s was circled by %s %s named %s." % [_planet_name, count_word, noun, joined_names]
+	var planet_colored: String = _colorize_name(_planet_name, PLANET_NAME_COLOR_HEX)
+	return "[center]%s was circled by %s %s named %s.[/center]" % [planet_colored, count_word, noun, joined_names]
+
+func _set_rich_label_text(label: RichTextLabel, bbcode_text: String) -> void:
+	if label == null:
+		return
+	label.clear()
+	label.append_text(bbcode_text)
+
+func _colorize_name(name_text: String, color_hex: String) -> String:
+	var escaped: String = _escape_bbcode(name_text)
+	return "[color=%s]%s[/color]" % [color_hex, escaped]
+
+func _escape_bbcode(value: String) -> String:
+	var escaped: String = value.replace("\\", "\\\\")
+	escaped = escaped.replace("[", "\\[")
+	escaped = escaped.replace("]", "\\]")
+	return escaped
+
+func _replace_first(source: String, needle: String, replacement: String) -> String:
+	if needle.is_empty():
+		return source
+	var idx: int = source.find(needle)
+	if idx < 0:
+		return source
+	return source.substr(0, idx) + replacement + source.substr(idx + needle.length())
 
 func _join_with_and(items: Array[String]) -> String:
 	if items.is_empty():

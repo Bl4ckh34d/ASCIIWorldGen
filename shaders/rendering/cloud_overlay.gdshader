@@ -11,12 +11,12 @@ uniform sampler2D light_texture;
 uniform int use_light_texture = 0;
 uniform vec2 map_dimensions;
 
-uniform float cloud_opacity = 1.0;
-uniform float cloud_min = 0.2;
-uniform float cloud_levels = 8.0;
-uniform float cloud_power = 0.7;
-uniform float cloud_brightness = 1.1;
-uniform float cloud_night_alpha = 0.35;
+uniform float cloud_opacity = 0.90;
+uniform float cloud_min = 0.18;
+uniform float cloud_levels = 10.0;
+uniform float cloud_power = 0.95;
+uniform float cloud_brightness = 1.0;
+uniform float cloud_night_alpha = 0.08;
 
 void fragment() {
     vec2 world_pos = UV * map_dimensions;
@@ -32,17 +32,20 @@ void fragment() {
     float levels = max(1.0, cloud_levels);
     float denom = max(1.0, levels - 1.0);
     float q_hard = floor(c * levels + 0.0001) / denom;
-    float q = mix(c, q_hard, 0.20);
+    float q = mix(c, q_hard, 0.08);
     float alpha = clamp(q, 0.0, 1.0) * cloud_opacity;
 
     // Dim clouds at night similarly to the map tiles.
     float light_clamped = clamp(light, 0.0, 1.0);
-    alpha *= mix(cloud_night_alpha, 1.0, light_clamped);
+    float day_visibility = smoothstep(0.10, 0.85, light_clamped);
+    alpha *= mix(cloud_night_alpha, 1.0, day_visibility);
+    // Suppress blotchy cloud fragments in deep night.
+    alpha *= smoothstep(0.06, 0.20, light_clamped);
 
     if (alpha <= 0.001) {
         COLOR = vec4(0.0);
     } else {
-    float brightness = mix(0.35, 1.0, light_clamped) * cloud_brightness;
+    float brightness = mix(0.12, 1.0, day_visibility) * cloud_brightness;
     COLOR = vec4(vec3(brightness), alpha);
     }
 }

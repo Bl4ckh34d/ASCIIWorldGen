@@ -207,18 +207,29 @@ vec4 sample_mycelium(vec2 uv) {
 	return imageLoad(mycelium_tex, ivec2(px));
 }
 
-vec4 sample_mycelium_morph(vec2 uv, vec2 p, float t) {
-	vec2 w0 = flow_dir(p * 1.45 + vec2(t * 0.19, -t * 0.15), t * 0.71);
-	vec2 w1 = flow_dir(rot2(1.11) * p * 2.05 + vec2(-t * 0.27, t * 0.22) + 9.3, t * 0.93);
-	vec2 w2 = flow_dir(rot2(-0.63) * p * 3.10 + w0 * 1.7 - w1 * 1.2 + vec2(t * 0.31, t * 0.26) - 4.7, t * 1.17);
+vec4 sample_mycelium_morph(vec2 uv, vec2 p, float t, float spread, float progress) {
+	// Make the mycelium sampling domain expand with the big-bang envelope
+	// instead of staying mostly screen-locked.
+	float spread_n = clamp((spread - 0.018) / max(0.0001, 2.30 - 0.018), 0.0, 1.0);
+	float uv_zoom = mix(1.0, 0.24, spread_n);
+	float burst = smoothstep(0.02, 0.75, progress) * (1.0 - smoothstep(1.30, 2.30, progress));
+	vec2 radial = (dot(p, p) > 1e-6) ? normalize(p) : vec2(0.0, 1.0);
+	vec2 base_uv = 0.5 + (uv - 0.5) * uv_zoom + radial * burst * (0.008 + 0.022 * spread_n);
+	base_uv = fract(base_uv);
+
+	float morph_t = t * mix(0.92, 1.55, spread_n) + progress * 0.45;
+	vec2 p_morph = p * mix(1.00, 1.28, spread_n);
+	vec2 w0 = flow_dir(p_morph * 1.45 + vec2(morph_t * 0.19, -morph_t * 0.15), morph_t * 0.71);
+	vec2 w1 = flow_dir(rot2(1.11) * p_morph * 2.05 + vec2(-morph_t * 0.27, morph_t * 0.22) + 9.3, morph_t * 0.93);
+	vec2 w2 = flow_dir(rot2(-0.63) * p_morph * 3.10 + w0 * 1.7 - w1 * 1.2 + vec2(morph_t * 0.31, morph_t * 0.26) - 4.7, morph_t * 1.17);
 	vec2 d0 = w0 * 0.016 + w2 * 0.010;
 	vec2 d1 = w1 * 0.018 - w0 * 0.009;
 	vec2 d2 = w2 * 0.015 + w1 * 0.008;
-	vec2 uv0 = fract(uv + d0);
-	vec2 uv1 = fract(uv + d1);
-	vec2 uv2 = fract(uv + d2);
-	float m0 = fbm(p * 3.3 + vec2(t * 0.29, -t * 0.23) + w0 * 3.0);
-	float m1 = fbm(rot2(0.71) * p * 5.7 + vec2(-t * 0.18, t * 0.27) + w1 * 2.2 + 13.2);
+	vec2 uv0 = fract(base_uv + d0);
+	vec2 uv1 = fract(base_uv + d1);
+	vec2 uv2 = fract(base_uv + d2);
+	float m0 = fbm(p_morph * 3.3 + vec2(morph_t * 0.29, -morph_t * 0.23) + w0 * 3.0);
+	float m1 = fbm(rot2(0.71) * p_morph * 5.7 + vec2(-morph_t * 0.18, morph_t * 0.27) + w1 * 2.2 + 13.2);
 	float blend_a = smoothstep(0.22, 0.78, m0);
 	float blend_b = smoothstep(0.20, 0.82, m1);
 	vec4 s0 = sample_mycelium(uv0);
@@ -243,13 +254,13 @@ vec3 render_bigbang(vec2 uv, float t) {
 	vec2 aspect = vec2(float(PC.width) / max(1.0, float(PC.height)), 1.0);
 	vec2 q = (uv - 0.5) * aspect * 2.0;
 	float r = length(q);
-	vec4 my_edge_state = sample_mycelium_morph(uv, q, t);
+	float spread = mix(0.018, 2.30, expand_accel) + 0.95 * late_tail_pow;
+	vec4 my_edge_state = sample_mycelium_morph(uv, q, t, spread, progress_raw);
 	float my_edge_density_raw = clamp(my_edge_state.z, 0.0, 1.0);
 	float edge_n0 = fbm(q * 4.4 + vec2(t * 0.47, -t * 0.39));
 	float edge_n1 = fbm(rot2(0.92) * q * 7.2 + vec2(-t * 0.33, t * 0.41) + edge_n0 * 2.0 + 5.6);
 	float my_edge_density = clamp(my_edge_density_raw * (0.58 + 0.95 * edge_n1), 0.0, 1.0);
 	// The whole effect starts as a tiny central singularity and expands outwards.
-	float spread = mix(0.018, 2.30, expand_accel) + 0.95 * late_tail_pow;
 	float edge_noise = fbm(q * 6.4 + vec2(t * 0.31, -t * 0.27));
 	float edge_irregular = (edge_noise - 0.5) * 0.20 + (my_edge_density - 0.5) * 0.42;
 	float pattern_on = smoothstep(0.12, 0.46, PC.phase_time);
@@ -290,6 +301,8 @@ vec3 render_bigbang(vec2 uv, float t) {
 	mist = smoothstep(0.28, 0.88, mist) * (1.0 - smoothstep(0.04, 1.20, rn));
 	mist *= (0.58 + 0.58 * (1.0 - expand * 0.25));
 	float dense_glow = smoothstep(1.10, 0.0, rn) * (1.0 - expand * 0.22);
+	// Fast-fading white veil: keep the initial flashy core, remove the long-lived washout.
+	float white_veil_fade = 1.0 - smoothstep(0.03, 0.46, progress_raw);
 
 	float hue_base = fract(0.06 + t * 0.028 + rn * 0.31 + filaments * 0.35 + a / TAU * 0.18);
 	vec3 trail_col = hsv2rgb(vec3(hue_base, 0.87, 1.0));
@@ -297,7 +310,7 @@ vec3 render_bigbang(vec2 uv, float t) {
 	vec3 plasma_col = vec3(0.0);
 	plasma_col += trail_col * (filaments * 1.65 + branches * 1.10);
 	plasma_col += alt_col * (mist * 0.55 + shock * 1.20);
-	plasma_col += vec3(1.0, 0.95, 0.90) * core * 2.6;
+	plasma_col += vec3(1.0, 0.95, 0.90) * core * 2.6 * white_veil_fade;
 	plasma_col += vec3(1.0, 0.78, 0.34) * dense_glow * 1.10;
 	plasma_col += vec3(1.0, 0.92, 0.64) * shock_front * 1.45;
 
@@ -322,11 +335,13 @@ vec3 render_bigbang(vec2 uv, float t) {
 	col += vec3(0.34, 0.50, 0.92) * post_glow;
 
 	// Mycelium layer from the external feedback simulation texture.
-	vec4 my_state = sample_mycelium_morph(uv, qn, t * 1.12);
+	vec4 my_state = sample_mycelium_morph(uv, qn, t * 1.12, spread, progress_raw);
 	float my_density_raw = clamp(my_state.z, 0.0, 1.0);
-	float my_morph_noise0 = fbm(qn * 5.2 + vec2(t * 0.68, -t * 0.61));
-	float my_morph_noise1 = fbm(rot2(1.13) * qn * 8.1 + vec2(-t * 0.52, t * 0.57) + my_morph_noise0 * 2.4 + 21.7);
-	float my_morph_noise2 = fbm(qn * 12.0 + vec2(my_morph_noise0, -my_morph_noise1) * 2.8 + vec2(t * 0.94, t * 0.83) - 17.3);
+	float morph_phase = clamp((spread - 0.018) / max(0.0001, 2.30 - 0.018), 0.0, 1.0);
+	float morph_t = t * mix(1.0, 1.48, morph_phase) + progress_raw * 0.36;
+	float my_morph_noise0 = fbm(qn * 5.2 + vec2(morph_t * 0.68, -morph_t * 0.61));
+	float my_morph_noise1 = fbm(rot2(1.13) * qn * 8.1 + vec2(-morph_t * 0.52, morph_t * 0.57) + my_morph_noise0 * 2.4 + 21.7);
+	float my_morph_noise2 = fbm(qn * 12.0 + vec2(my_morph_noise0, -my_morph_noise1) * 2.8 + vec2(morph_t * 0.94, morph_t * 0.83) - 17.3);
 	float my_struct = clamp(my_morph_noise0 * 0.35 + my_morph_noise1 * 0.40 + my_morph_noise2 * 0.45, 0.0, 1.0);
 	// Keep psychedelic modulation tied to simulated density so empty regions stay dark.
 	float my_density = clamp(
@@ -370,7 +385,14 @@ vec3 render_bigbang(vec2 uv, float t) {
 	col = 1.0 - exp(-col * 1.55);
 	float post_neon_bloom = my_bloom * (0.26 + 0.72 * my_density) * (1.0 - PC.fade_alpha * 0.65);
 	col += neon_col * post_neon_bloom * 0.24;
-	col *= (1.0 - clamp(PC.fade_alpha, 0.0, 1.0));
+	float fade_n = clamp(PC.fade_alpha, 0.0, 1.0);
+	float fade_sat = smoothstep(0.18, 1.0, fade_n);
+	float col_luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+	col = mix(vec3(col_luma), col, 1.0 + 0.58 * fade_sat);
+	float chroma_tail = fade_sat * (1.0 - fade_n);
+	vec3 tail_col = mix(neon_col, trail_col, 0.45);
+	col += tail_col * (0.10 + 0.22 * my_bloom) * chroma_tail;
+	col *= (1.0 - fade_n);
 
 	// Fade the big-bang core first while it expands, revealing stars behind it.
 	float core_clear_n = clamp((progress_raw - 0.14) / max(0.0001, 1.30 - 0.14), 0.0, 1.0);

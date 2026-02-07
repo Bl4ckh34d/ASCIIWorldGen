@@ -403,7 +403,7 @@ func _sync_seed(force_reset: bool) -> void:
 	_force_resync = true
 
 func _sync_gpu_manager(w: int, h: int) -> void:
-	var mgr: Object = generator._gpu_buffer_manager if (generator and "_gpu_buffer_manager" in generator) else null
+	var mgr: Object = generator.get_gpu_buffer_manager() if (generator and "get_gpu_buffer_manager" in generator) else null
 	var size: int = w * h
 	if mgr != _gpu_manager_ref or _buffer_size != size:
 		_gpu_manager_ref = mgr
@@ -677,14 +677,14 @@ func _setup_cloud_buffers(w: int, h: int) -> void:
 		var arr2 := PackedFloat32Array(); arr2.resize(w * h)
 		_cloud_buf_b = rd2.storage_buffer_create(arr2.to_byte_array().size(), arr2.to_byte_array())
 	# Allocate wind/source buffers for compute if missing
-	if generator and "_gpu_buffer_manager" in generator and generator._gpu_buffer_manager != null:
+	if generator and "ensure_gpu_storage_buffer" in generator:
 		var size_bytes := w * h * 4
 		if not generator.get_persistent_buffer("wind_u").is_valid():
-			generator._gpu_buffer_manager.ensure_buffer("wind_u", size_bytes)
+			generator.ensure_gpu_storage_buffer("wind_u", size_bytes)
 		if not generator.get_persistent_buffer("wind_v").is_valid():
-			generator._gpu_buffer_manager.ensure_buffer("wind_v", size_bytes)
+			generator.ensure_gpu_storage_buffer("wind_v", size_bytes)
 		if not generator.get_persistent_buffer("cloud_source").is_valid():
-			generator._gpu_buffer_manager.ensure_buffer("cloud_source", size_bytes)
+			generator.ensure_gpu_storage_buffer("cloud_source", size_bytes)
 
 func _update_cloud_texture_gpu(w: int, h: int) -> void:
 	if _cloud_tex == null:

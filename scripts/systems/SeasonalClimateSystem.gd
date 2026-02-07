@@ -137,11 +137,11 @@ func _fract(v: float) -> float:
 
 func _update_light_field(world: Object) -> void:
 	"""Update the day-night light field using GPU compute"""
-	if generator == null or not ("_climate_compute_gpu" in generator):
+	if generator == null:
 		return
-	# Ensure climate compute GPU system exists
-	if generator._climate_compute_gpu == null:
-		generator._climate_compute_gpu = load("res://scripts/systems/ClimateAdjustCompute.gd").new()
+	var climate_compute: Object = generator.ensure_climate_compute_gpu() if "ensure_climate_compute_gpu" in generator else null
+	if climate_compute == null:
+		return
 	
 	var w = generator.config.width
 	var h = generator.config.height
@@ -180,7 +180,7 @@ func _update_light_field(world: Object) -> void:
 	var light_buf: RID = generator.get_persistent_buffer("light") if "get_persistent_buffer" in generator else RID()
 	if not light_buf.is_valid():
 		return
-	var ok_gpu: bool = generator._climate_compute_gpu.evaluate_light_field_gpu(w, h, light_params, light_buf)
+	var ok_gpu: bool = climate_compute.evaluate_light_field_gpu(w, h, light_params, light_buf)
 	if ok_gpu and _light_tex:
 		var tex: Texture2D = _light_tex.update_from_buffer(w, h, light_buf)
 		if tex and "set_light_texture_override" in generator:

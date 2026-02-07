@@ -53,6 +53,7 @@ var _land_mask_compute: Object = null
 var _field_advection_compute: Object = null
 var _pinhole_cleanup_compute: Object = null
 var _cpu_sync_counter: int = 0
+var enable_runtime_cpu_mirror_sync: bool = false
 
 func initialize(gen: Object) -> void:
 	generator = gen
@@ -119,99 +120,99 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				boundary_band_cells,
 				float(Time.get_ticks_msec() % 100000) / 100000.0,
 				height_tmp
-				)
-			if gpu_ok:
-				# Copy height_tmp -> height (reuse FlowCompute copy)
-				if generator._flow_compute == null:
-					generator._flow_compute = load("res://scripts/systems/FlowCompute.gd").new()
-				if "_ensure" in generator._flow_compute:
-					generator._flow_compute._ensure()
-				generator._flow_compute._dispatch_copy_u32(height_tmp, height_buf, w * h)
-				# Update land mask buffer from height
-				if _land_mask_compute:
-					var land_buf: RID = generator.get_persistent_buffer("is_land")
-					if land_buf.is_valid():
-						_land_mask_compute.update_from_height(w, h, height_buf, generator.config.sea_level, land_buf)
-						if pinhole_cleanup_enabled and lava_buf.is_valid():
-							if _pinhole_cleanup_compute == null:
-								_pinhole_cleanup_compute = TectonicPinholeCleanupCompute.new()
-							var sim_days_seed: int = 0
-							if world != null and "simulation_time_days" in world:
-								sim_days_seed = int(world.simulation_time_days)
-							_pinhole_cleanup_compute.cleanup_gpu_buffers(
-								w,
-								h,
-								height_buf,
-								land_buf,
-								boundary_buf,
-								lava_buf,
-								float(generator.config.sea_level),
-								pinhole_uplift_amount,
-								pinhole_max_depth,
-								pinhole_min_land_neighbors,
-								pinhole_min_boundary_neighbors,
-								int(generator.config.rng_seed) ^ sim_days_seed
-							)
-				# Advect plate-bound categorical fields so biomes/lithology move with plate drift.
-				if field_tmp_buf.is_valid():
-					if _field_advection_compute == null:
-						_field_advection_compute = PlateFieldAdvectionCompute.new()
-					if biome_buf.is_valid() and _field_advection_compute.advect_i32_gpu_buffers(
+			)
+		if gpu_ok:
+			# Copy height_tmp -> height (reuse FlowCompute copy)
+			if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(height_tmp, height_buf, w * h))):
+				gpu_ok = false
+			# Update land mask buffer from height
+			if gpu_ok and _land_mask_compute:
+				var land_buf: RID = generator.get_persistent_buffer("is_land")
+				if land_buf.is_valid():
+					_land_mask_compute.update_from_height(w, h, height_buf, generator.config.sea_level, land_buf)
+				if pinhole_cleanup_enabled and lava_buf.is_valid():
+					if _pinhole_cleanup_compute == null:
+						_pinhole_cleanup_compute = TectonicPinholeCleanupCompute.new()
+					var sim_days_seed: int = 0
+					if world != null and "simulation_time_days" in world:
+						sim_days_seed = int(world.simulation_time_days)
+					_pinhole_cleanup_compute.cleanup_gpu_buffers(
 						w,
 						h,
-						biome_buf,
-						plate_buf,
-						plate_vel_u,
-						plate_vel_v,
-						dt_days,
-						drift_cells_per_day,
-						field_tmp_buf
-					):
-						generator._flow_compute._dispatch_copy_u32(field_tmp_buf, biome_buf, w * h)
-					if rock_buf.is_valid() and _field_advection_compute.advect_i32_gpu_buffers(
-						w,
-						h,
-						rock_buf,
-						plate_buf,
-						plate_vel_u,
-						plate_vel_v,
-						dt_days,
-						drift_cells_per_day,
-						field_tmp_buf
-					):
-						generator._flow_compute._dispatch_copy_u32(field_tmp_buf, rock_buf, w * h)
-					# Keep CPU mirrors coherent for systems/UI paths that still read arrays.
-					var sync_size: int = w * h
-					if "read_persistent_buffer" in generator and _should_sync_cpu_mirror(world, sync_size):
-						var biome_bytes: PackedByteArray = generator.read_persistent_buffer("biome_id")
-						var biome_i32: PackedInt32Array = biome_bytes.to_int32_array()
-						if biome_i32.size() == sync_size and "last_biomes" in generator:
-							generator.last_biomes = biome_i32
-						var rock_bytes: PackedByteArray = generator.read_persistent_buffer("rock_type")
-						var rock_i32: PackedInt32Array = rock_bytes.to_int32_array()
-						if rock_i32.size() == sync_size and "last_rock_type" in generator:
-							generator.last_rock_type = rock_i32
+						height_buf,
+						land_buf,
+						boundary_buf,
+						lava_buf,
+						float(generator.config.sea_level),
+						pinhole_uplift_amount,
+						pinhole_max_depth,
+						pinhole_min_land_neighbors,
+						pinhole_min_boundary_neighbors,
+						int(generator.config.rng_seed) ^ sim_days_seed
+					)
+		# Advect plate-bound categorical fields so biomes/lithology move with plate drift.
+		if gpu_ok and field_tmp_buf.is_valid():
+			if _field_advection_compute == null:
+				_field_advection_compute = PlateFieldAdvectionCompute.new()
+			if biome_buf.is_valid() and _field_advection_compute.advect_i32_gpu_buffers(
+				w,
+				h,
+				biome_buf,
+				plate_buf,
+				plate_vel_u,
+				plate_vel_v,
+				dt_days,
+				drift_cells_per_day,
+				field_tmp_buf
+			):
+				if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(field_tmp_buf, biome_buf, w * h))):
+					gpu_ok = false
+			if rock_buf.is_valid() and _field_advection_compute.advect_i32_gpu_buffers(
+				w,
+				h,
+				rock_buf,
+				plate_buf,
+				plate_vel_u,
+				plate_vel_v,
+				dt_days,
+				drift_cells_per_day,
+				field_tmp_buf
+			):
+				if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(field_tmp_buf, rock_buf, w * h))):
+					gpu_ok = false
+			# Keep CPU mirrors coherent for systems/UI paths that still read arrays.
+			var sync_size: int = w * h
+			if enable_runtime_cpu_mirror_sync and "read_persistent_buffer" in generator and _should_sync_cpu_mirror(world, sync_size):
+				var biome_bytes: PackedByteArray = generator.read_persistent_buffer("biome_id")
+				var biome_i32: PackedInt32Array = biome_bytes.to_int32_array()
+				if biome_i32.size() == sync_size and "last_biomes" in generator:
+					generator.last_biomes = biome_i32
+				var rock_bytes: PackedByteArray = generator.read_persistent_buffer("rock_type")
+				var rock_i32: PackedInt32Array = rock_bytes.to_int32_array()
+				if rock_i32.size() == sync_size and "last_rock_type" in generator:
+					generator.last_rock_type = rock_i32
 	if not gpu_ok:
 		return {}
 	# Expose boundary mask to generator for volcanism coupling
 	var boundary_count = 0
-	if "_plates_boundary_mask_i32" in generator:
-		var mask_src: PackedByteArray = boundary_mask_render if boundary_mask_render.size() == w * h else boundary_mask
-		# build Int32 mask from ByteArray boundary_mask
-		var mask_i32 := PackedInt32Array(); mask_i32.resize(w * h)
-		for m in range(w * h): 
-			var val = (1 if mask_src[m] != 0 else 0)
-			mask_i32[m] = val
-			if val == 1: boundary_count += 1
-		generator._plates_boundary_mask_i32 = mask_i32
-	# Provide render mask (kept crisp; curvature comes from warped Voronoi boundaries)
-	if "_plates_boundary_mask_render_u8" in generator:
-		generator._plates_boundary_mask_render_u8 = boundary_mask_render
-		# Store boundary count for other systems to use
-		if "tectonic_stats" not in generator:
-			generator.tectonic_stats = {}
-		generator.tectonic_stats["boundary_cells"] = boundary_count
-		generator.tectonic_stats["total_plates"] = num_plates
+	var mask_src: PackedByteArray = boundary_mask_render if boundary_mask_render.size() == w * h else boundary_mask
+	var mask_i32 := PackedInt32Array(); mask_i32.resize(w * h)
+	for m in range(w * h):
+		var val = (1 if mask_src[m] != 0 else 0)
+		mask_i32[m] = val
+		if val == 1:
+			boundary_count += 1
+	if "publish_plate_runtime_state" in generator:
+		generator.publish_plate_runtime_state(
+			PackedInt32Array(),
+			PackedFloat32Array(),
+			PackedFloat32Array(),
+			PackedFloat32Array(),
+			mask_i32,
+			boundary_mask_render,
+			boundary_count,
+			num_plates
+		)
 	return {"dirty_fields": PackedStringArray(["height", "is_land", "lava", "shelf", "biome_id", "rock_type"]), "boundary_count": boundary_count}
 
 func _should_sync_cpu_mirror(world: Object, size: int) -> bool:
@@ -342,35 +343,29 @@ func _build_plates() -> void:
 	_build_boundary_render_mask(w, h)
 	# Expose raw plate fields so terrain generation can use the same tectonic structure.
 	if generator:
-		if "_plates_cell_id_i32" in generator:
-			generator._plates_cell_id_i32 = cell_plate_id.duplicate()
-		if "_plates_vel_u" in generator:
-			generator._plates_vel_u = plate_vel_u.duplicate()
-		if "_plates_vel_v" in generator:
-			generator._plates_vel_v = plate_vel_v.duplicate()
-		if "_plates_buoyancy" in generator:
-			generator._plates_buoyancy = plate_buoyancy.duplicate()
-		if "_plates_boundary_mask_i32" in generator:
-			var mask_i32 := PackedInt32Array()
-			mask_i32.resize(size)
-			var boundary_count: int = 0
-			for bi in range(size):
-				var v: int = (1 if boundary_mask[bi] != 0 else 0)
-				mask_i32[bi] = v
-				if v == 1:
-					boundary_count += 1
-			generator._plates_boundary_mask_i32 = mask_i32
-			if "tectonic_stats" in generator:
-				generator.tectonic_stats["boundary_cells"] = boundary_count
-				generator.tectonic_stats["total_plates"] = num_plates
+		var mask_i32 := PackedInt32Array()
+		mask_i32.resize(size)
+		var boundary_count: int = 0
+		for bi in range(size):
+			var v: int = (1 if boundary_mask[bi] != 0 else 0)
+			mask_i32[bi] = v
+			if v == 1:
+				boundary_count += 1
+		if "publish_plate_runtime_state" in generator:
+			generator.publish_plate_runtime_state(
+				cell_plate_id,
+				plate_vel_u,
+				plate_vel_v,
+				plate_buoyancy,
+				mask_i32,
+				boundary_mask_render,
+				boundary_count,
+				num_plates
+			)
 	# Update GPU buffers for plates/boundaries
-	if generator and "_gpu_buffer_manager" in generator and generator._gpu_buffer_manager != null:
-		var size_bytes := size * 4
+	if generator and "ensure_plate_gpu_buffers" in generator:
 		var mask_src: PackedByteArray = boundary_mask_render if boundary_mask_render.size() == size else boundary_mask
-		generator._gpu_buffer_manager.ensure_buffer("plate_id", size_bytes, cell_plate_id.to_byte_array())
-		generator._gpu_buffer_manager.ensure_buffer("plate_boundary", size_bytes, generator._pack_bytes_to_u32(mask_src).to_byte_array())
-	if generator and "_plates_boundary_mask_render_u8" in generator:
-		generator._plates_boundary_mask_render_u8 = boundary_mask_render
+		generator.ensure_plate_gpu_buffers(cell_plate_id, mask_src)
 
 func _update_plate_direction(dt_days: float, world: Object) -> void:
 	if dt_days <= 0.0:
@@ -416,10 +411,15 @@ func _update_plate_direction(dt_days: float, world: Object) -> void:
 		plate_vel_v[p] = vn * sfix
 	# Mirror evolved velocities for systems that sample generator plate state.
 	if generator:
-		if "_plates_vel_u" in generator:
-			generator._plates_vel_u = plate_vel_u.duplicate()
-		if "_plates_vel_v" in generator:
-			generator._plates_vel_v = plate_vel_v.duplicate()
+		if "publish_plate_runtime_state" in generator:
+			generator.publish_plate_runtime_state(
+				PackedInt32Array(),
+				plate_vel_u,
+				plate_vel_v,
+				PackedFloat32Array(),
+				PackedInt32Array(),
+				PackedByteArray()
+			)
 
 func _build_boundary_render_mask(w: int, h: int) -> void:
 	var size: int = w * h
@@ -509,10 +509,18 @@ func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 			if approach > 0.1:
 				uplift = uplift_rate_per_day * dt_days * approach * 0.72
 			elif approach < -0.1:
-				# divergent: extensional lowering dominates ridge construction
+				# Divergent boundaries: stabilize around a shallow rift floor.
+				# This avoids runaway abyssal deepening as plates continue separating.
 				var div: float = (-approach) - 0.1
-				uplift = ridge_rate_per_day * dt_days * div * 0.35
-				uplift -= trench_rate_per_day * dt_days * div * 0.75
+				var land_factor: float = clamp((heights[i] - generator.config.sea_level + 0.02) / 0.35, 0.0, 1.0)
+				var rift_target: float = lerp(generator.config.sea_level - 0.16, generator.config.sea_level - 0.08, land_factor)
+				var to_target: float = rift_target - heights[i]
+				var settle_rate: float = subduction_rate_per_day * dt_days * div * lerp(0.40, 0.26, land_factor)
+				uplift = clamp(to_target, -settle_rate, settle_rate)
+				uplift += ridge_rate_per_day * dt_days * div * lerp(0.44, 0.16, land_factor)
+				var divergence_floor: float = lerp(generator.config.sea_level - 0.24, generator.config.sea_level - 0.12, land_factor)
+				if heights[i] + uplift < divergence_floor:
+					uplift = divergence_floor - heights[i]
 			else:
 				# transform shear roughness
 				uplift = transform_roughness_per_day * dt_days * (_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5 - 0.5)
@@ -527,7 +535,7 @@ func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 					if yy < 0 or yy >= h: continue
 					var ii: int = xx + yy * w
 					heights[ii] = clamp(heights[ii] + uplift, -1.0, 2.0)
-	# Divergent subsidence: apply gentle lowering at cells where strong divergence
+	# Divergent stabilization: keep extensional seams narrow and prevent endless deepening.
 	for y2 in range(h):
 		for x2 in range(w):
 			var i2: int = x2 + y2 * w
@@ -551,7 +559,12 @@ func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 			if pid_t != pid2: div_score += (plate_vel_v[pid2] - plate_vel_v[pid_t])
 			if pid_b != pid2: div_score -= (plate_vel_v[pid2] - plate_vel_v[pid_b])
 			if div_score > 1.2:
-				heights[i2] = clamp(heights[i2] - subsidence_rate_per_day * dt_days * min(1.6, div_score) * 0.45, -1.0, 2.0)
+				var land_factor2: float = clamp((heights[i2] - generator.config.sea_level + 0.02) / 0.35, 0.0, 1.0)
+				var floor_level: float = lerp(generator.config.sea_level - 0.24, generator.config.sea_level - 0.12, land_factor2)
+				var rift_target2: float = lerp(generator.config.sea_level - 0.16, generator.config.sea_level - 0.08, land_factor2)
+				var to_target2: float = rift_target2 - heights[i2]
+				var settle2: float = subduction_rate_per_day * dt_days * min(1.6, div_score) * lerp(0.30, 0.20, land_factor2)
+				heights[i2] = clamp(heights[i2] + clamp(to_target2, -settle2, settle2), floor_level, 2.0)
 	# Commit height changes
 	generator.last_height = heights
 	generator.last_height_final = heights

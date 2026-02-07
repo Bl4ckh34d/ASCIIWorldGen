@@ -37,10 +37,8 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var lava_buf: RID = generator.get_persistent_buffer("lava") if "get_persistent_buffer" in generator else RID()
 	var bnd_buf: RID = generator.get_persistent_buffer("plate_boundary") if "get_persistent_buffer" in generator else RID()
 	# If boundary buffer isn't ready, try to seed it from CPU mask once
-	if not bnd_buf.is_valid() and "_gpu_buffer_manager" in generator and generator._gpu_buffer_manager != null:
-		if "_plates_boundary_mask_i32" in generator and generator._plates_boundary_mask_i32 is PackedInt32Array and generator._plates_boundary_mask_i32.size() == size:
-			generator._gpu_buffer_manager.ensure_buffer("plate_boundary", size * 4, generator._plates_boundary_mask_i32.to_byte_array())
-			bnd_buf = generator.get_persistent_buffer("plate_boundary")
+	if not bnd_buf.is_valid() and "ensure_plate_boundary_buffer_from_state" in generator:
+		bnd_buf = generator.ensure_plate_boundary_buffer_from_state(size)
 	if lava_buf.is_valid() and bnd_buf.is_valid():
 		var ok_gpu: bool = compute.step_gpu_buffers(w, h, bnd_buf, lava_buf, dt_days, {
 			"decay_rate_per_day": decay_rate_per_day,

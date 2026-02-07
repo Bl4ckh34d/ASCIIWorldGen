@@ -80,6 +80,21 @@ func read_buffer(name: String, staging_name: String = "") -> PackedByteArray:
 	
 	return _rd.buffer_get_data(buf.rid)
 
+func read_buffer_region(name: String, offset_bytes: int, size_bytes: int) -> PackedByteArray:
+	"""Read a byte range from a managed buffer."""
+	var buf = _buffers.get(name, {})
+	if not buf.has("rid") or not buf.rid.is_valid():
+		return PackedByteArray()
+	var total_size: int = int(buf.get("size", 0))
+	if total_size <= 0:
+		return PackedByteArray()
+	var off: int = clamp(int(offset_bytes), 0, total_size)
+	var max_len: int = max(0, total_size - off)
+	var req: int = clamp(int(size_bytes), 0, max_len)
+	if req <= 0:
+		return PackedByteArray()
+	return _rd.buffer_get_data(buf.rid, off, req)
+
 func clear_buffer(name: String, clear_value: int = 0) -> bool:
 	"""Clear buffer to specified value using GPU clear shader"""
 	var buf = _buffers.get(name, {})

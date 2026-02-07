@@ -60,7 +60,6 @@ var settings_button: Button
 var ascii_map: RichTextLabel
 var info_label: Label
 var cursor_overlay: Control
-var settings_dialog: Window
 
 var hide_button: Button
 var bottom_panel: PanelContainer
@@ -85,6 +84,21 @@ var temp_value_label: Label
 var cont_slider: HSlider
 var cont_value_label: Label
 var step_spin: SpinBox
+var noise_octaves_spin: SpinBox
+var noise_frequency_spin: SpinBox
+var noise_lacunarity_spin: SpinBox
+var noise_gain_spin: SpinBox
+var noise_warp_spin: SpinBox
+var shallow_threshold_spin: SpinBox
+var shore_band_spin: SpinBox
+var shore_noise_mult_spin: SpinBox
+var polar_cap_frac_slider: HSlider
+var polar_cap_frac_value_label: Label
+var bedrock_view_check: CheckBox
+var rivers_enabled_check: CheckBox
+var lakes_enabled_check: CheckBox
+var river_threshold_spin: SpinBox
+var river_delta_widening_check: CheckBox
 var season_slider: HSlider
 var season_value_label: Label
 var ocean_damp_slider: HSlider
@@ -215,9 +229,6 @@ func _initialize_ui_nodes() -> void:
 	simulation_vbox = get_node_or_null("%SimulationVBox")
 	systems_vbox = get_node_or_null("%SystemsVBox")
 	
-	# Settings dialog - WITH NULL CHECK TO PREVENT CRASH
-	settings_dialog = get_node_or_null("SettingsDialog")
-	
 	# debug removed
 	
 	# Connect basic events
@@ -237,6 +248,7 @@ func _initialize_ui_nodes() -> void:
 	
 	# Setup all tab content
 	_setup_all_tabs()
+	_sync_settings_button_label()
 	
 	# DISABLE ALL COMPLEX UI SETUP
 	# terrain_vbox = get_node_or_null("%TerrainVBox")
@@ -271,9 +283,21 @@ func _setup_generation_tab() -> void:
 	tiles_down_spin = _add_label_with_spinbox(generation_vbox, "Tiles Down:", 8, 1024, 1, 62, func(v): _on_tiles_down_changed(v))
 	lock_aspect_check = _add_checkbox(generation_vbox, "Lock Aspect Ratio", true, func(v): _on_lock_aspect_toggled(v))
 
+	# Terrain noise controls (require full regenerate)
+	_add_section_header(generation_vbox, "Terrain Noise (Regenerate)")
+	noise_octaves_spin = _add_label_with_spinbox(generation_vbox, "Octaves:", 1, 10, 1, 5, func(_v): _on_noise_settings_changed())
+	noise_frequency_spin = _add_label_with_spinbox(generation_vbox, "Frequency:", 0.001, 0.2, 0.001, 0.02, func(_v): _on_noise_settings_changed())
+	noise_lacunarity_spin = _add_label_with_spinbox(generation_vbox, "Lacunarity:", 1.1, 4.0, 0.05, 2.0, func(_v): _on_noise_settings_changed())
+	noise_gain_spin = _add_label_with_spinbox(generation_vbox, "Gain:", 0.1, 1.0, 0.05, 0.5, func(_v): _on_noise_settings_changed())
+	noise_warp_spin = _add_label_with_spinbox(generation_vbox, "Warp:", 0.0, 80.0, 1.0, 24.0, func(_v): _on_noise_settings_changed())
+
 func _setup_terrain_tab() -> void:
 	"""Setup Terrain tab - elevation, continents, sea level"""
 	if not terrain_vbox: return
+
+	# View controls
+	_add_section_header(terrain_vbox, "Map View")
+	bedrock_view_check = _add_checkbox(terrain_vbox, "Lithology View", false, func(v): _on_bedrock_view_toggled(v))
 	
 	# Sea level
 	_add_section_header(terrain_vbox, "Sea Level")
@@ -297,6 +321,12 @@ func _setup_terrain_tab() -> void:
 	temp_slider = temp_result.slider
 	temp_value_label = temp_result.value_label
 
+	# Coastline shaping (can be recomputed without full regenerate)
+	_add_section_header(terrain_vbox, "Coastline (Quick Rebuild)")
+	shallow_threshold_spin = _add_label_with_spinbox(terrain_vbox, "Shallow Thresh:", 0.05, 0.6, 0.01, 0.20, func(_v): _on_shoreline_settings_changed())
+	shore_band_spin = _add_label_with_spinbox(terrain_vbox, "Shore Band:", 1.0, 20.0, 0.5, 6.0, func(_v): _on_shoreline_settings_changed())
+	shore_noise_mult_spin = _add_label_with_spinbox(terrain_vbox, "Shore Noise:", 0.1, 20.0, 0.1, 4.0, func(_v): _on_shoreline_settings_changed())
+
 func _setup_climate_tab() -> void:
 	"""Setup Climate tab - weather, precipitation, seasons"""
 	if not climate_vbox: return
@@ -306,6 +336,12 @@ func _setup_climate_tab() -> void:
 	var season_result = _add_label_with_slider(climate_vbox, "Season Strength:", 0.0, 1.0, 0.01, 0.0, func(v): _on_season_strength_changed(v))
 	season_slider = season_result.slider
 	season_value_label = season_result.value_label
+
+	# Baseline cryosphere shape from poles (runtime quick climate/biome update)
+	_add_section_header(climate_vbox, "Polar Caps (Runtime)")
+	var polar_result = _add_label_with_slider(climate_vbox, "Polar Cap Frac:", 0.0, 0.5, 0.01, 0.12, func(v): _on_polar_cap_frac_changed(v))
+	polar_cap_frac_slider = polar_result.slider
+	polar_cap_frac_value_label = polar_result.value_label
 	
 	# Precipitation
 	_add_section_header(climate_vbox, "Precipitation")
@@ -333,10 +369,13 @@ func _setup_climate_tab() -> void:
 func _setup_hydro_tab() -> void:
 	"""Setup Hydro tab - rivers, lakes, water flow"""
 	if not hydro_vbox: return
-	
-	_add_section_header(hydro_vbox, "Hydrology System")
-	_add_label(hydro_vbox, "Hydrology system controls will be added here")
-	# TODO: Add hydrology specific controls when available
+
+	_add_section_header(hydro_vbox, "Hydrology Generation")
+	rivers_enabled_check = _add_checkbox(hydro_vbox, "Enable Rivers", true, func(_v): _on_hydro_generation_settings_changed())
+	lakes_enabled_check = _add_checkbox(hydro_vbox, "Enable Lakes", true, func(_v): _on_hydro_generation_settings_changed())
+	river_threshold_spin = _add_label_with_spinbox(hydro_vbox, "River Threshold Factor:", 0.1, 5.0, 0.05, 1.0, func(_v): _on_hydro_generation_settings_changed())
+	river_delta_widening_check = _add_checkbox(hydro_vbox, "Delta Widening", true, func(_v): _on_hydro_generation_settings_changed())
+	_add_label(hydro_vbox, "Removed obsolete CPU-era knobs: droplets, erosion, min start height, polar cutoff.")
 
 func _setup_simulation_tab() -> void:
 	"""Setup Simulation tab - time, checkpoints, GPU rendering"""
@@ -769,9 +808,8 @@ func _generate_new_world() -> void:
 	_generate_and_draw()
 
 func _on_settings_pressed() -> void:
-	if settings_dialog and "set_show_bedrock_view" in settings_dialog:
-		settings_dialog.set_show_bedrock_view(show_bedrock_view)
-	_show_centered_dialog(settings_dialog)
+	if bottom_panel and hide_button:
+		_on_hide_panel_pressed()
 
 func _show_centered_dialog(dialog: Window) -> void:
 	if dialog == null:
@@ -781,6 +819,151 @@ func _show_centered_dialog(dialog: Window) -> void:
 		dialog.grab_focus()
 		return
 	dialog.popup_centered()
+
+func _sync_settings_controls_from_generator() -> void:
+	if generator == null:
+		return
+	if noise_octaves_spin:
+		noise_octaves_spin.set_block_signals(true)
+		noise_octaves_spin.value = float(generator.config.octaves)
+		noise_octaves_spin.set_block_signals(false)
+	if noise_frequency_spin:
+		noise_frequency_spin.set_block_signals(true)
+		noise_frequency_spin.value = float(generator.config.frequency)
+		noise_frequency_spin.set_block_signals(false)
+	if noise_lacunarity_spin:
+		noise_lacunarity_spin.set_block_signals(true)
+		noise_lacunarity_spin.value = float(generator.config.lacunarity)
+		noise_lacunarity_spin.set_block_signals(false)
+	if noise_gain_spin:
+		noise_gain_spin.set_block_signals(true)
+		noise_gain_spin.value = float(generator.config.gain)
+		noise_gain_spin.set_block_signals(false)
+	if noise_warp_spin:
+		noise_warp_spin.set_block_signals(true)
+		noise_warp_spin.value = float(generator.config.warp)
+		noise_warp_spin.set_block_signals(false)
+	if shallow_threshold_spin:
+		shallow_threshold_spin.set_block_signals(true)
+		shallow_threshold_spin.value = float(generator.config.shallow_threshold)
+		shallow_threshold_spin.set_block_signals(false)
+	if shore_band_spin:
+		shore_band_spin.set_block_signals(true)
+		shore_band_spin.value = float(generator.config.shore_band)
+		shore_band_spin.set_block_signals(false)
+	if shore_noise_mult_spin:
+		shore_noise_mult_spin.set_block_signals(true)
+		shore_noise_mult_spin.value = float(generator.config.shore_noise_mult)
+		shore_noise_mult_spin.set_block_signals(false)
+	if polar_cap_frac_slider:
+		polar_cap_frac_slider.set_block_signals(true)
+		polar_cap_frac_slider.value = float(generator.config.polar_cap_frac)
+		polar_cap_frac_slider.set_block_signals(false)
+	if bedrock_view_check:
+		bedrock_view_check.set_block_signals(true)
+		bedrock_view_check.button_pressed = show_bedrock_view
+		bedrock_view_check.set_block_signals(false)
+	if rivers_enabled_check:
+		rivers_enabled_check.set_block_signals(true)
+		rivers_enabled_check.button_pressed = bool(generator.config.rivers_enabled)
+		rivers_enabled_check.set_block_signals(false)
+	if lakes_enabled_check:
+		lakes_enabled_check.set_block_signals(true)
+		lakes_enabled_check.button_pressed = bool(generator.config.lakes_enabled)
+		lakes_enabled_check.set_block_signals(false)
+	if river_threshold_spin:
+		river_threshold_spin.set_block_signals(true)
+		river_threshold_spin.value = float(generator.config.river_threshold_factor)
+		river_threshold_spin.set_block_signals(false)
+	if river_delta_widening_check:
+		river_delta_widening_check.set_block_signals(true)
+		river_delta_widening_check.button_pressed = bool(generator.config.river_delta_widening)
+		river_delta_widening_check.set_block_signals(false)
+
+func _on_noise_settings_changed() -> void:
+	if generator == null:
+		return
+	var cfg := {}
+	if noise_octaves_spin:
+		cfg["octaves"] = int(noise_octaves_spin.value)
+	if noise_frequency_spin:
+		cfg["frequency"] = float(noise_frequency_spin.value)
+	if noise_lacunarity_spin:
+		cfg["lacunarity"] = float(noise_lacunarity_spin.value)
+	if noise_gain_spin:
+		cfg["gain"] = float(noise_gain_spin.value)
+	if noise_warp_spin:
+		cfg["warp"] = float(noise_warp_spin.value)
+	if cfg.is_empty():
+		return
+	generator.apply_config(cfg)
+	_generate_and_draw()
+
+func _on_shoreline_settings_changed() -> void:
+	if generator == null:
+		return
+	var cfg := {}
+	if shallow_threshold_spin:
+		cfg["shallow_threshold"] = float(shallow_threshold_spin.value)
+	if shore_band_spin:
+		cfg["shore_band"] = float(shore_band_spin.value)
+	if shore_noise_mult_spin:
+		cfg["shore_noise_mult"] = float(shore_noise_mult_spin.value)
+	if cfg.is_empty():
+		return
+	generator.apply_config(cfg)
+	if "quick_update_sea_level" in generator:
+		generator.quick_update_sea_level(float(generator.config.sea_level))
+		_sync_sea_slider_to_generator()
+		_redraw_ascii_from_current_state()
+		_update_cursor_dimensions()
+		_refresh_hover_info()
+	else:
+		_generate_and_draw()
+
+func _on_polar_cap_frac_changed(v: float) -> void:
+	if generator == null:
+		return
+	generator.apply_config({"polar_cap_frac": clamp(float(v), 0.0, 0.5)})
+	if "quick_update_climate" in generator:
+		generator.quick_update_climate()
+	if "quick_update_biomes" in generator:
+		generator.quick_update_biomes()
+	if "quick_update_flow_rivers" in generator:
+		generator.quick_update_flow_rivers()
+	_redraw_ascii_from_current_state()
+	_refresh_hover_info()
+
+func _on_bedrock_view_toggled(enabled: bool) -> void:
+	show_bedrock_view = bool(enabled)
+	_redraw_ascii_from_current_state()
+	_refresh_hover_info()
+
+func _on_hydro_generation_settings_changed() -> void:
+	if generator == null:
+		return
+	var cfg := {}
+	if rivers_enabled_check:
+		cfg["rivers_enabled"] = bool(rivers_enabled_check.button_pressed)
+	if lakes_enabled_check:
+		cfg["lakes_enabled"] = bool(lakes_enabled_check.button_pressed)
+	if river_threshold_spin:
+		cfg["river_threshold_factor"] = float(river_threshold_spin.value)
+	if river_delta_widening_check:
+		cfg["river_delta_widening"] = bool(river_delta_widening_check.button_pressed)
+	if cfg.is_empty():
+		return
+	generator.apply_config(cfg)
+	if "quick_update_sea_level" in generator:
+		generator.quick_update_sea_level(float(generator.config.sea_level))
+		_sync_sea_slider_to_generator()
+	elif "quick_update_flow_rivers" in generator:
+		generator.quick_update_flow_rivers()
+	else:
+		_generate_and_draw()
+		return
+	_redraw_ascii_from_current_state()
+	_refresh_hover_info()
 
 func _on_sea_level_changed(value: float) -> void:
 	_on_sea_changed(value)
@@ -896,247 +1079,19 @@ func _ready() -> void:
 	# Initialize UI node references
 	_initialize_ui_nodes()
 	call_deferred("_ensure_window_visible")
-	generator = load("res://scripts/WorldGenerator.gd").new()
-	# Create time and simulation nodes
-	time_system = load("res://scripts/core/TimeSystem.gd").new()
-	add_child(time_system)
-	simulation = load("res://scripts/core/Simulation.gd").new()
-	add_child(simulation)
-	# Balance simulation performance with UI responsiveness
-	simulation.set_max_tick_time_ms(12.0)  # Allow up to 12ms per tick (keep UI at 60fps)
-	simulation.set_max_systems_per_tick(2)  # Fewer systems per tick for smoother UI
-	# Create checkpoint system (in-memory ring buffer)
-	_checkpoint_sys = load("res://scripts/core/CheckpointSystem.gd").new()
-	add_child(_checkpoint_sys)
-	if "initialize" in _checkpoint_sys:
-		_checkpoint_sys.initialize(generator)
-	if "set_interval_days" in _checkpoint_sys:
-		_checkpoint_sys.set_interval_days(5.0)
-	# Register seasonal climate param updater (optional)
-	if ENABLE_SEASONAL_CLIMATE:
-		_seasonal_sys = load("res://scripts/systems/SeasonalClimateSystem.gd").new()
-		if "initialize" in _seasonal_sys:
-			_seasonal_sys.initialize(generator, time_system)
-		# NOTE: SeasonalClimateSystem runs directly in _on_sim_tick()
-	# Register hydro updater at a much slower cadence (most expensive system)
-	if ENABLE_HYDRO:
-		_hydro_sys = load("res://scripts/systems/HydroUpdateSystem.gd").new()
-		if "initialize" in _hydro_sys:
-			_hydro_sys.initialize(generator)
-			# Reduce tiles per tick for hydro system performance
-			_hydro_sys.tiles_per_tick = 1  # Process 1 tile per tick instead of 2
-		if "register_system" in simulation:
-			simulation.register_system(_hydro_sys, 30, 0, false, 20.0)  # Hydro: cadence-driven (no time debt catch-up)
-	# Register rainfall-driven erosion (uses moisture + runoff, world-time accumulated)
-	if ENABLE_EROSION:
-		_erosion_sys = load("res://scripts/systems/RainErosionSystem.gd").new()
-		if "initialize" in _erosion_sys:
-			_erosion_sys.initialize(generator)
-		if "register_system" in simulation:
-			simulation.register_system(_erosion_sys, WorldConstants.CADENCE_EROSION, 0, true, 6.0)
-	# Register cloud/wind overlay updater (visual only for now)
-	if ENABLE_CLOUDS:
-		_clouds_sys = load("res://scripts/systems/CloudWindSystem.gd").new()
-		if "initialize" in _clouds_sys:
-			_clouds_sys.initialize(generator, time_system)
-		if "register_system" in simulation:
-			simulation.register_system(_clouds_sys, 2, 0, false, 1.0)  # Clouds: visual resync policy handles catch-up
-	# Register biome and cryosphere systems (cadence separate from climate).
-	if ENABLE_BIOMES_TICK or ENABLE_CRYOSPHERE_TICK:
-		_biome_like_systems.clear()
-		_biome_sys = null
-		_cryosphere_sys = null
-		var biome_path: String = "res://scripts/systems/BiomeUpdateSystem.gd"
-		if ResourceLoader.exists(biome_path):
-			if ENABLE_BIOMES_TICK:
-				_biome_sys = load(biome_path).new()
-				if "initialize" in _biome_sys:
-					_biome_sys.initialize(generator)
-				if "set_update_modes" in _biome_sys:
-					_biome_sys.set_update_modes(true, false)
-				if "register_system" in simulation:
-					simulation.register_system(_biome_sys, WorldConstants.CADENCE_BIOMES, 0, false, 90.0)  # Biomes: cadence/world-time driven
-				_biome_like_systems.append(_biome_sys)
-			if ENABLE_CRYOSPHERE_TICK:
-				_cryosphere_sys = load(biome_path).new()
-				if "initialize" in _cryosphere_sys:
-					_cryosphere_sys.initialize(generator)
-				if "set_update_modes" in _cryosphere_sys:
-					_cryosphere_sys.set_update_modes(false, true)
-				if "register_system" in simulation:
-					simulation.register_system(_cryosphere_sys, WorldConstants.CADENCE_CRYOSPHERE, 0, false, 45.0)  # Cryosphere: cadence/world-time driven
-		else:
-			# Compatibility path for explicit split systems.
-			var split_systems := [
-				{
-					"path": "res://scripts/systems/CryosphereUpdateSystem.gd",
-					"is_cryosphere": true,
-					"enabled": ENABLE_CRYOSPHERE_TICK,
-					"cadence": WorldConstants.CADENCE_CRYOSPHERE if "CADENCE_CRYOSPHERE" in WorldConstants else WorldConstants.CADENCE_BIOMES,
-					"use_time_debt": false,
-					"max_catchup_days": 45.0
-				},
-				{
-					"path": "res://scripts/systems/BiosphereUpdateSystem.gd",
-					"is_cryosphere": false,
-					"enabled": ENABLE_BIOMES_TICK,
-					"cadence": WorldConstants.CADENCE_BIOMES,
-					"use_time_debt": false,
-					"max_catchup_days": 90.0
-				},
-				{
-					"path": "res://scripts/systems/VegetationUpdateSystem.gd",
-					"is_cryosphere": false,
-					"enabled": ENABLE_BIOMES_TICK,
-					"cadence": WorldConstants.CADENCE_BIOMES,
-					"use_time_debt": false,
-					"max_catchup_days": 90.0
-				}
-			]
-			for def in split_systems:
-				if not bool(def.get("enabled", true)):
-					continue
-				var path: String = String(def.get("path", ""))
-				if not ResourceLoader.exists(path):
-					continue
-				var sys_obj: Object = load(path).new()
-				if "initialize" in sys_obj:
-					sys_obj.initialize(generator)
-				if "register_system" in simulation:
-					simulation.register_system(
-						sys_obj,
-						int(def.get("cadence", WorldConstants.CADENCE_BIOMES)),
-						0,
-						bool(def.get("use_time_debt", false)),
-						float(def.get("max_catchup_days", 365.0))
-					)
-				if bool(def.get("is_cryosphere", false)):
-					_cryosphere_sys = sys_obj
-				else:
-					_biome_like_systems.append(sys_obj)
-			if not _biome_like_systems.is_empty():
-				_biome_sys = _biome_like_systems[0]
-	# Register plates prototype at a very slow cadence
-	if ENABLE_PLATES:
-		_plates_sys = load("res://scripts/systems/PlateSystem.gd").new()
-		if "initialize" in _plates_sys:
-			_plates_sys.initialize(generator)
-		if "register_system" in simulation:
-			simulation.register_system(_plates_sys, int(time_system.get_days_per_year()), 0, false, 180.0)  # Plate tectonics: cadence/world-time driven
-	# Register volcanism system at slower cadence
-	if ENABLE_VOLCANISM:
-		_volcanism_sys = load("res://scripts/systems/VolcanismSystem.gd").new()
-		if "initialize" in _volcanism_sys:
-			_volcanism_sys.initialize(generator, time_system)
-		if "register_system" in simulation:
-			simulation.register_system(_volcanism_sys, 3, 0, false, 30.0)  # Volcanism: cadence/world-time driven
-	# Forward ticks to simulation (world state lives in generator)
-	if time_system.has_signal("tick"):
-		time_system.connect("tick", Callable(self, "_on_sim_tick"))
-	# Guard against missing buttons and duplicate connects
-	if play_button and not play_button.pressed.is_connected(_on_play_pressed):
-		play_button.pressed.connect(_on_play_pressed)
-	if reset_button and not reset_button.pressed.is_connected(_on_reset_pressed):
-		reset_button.pressed.connect(_on_reset_pressed)
-	_apply_monospace_font()
-	_connect_cursor_overlay()
-	_setup_panel_controls()
-	# Hide the CPU ASCII map (GPU-only rendering)
-	if ascii_map:
-		ascii_map.modulate.a = 0.0
-		ascii_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	
-	# Initialize GPU ASCII renderer if toggled on
-	if use_gpu_rendering:
-		_initialize_gpu_renderer()
-	
-	if ascii_map:
-		ascii_map.resized.connect(_on_map_resized)
-	# Init tile grid from current generator config
-	tile_cols = int(generator.config.width)
-	tile_rows = int(generator.config.height)
-	if sea_slider and sea_value_label:
-		_update_sea_label()
-		sea_last_applied = float(generator.config.sea_level)
-		sea_pending_value = sea_last_applied
-	# Always-visible Save/Load on Top Bar
-	if top_bar:
-		top_save_ckpt_button = Button.new(); top_save_ckpt_button.text = "Save"; top_bar.add_child(top_save_ckpt_button)
-		top_save_ckpt_button.pressed.connect(func() -> void:
-			if save_dialog:
-				save_dialog.current_dir = "user://"
-				save_dialog.current_file = "world_%d.tres" % int(Time.get_ticks_msec())
-				_show_centered_dialog(save_dialog)
-		)
-		top_load_ckpt_button = Button.new(); top_load_ckpt_button.text = "Load"; top_bar.add_child(top_load_ckpt_button)
-		top_load_ckpt_button.pressed.connect(func() -> void:
-			if load_dialog:
-				load_dialog.current_dir = "user://"
-				_show_centered_dialog(load_dialog)
-		)
-		# Top bar seed/time labels
-		top_seed_label = Label.new(); top_seed_label.text = "Seed: -"; top_bar.add_child(top_seed_label)
-		top_time_label = Label.new(); top_time_label.text = "Time: 0y 0d 00:00"; top_bar.add_child(top_time_label)
-		_update_top_seed_label()
-		_update_top_time_label()
-
-		# Register this root for quick lookup by overlay
-		add_to_group("MainRoot")
-
-	_sync_season_strength_from_config()
-	sea_debounce_timer = Timer.new()
-	sea_debounce_timer.one_shot = true
-	sea_debounce_timer.wait_time = 0.08
-	add_child(sea_debounce_timer)
-	sea_debounce_timer.timeout.connect(_on_sea_debounce_timeout)
-	# Debounce for temperature slider as well
-	var temp_timer := Timer.new()
-	temp_timer.name = "TempDebounceTimer"
-	temp_timer.one_shot = true
-	temp_timer.wait_time = 0.12
-	add_child(temp_timer)
-	(temp_timer as Timer).timeout.connect(_on_temp_debounce_timeout)
-	# Debounce for GPU tile fit on resize
-	tile_fit_timer = Timer.new()
-	tile_fit_timer.one_shot = true
-	tile_fit_timer.wait_time = 0.12
-	add_child(tile_fit_timer)
-	tile_fit_timer.timeout.connect(_on_tile_fit_timeout)
-	if settings_dialog and settings_dialog.has_signal("settings_applied"):
-		settings_dialog.connect("settings_applied", Callable(self, "_on_settings_applied"))
+	_setup_core_runtime()
+	_register_simulation_systems()
+	_connect_runtime_signals()
+	_setup_runtime_ui_and_rendering()
+	_setup_runtime_timers()
 	_reset_view()
 	# Auto-generate first world on startup at base resolution
 	base_width = generator.config.width
 	base_height = generator.config.height
-
-	# File dialogs for Save/Load
-	save_dialog = FileDialog.new()
-	save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
-	save_dialog.access = FileDialog.ACCESS_USERDATA
-	save_dialog.title = "Save Worldmap"
-	save_dialog.add_filter("*.tres", "Checkpoint (*.tres)")
-	add_child(save_dialog)
-	save_dialog.file_selected.connect(func(path: String) -> void:
-		if _checkpoint_sys and "export_latest_to_file" in _checkpoint_sys:
-			_checkpoint_sys.export_latest_to_file(path)
-	)
-	load_dialog = FileDialog.new()
-	load_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	load_dialog.access = FileDialog.ACCESS_USERDATA
-	load_dialog.title = "Load Worldmap"
-	load_dialog.add_filter("*.tres", "Checkpoint (*.tres)")
-	add_child(load_dialog)
-	load_dialog.file_selected.connect(func(path: String) -> void:
-		if _checkpoint_sys and "import_from_file" in _checkpoint_sys:
-			var ok_res: bool = _checkpoint_sys.import_from_file(path)
-			if ok_res:
-				if year_label and time_system and "get_year_float" in time_system:
-					year_label.text = "Year: %.2f" % float(time_system.get_year_float())
-				_update_top_time_label()
-				_redraw_ascii_from_current_state()
-	)
+	_setup_file_dialogs()
 	# debug removed
 	_entered_from_intro = _apply_intro_startup_config()
+	_sync_settings_controls_from_generator()
 	_generate_and_draw()
 	# capture base dimensions for scaling
 	base_width = generator.config.width
@@ -1162,6 +1117,250 @@ func _ready() -> void:
 		_defer_intro_scene_reveal()
 	else:
 		_play_scene_fade_in()
+
+func _setup_core_runtime() -> void:
+	generator = load("res://scripts/WorldGenerator.gd").new()
+	time_system = load("res://scripts/core/TimeSystem.gd").new()
+	add_child(time_system)
+	simulation = load("res://scripts/core/Simulation.gd").new()
+	add_child(simulation)
+	simulation.set_max_tick_time_ms(12.0)
+	simulation.set_max_systems_per_tick(2)
+	_checkpoint_sys = load("res://scripts/core/CheckpointSystem.gd").new()
+	add_child(_checkpoint_sys)
+	if "initialize" in _checkpoint_sys:
+		_checkpoint_sys.initialize(generator)
+	if "set_interval_days" in _checkpoint_sys:
+		_checkpoint_sys.set_interval_days(5.0)
+
+func _register_simulation_systems() -> void:
+	_register_seasonal_system()
+	_register_hydro_system()
+	_register_erosion_system()
+	_register_cloud_system()
+	_register_biome_systems()
+	_register_plate_system()
+	_register_volcanism_system()
+
+func _connect_runtime_signals() -> void:
+	if time_system.has_signal("tick"):
+		time_system.connect("tick", Callable(self, "_on_sim_tick"))
+	if play_button and not play_button.pressed.is_connected(_on_play_pressed):
+		play_button.pressed.connect(_on_play_pressed)
+	if reset_button and not reset_button.pressed.is_connected(_on_reset_pressed):
+		reset_button.pressed.connect(_on_reset_pressed)
+
+func _setup_runtime_ui_and_rendering() -> void:
+	_apply_monospace_font()
+	_connect_cursor_overlay()
+	_setup_panel_controls()
+	if ascii_map:
+		ascii_map.modulate.a = 0.0
+		ascii_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if use_gpu_rendering:
+		_initialize_gpu_renderer()
+	if ascii_map:
+		ascii_map.resized.connect(_on_map_resized)
+	tile_cols = int(generator.config.width)
+	tile_rows = int(generator.config.height)
+	if sea_slider and sea_value_label:
+		_update_sea_label()
+		sea_last_applied = float(generator.config.sea_level)
+		sea_pending_value = sea_last_applied
+	if top_bar:
+		top_save_ckpt_button = Button.new(); top_save_ckpt_button.text = "Save"; top_bar.add_child(top_save_ckpt_button)
+		top_save_ckpt_button.pressed.connect(func() -> void:
+			if save_dialog:
+				save_dialog.current_dir = "user://"
+				save_dialog.current_file = "world_%d.tres" % int(Time.get_ticks_msec())
+				_show_centered_dialog(save_dialog)
+		)
+		top_load_ckpt_button = Button.new(); top_load_ckpt_button.text = "Load"; top_bar.add_child(top_load_ckpt_button)
+		top_load_ckpt_button.pressed.connect(func() -> void:
+			if load_dialog:
+				load_dialog.current_dir = "user://"
+				_show_centered_dialog(load_dialog)
+		)
+		top_seed_label = Label.new(); top_seed_label.text = "Seed: -"; top_bar.add_child(top_seed_label)
+		top_time_label = Label.new(); top_time_label.text = "Time: 0y 0d 00:00"; top_bar.add_child(top_time_label)
+		_update_top_seed_label()
+		_update_top_time_label()
+		add_to_group("MainRoot")
+	_sync_season_strength_from_config()
+
+func _setup_runtime_timers() -> void:
+	sea_debounce_timer = Timer.new()
+	sea_debounce_timer.one_shot = true
+	sea_debounce_timer.wait_time = 0.08
+	add_child(sea_debounce_timer)
+	sea_debounce_timer.timeout.connect(_on_sea_debounce_timeout)
+	var temp_timer := Timer.new()
+	temp_timer.name = "TempDebounceTimer"
+	temp_timer.one_shot = true
+	temp_timer.wait_time = 0.12
+	add_child(temp_timer)
+	(temp_timer as Timer).timeout.connect(_on_temp_debounce_timeout)
+	tile_fit_timer = Timer.new()
+	tile_fit_timer.one_shot = true
+	tile_fit_timer.wait_time = 0.12
+	add_child(tile_fit_timer)
+	tile_fit_timer.timeout.connect(_on_tile_fit_timeout)
+
+func _setup_file_dialogs() -> void:
+	save_dialog = FileDialog.new()
+	save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	save_dialog.access = FileDialog.ACCESS_USERDATA
+	save_dialog.title = "Save Worldmap"
+	save_dialog.add_filter("*.tres", "Checkpoint (*.tres)")
+	add_child(save_dialog)
+	save_dialog.file_selected.connect(func(path: String) -> void:
+		if _checkpoint_sys and "export_latest_to_file" in _checkpoint_sys:
+			_checkpoint_sys.export_latest_to_file(path)
+	)
+	load_dialog = FileDialog.new()
+	load_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	load_dialog.access = FileDialog.ACCESS_USERDATA
+	load_dialog.title = "Load Worldmap"
+	load_dialog.add_filter("*.tres", "Checkpoint (*.tres)")
+	add_child(load_dialog)
+	load_dialog.file_selected.connect(func(path: String) -> void:
+		if _checkpoint_sys and "import_from_file" in _checkpoint_sys:
+			var ok_res: bool = _checkpoint_sys.import_from_file(path)
+			if ok_res:
+				if year_label and time_system and "get_year_float" in time_system:
+					year_label.text = "Year: %.2f" % float(time_system.get_year_float())
+				_update_top_time_label()
+				_redraw_ascii_from_current_state()
+	)
+
+func _register_seasonal_system() -> void:
+	if not ENABLE_SEASONAL_CLIMATE:
+		return
+	_seasonal_sys = load("res://scripts/systems/SeasonalClimateSystem.gd").new()
+	if "initialize" in _seasonal_sys:
+		_seasonal_sys.initialize(generator, time_system)
+
+func _register_hydro_system() -> void:
+	if not ENABLE_HYDRO:
+		return
+	_hydro_sys = load("res://scripts/systems/HydroUpdateSystem.gd").new()
+	if "initialize" in _hydro_sys:
+		_hydro_sys.initialize(generator)
+		_hydro_sys.tiles_per_tick = 1
+	if "register_system" in simulation:
+		simulation.register_system(_hydro_sys, 30, 0, false, 20.0)
+
+func _register_erosion_system() -> void:
+	if not ENABLE_EROSION:
+		return
+	_erosion_sys = load("res://scripts/systems/RainErosionSystem.gd").new()
+	if "initialize" in _erosion_sys:
+		_erosion_sys.initialize(generator)
+	if "register_system" in simulation:
+		simulation.register_system(_erosion_sys, WorldConstants.CADENCE_EROSION, 0, true, 6.0)
+
+func _register_cloud_system() -> void:
+	if not ENABLE_CLOUDS:
+		return
+	_clouds_sys = load("res://scripts/systems/CloudWindSystem.gd").new()
+	if "initialize" in _clouds_sys:
+		_clouds_sys.initialize(generator, time_system)
+	if "register_system" in simulation:
+		simulation.register_system(_clouds_sys, 2, 0, false, 1.0)
+
+func _register_biome_systems() -> void:
+	if not (ENABLE_BIOMES_TICK or ENABLE_CRYOSPHERE_TICK):
+		return
+	_biome_like_systems.clear()
+	_biome_sys = null
+	_cryosphere_sys = null
+	var biome_path: String = "res://scripts/systems/BiomeUpdateSystem.gd"
+	if ResourceLoader.exists(biome_path):
+		if ENABLE_BIOMES_TICK:
+			_biome_sys = load(biome_path).new()
+			if "initialize" in _biome_sys:
+				_biome_sys.initialize(generator)
+			if "set_update_modes" in _biome_sys:
+				_biome_sys.set_update_modes(true, false)
+			if "register_system" in simulation:
+				simulation.register_system(_biome_sys, WorldConstants.CADENCE_BIOMES, 0, false, 90.0)
+			_biome_like_systems.append(_biome_sys)
+		if ENABLE_CRYOSPHERE_TICK:
+			_cryosphere_sys = load(biome_path).new()
+			if "initialize" in _cryosphere_sys:
+				_cryosphere_sys.initialize(generator)
+			if "set_update_modes" in _cryosphere_sys:
+				_cryosphere_sys.set_update_modes(false, true)
+			if "register_system" in simulation:
+				simulation.register_system(_cryosphere_sys, WorldConstants.CADENCE_CRYOSPHERE, 0, false, 45.0)
+		return
+	var split_systems := [
+		{
+			"path": "res://scripts/systems/CryosphereUpdateSystem.gd",
+			"is_cryosphere": true,
+			"enabled": ENABLE_CRYOSPHERE_TICK,
+			"cadence": WorldConstants.CADENCE_CRYOSPHERE if "CADENCE_CRYOSPHERE" in WorldConstants else WorldConstants.CADENCE_BIOMES,
+			"use_time_debt": false,
+			"max_catchup_days": 45.0
+		},
+		{
+			"path": "res://scripts/systems/BiosphereUpdateSystem.gd",
+			"is_cryosphere": false,
+			"enabled": ENABLE_BIOMES_TICK,
+			"cadence": WorldConstants.CADENCE_BIOMES,
+			"use_time_debt": false,
+			"max_catchup_days": 90.0
+		},
+		{
+			"path": "res://scripts/systems/VegetationUpdateSystem.gd",
+			"is_cryosphere": false,
+			"enabled": ENABLE_BIOMES_TICK,
+			"cadence": WorldConstants.CADENCE_BIOMES,
+			"use_time_debt": false,
+			"max_catchup_days": 90.0
+		}
+	]
+	for def in split_systems:
+		if not bool(def.get("enabled", true)):
+			continue
+		var path: String = String(def.get("path", ""))
+		if not ResourceLoader.exists(path):
+			continue
+		var sys_obj: Object = load(path).new()
+		if "initialize" in sys_obj:
+			sys_obj.initialize(generator)
+		if "register_system" in simulation:
+			simulation.register_system(
+				sys_obj,
+				int(def.get("cadence", WorldConstants.CADENCE_BIOMES)),
+				0,
+				bool(def.get("use_time_debt", false)),
+				float(def.get("max_catchup_days", 365.0))
+			)
+		if bool(def.get("is_cryosphere", false)):
+			_cryosphere_sys = sys_obj
+		else:
+			_biome_like_systems.append(sys_obj)
+	if not _biome_like_systems.is_empty():
+		_biome_sys = _biome_like_systems[0]
+
+func _register_plate_system() -> void:
+	if not ENABLE_PLATES:
+		return
+	_plates_sys = load("res://scripts/systems/PlateSystem.gd").new()
+	if "initialize" in _plates_sys:
+		_plates_sys.initialize(generator)
+	if "register_system" in simulation:
+		simulation.register_system(_plates_sys, int(time_system.get_days_per_year()), 0, false, 180.0)
+
+func _register_volcanism_system() -> void:
+	if not ENABLE_VOLCANISM:
+		return
+	_volcanism_sys = load("res://scripts/systems/VolcanismSystem.gd").new()
+	if "initialize" in _volcanism_sys:
+		_volcanism_sys.initialize(generator, time_system)
+	if "register_system" in simulation:
+		simulation.register_system(_volcanism_sys, 3, 0, false, 30.0)
 
 func _ensure_scene_fade_overlay() -> ColorRect:
 	if is_instance_valid(_scene_fade_rect):
@@ -1240,17 +1439,6 @@ func _ensure_window_visible() -> void:
 	if new_pos != pos:
 		DisplayServer.window_set_position(new_pos)
 
-
-func _on_settings_applied(config: Dictionary) -> void:
-	if config.has("show_bedrock_view"):
-		show_bedrock_view = bool(config["show_bedrock_view"])
-	generator.apply_config(config)
-	# update base dims if settings changed width/height
-	base_width = generator.config.width
-	base_height = generator.config.height
-	_generate_and_draw()
-
-
 func _generate_and_draw() -> void:
 	_apply_seed_from_ui()
 	# scale up resolution by map_scale in both axes
@@ -1271,6 +1459,7 @@ func _generate_and_draw() -> void:
 	_redraw_ascii_from_current_state()
 	_update_cursor_dimensions()
 	_refresh_hover_info()
+	_sync_settings_controls_from_generator()
 	# Sync world state's notion of time for info overlays
 	if time_system and "simulation_time_days" in time_system and "_world_state" in generator:
 		generator._world_state.simulation_time_days = float(time_system.simulation_time_days)
@@ -1316,15 +1505,14 @@ func _acclimate_generated_world() -> void:
 		warmup_steps = max(warmup_steps, int(simulation.systems.size()) + 2)
 	if simulation and "request_catchup_all" in simulation:
 		simulation.request_catchup_all()
+	if _clouds_sys and "request_full_resync" in _clouds_sys:
+		# Warm-up should trigger a single cloud resync; cloud ticks themselves are driven via simulation.on_tick().
+		_clouds_sys.request_full_resync()
 	for wi in range(warmup_steps):
 		if _seasonal_sys and "tick" in _seasonal_sys:
 			_seasonal_sys.tick(dt_days, world_state, {})
 		if simulation and "on_tick" in simulation:
 			simulation.on_tick(dt_days, world_state, {})
-		if _clouds_sys and "request_full_resync" in _clouds_sys:
-			_clouds_sys.request_full_resync()
-		if _clouds_sys and "tick" in _clouds_sys:
-			_clouds_sys.tick(dt_days, world_state, {})
 		world_state.simulation_time_days += dt_days
 		# Early out once all forced catch-up flags have been consumed.
 		if "systems" in simulation and wi >= max(0, STARTUP_ACCLIMATE_STEPS - 1):
@@ -1660,11 +1848,11 @@ func _redraw_ascii_from_current_state() -> void:
 		if gpu_ascii_renderer:
 			# GPU-only: refresh base world textures from buffers to avoid CPU packing
 			if "update_base_textures_gpu" in generator:
-				generator.update_base_textures_gpu()
+				generator.update_base_textures_gpu(show_bedrock_view)
 			if "world_data_1_override" in generator:
 				gpu_ascii_renderer.set_world_data_1_override(generator.world_data_1_override)
 			if "world_data_2_override" in generator:
-				gpu_ascii_renderer.set_world_data_2_override(null if show_bedrock_view else generator.world_data_2_override)
+				gpu_ascii_renderer.set_world_data_2_override(generator.world_data_2_override)
 			# Clear optional GPU texture overrides on full redraw to avoid stale textures after reset
 			if "cloud_texture_override" in generator:
 				gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
@@ -2402,6 +2590,11 @@ func _setup_panel_controls() -> void:
 	if hide_button:
 		if not hide_button.pressed.is_connected(_on_hide_panel_pressed):
 			hide_button.pressed.connect(_on_hide_panel_pressed)
+	_sync_settings_button_label()
+
+func _sync_settings_button_label() -> void:
+	if settings_button:
+		settings_button.text = "Show Settings" if panel_hidden else "Hide Settings"
 
 func _on_hide_panel_pressed() -> void:
 	panel_hidden = !panel_hidden
@@ -2414,6 +2607,7 @@ func _on_hide_panel_pressed() -> void:
 		bottom_panel.show()
 		hide_button.text = "Hide Panel"
 		_remove_floating_show_button()
+	_sync_settings_button_label()
 
 var floating_show_button: Button = null
 
@@ -2480,6 +2674,8 @@ func _on_cursor_exited() -> void:
 func _update_info_panel_for_tile(x: int, y: int) -> void:
 	if generator == null:
 		return
+	if "sync_debug_cpu_snapshot" in generator:
+		generator.sync_debug_cpu_snapshot(x, y, 3, 2)
 	var w: int = generator.get_width()
 	var h: int = generator.get_height()
 	if x < 0 or y < 0 or x >= w or y >= h:

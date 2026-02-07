@@ -26,6 +26,7 @@ uniform float cloud_shadow_strength = 0.25;
 uniform float cloud_light_strength = 0.25;
 uniform vec2 cloud_shadow_offset = vec2(1.5, 1.0);
 uniform int use_glyphs = 0;
+uniform int bedrock_only_mode = 0;
 
 // Map parameters
 uniform vec2 map_dimensions;
@@ -213,6 +214,11 @@ void fragment() {
     float char_index = char_index_norm * 255.0;
     
     bool is_land_tile = (is_land >= 0.5);
+    bool bedrock_mode = (bedrock_only_mode != 0);
+    if (bedrock_mode && !is_land_tile) {
+        COLOR = vec4(0.0, 0.0, 0.0, 0.0);
+        return;
+    }
     bool lake_here = (lake_flag > 0.5);
     bool river_here = (river_flag > 0.5);
     bool lava_here = (lava_flag > 0.5);
@@ -228,14 +234,14 @@ void fragment() {
             out_char_index = CHAR_IDX_HASH;
         }
     } else {
-        if (beach_flag > 0.5) {
+        if (!bedrock_mode && beach_flag > 0.5) {
             base_color = BEACH_COLOR;
         } else {
             base_color = sample_biome_color(biome_id);
         }
     }
 
-    if (is_land_tile && lake_here) {
+    if (!bedrock_mode && is_land_tile && lake_here) {
         float lake_neighbors = _lake_neighbor_count(world_cell);
         float lake_depth_bias = (lake_neighbors / 8.0) * 0.08;
         float lake_height = height_raw - lake_depth_bias;
@@ -252,19 +258,19 @@ void fragment() {
             lake_circle_mask = smoothstep(radius, radius - softness, dist);
         }
     }
-    if (is_land_tile && river_here) {
+    if (!bedrock_mode && is_land_tile && river_here) {
         float river_line = _river_line_mask(world_cell, char_uv);
         vec3 river_col = vec3(0.12, 0.62, 0.92);
         base_color = mix(base_color, river_col, river_line * 0.85);
         out_char_index = CHAR_IDX_TILDE;
     }
 
-    if (lava_here) {
+    if (!bedrock_mode && lava_here) {
         base_color = LAVA_COLOR;
         out_char_index = CHAR_IDX_HASH;
     }
 
-    if (is_land_tile) {
+    if (is_land_tile && !bedrock_mode) {
         if (temperature > 0.7) {
             base_color = mix(base_color, base_color * vec3(1.2, 0.9, 0.7), 0.15);
         } else if (temperature < 0.3) {

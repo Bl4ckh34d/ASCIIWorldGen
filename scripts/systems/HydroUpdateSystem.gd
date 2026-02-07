@@ -47,10 +47,11 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var river_updated: bool = false
 	var clear_river_this_tick: bool = (_tile_cursor % total_tiles == 0)
 	# GPU-only: ensure compute objects exist
-	if generator._flow_compute == null:
-		generator._flow_compute = load("res://scripts/systems/FlowCompute.gd").new()
-	if generator._river_compute == null:
-		generator._river_compute = load("res://scripts/systems/RiverCompute.gd").new()
+	var flow_compute: Object = generator.ensure_flow_compute() if "ensure_flow_compute" in generator else null
+	var river_compute: Object = generator.ensure_river_compute() if "ensure_river_compute" in generator else null
+	var gpu_mgr: Object = generator.get_gpu_buffer_manager() if "get_gpu_buffer_manager" in generator else null
+	if flow_compute == null or river_compute == null:
+		return {}
 	while processed < k:
 		var tindex: int = _tile_cursor % total_tiles
 		var tx: int = tindex % tiles_x
@@ -65,26 +66,26 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		# Recompute flow over ROI; then retrace rivers
 		if "ensure_persistent_buffers" in generator:
 			generator.ensure_persistent_buffers(false)
-		var height_buf: RID = generator.get_persistent_buffer("height")
-		var land_buf: RID = generator.get_persistent_buffer("is_land")
-		var dir_buf: RID = generator.get_persistent_buffer("flow_dir")
-		var acc_buf: RID = generator.get_persistent_buffer("flow_accum")
-		var lake_buf: RID = generator.get_persistent_buffer("lake")
-		var river_buf: RID = generator.get_persistent_buffer("river")
-		if height_buf.is_valid() and land_buf.is_valid() and dir_buf.is_valid() and acc_buf.is_valid() and lake_buf.is_valid() and river_buf.is_valid():
-			generator._flow_compute.compute_flow_gpu_buffers(w, h, height_buf, land_buf, true, dir_buf, acc_buf, roi, generator._gpu_buffer_manager)
-			var thr: float = river_threshold
-			if "last_river_seed_threshold" in generator:
-				var last_thr := float(generator.last_river_seed_threshold)
-				if last_thr > 0.0:
-					thr = last_thr
-			if "config" in generator:
-				var cfg_thr := float(generator.config.river_threshold)
-				if cfg_thr > 0.0:
-					thr = max(thr, cfg_thr)
-			var clear_now: bool = clear_river_this_tick and (processed == 0)
-			generator._river_compute.trace_rivers_gpu_buffers(w, h, land_buf, lake_buf, dir_buf, acc_buf, thr, 5, roi, river_buf, clear_now)
-			river_updated = true
+			var height_buf: RID = generator.get_persistent_buffer("height")
+			var land_buf: RID = generator.get_persistent_buffer("is_land")
+			var dir_buf: RID = generator.get_persistent_buffer("flow_dir")
+			var acc_buf: RID = generator.get_persistent_buffer("flow_accum")
+			var lake_buf: RID = generator.get_persistent_buffer("lake")
+			var river_buf: RID = generator.get_persistent_buffer("river")
+			if height_buf.is_valid() and land_buf.is_valid() and dir_buf.is_valid() and acc_buf.is_valid() and lake_buf.is_valid() and river_buf.is_valid():
+				flow_compute.compute_flow_gpu_buffers(w, h, height_buf, land_buf, true, dir_buf, acc_buf, roi, gpu_mgr)
+				var thr: float = river_threshold
+				if "last_river_seed_threshold" in generator:
+					var last_thr := float(generator.last_river_seed_threshold)
+					if last_thr > 0.0:
+						thr = last_thr
+				if "config" in generator:
+					var cfg_thr := float(generator.config.river_threshold)
+					if cfg_thr > 0.0:
+						thr = max(thr, cfg_thr)
+				var clear_now: bool = clear_river_this_tick and (processed == 0)
+				river_compute.trace_rivers_gpu_buffers(w, h, land_buf, lake_buf, dir_buf, acc_buf, thr, 5, roi, river_buf, clear_now)
+				river_updated = true
 		processed += 1
 		_tile_cursor = (_tile_cursor + 1) % total_tiles
 	if river_updated and _river_tex:

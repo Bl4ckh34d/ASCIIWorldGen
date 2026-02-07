@@ -1,7 +1,6 @@
-[gd_scene load_steps=4 format=3 uid="uid://bry7lj5qqyx5j"]
+[gd_scene load_steps=3 format=3 uid="uid://bry7lj5qqyx5j"]
 
 [ext_resource type="Script" uid="uid://bg41d7sbqhoq3" path="res://scripts/Main.gd" id="1"]
-[ext_resource type="PackedScene" path="res://scenes/SettingsDialog.tscn" id="2"]
 [ext_resource type="Script" uid="uid://c50s005y1d6ne" path="res://scripts/ui/CursorOverlay.gd" id="3"]
 
 [node name="Main" type="Control"]
@@ -128,7 +127,7 @@ layout_mode = 2
 [node name="PanelTitle" type="Label" parent="BottomPanel/MainContainer/PanelHeader"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
-text = "World Generation Settings"
+text = "World & Simulation Settings"
 
 [node name="Spacer" type="Control" parent="BottomPanel/MainContainer/PanelHeader"]
 layout_mode = 2
@@ -227,5 +226,3 @@ layout_mode = 2
 [node name="SystemsVBox" type="VBoxContainer" parent="BottomPanel/MainContainer/ColumnsContainer/FiveColumns/SystemsColumn"]
 unique_name_in_owner = true
 layout_mode = 2
-
-[node name="SettingsDialog" parent="." instance=ExtResource("2")]

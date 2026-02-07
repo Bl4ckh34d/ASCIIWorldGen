@@ -39,17 +39,36 @@ func apply_mountain_radiance(w: int, h: int, biomes: PackedInt32Array, temperatu
     if size == 0 or biomes.size() != size or temperature.size() != size or moisture.size() != size:
         return {"temperature": temperature, "moisture": moisture}
 
-    var temp_in := temperature
-    var moist_in := moisture
-    # Double-buffer across requested passes
-    for p in range(max(1, passes)):
-        var buf_t_in := _rd.storage_buffer_create(temp_in.to_byte_array().size(), temp_in.to_byte_array())
-        var buf_m_in := _rd.storage_buffer_create(moist_in.to_byte_array().size(), moist_in.to_byte_array())
-        var buf_b := _rd.storage_buffer_create(biomes.to_byte_array().size(), biomes.to_byte_array())
-        var t_out := PackedFloat32Array(); t_out.resize(size)
-        var m_out := PackedFloat32Array(); m_out.resize(size)
-        var buf_t_out := _rd.storage_buffer_create(t_out.to_byte_array().size(), t_out.to_byte_array())
-        var buf_m_out := _rd.storage_buffer_create(m_out.to_byte_array().size(), m_out.to_byte_array())
+    var temp_bytes: PackedByteArray = temperature.to_byte_array()
+    var moist_bytes: PackedByteArray = moisture.to_byte_array()
+    var biome_bytes: PackedByteArray = biomes.to_byte_array()
+    var empty_out := PackedByteArray()
+    empty_out.resize(size * 4)
+    var buf_t_a := _rd.storage_buffer_create(temp_bytes.size(), temp_bytes)
+    var buf_m_a := _rd.storage_buffer_create(moist_bytes.size(), moist_bytes)
+    var buf_t_b := _rd.storage_buffer_create(empty_out.size(), empty_out)
+    var buf_m_b := _rd.storage_buffer_create(empty_out.size(), empty_out)
+    var buf_b := _rd.storage_buffer_create(biome_bytes.size(), biome_bytes)
+
+    var pc := PackedByteArray()
+    var ints := PackedInt32Array([w, h])
+    var cool_per: float = cool_amp / float(max(1, passes))
+    var wet_per: float = wet_amp / float(max(1, passes))
+    var floats := PackedFloat32Array([cool_per, wet_per])
+    pc.append_array(ints.to_byte_array()); pc.append_array(floats.to_byte_array())
+    var pad := (16 - (pc.size() % 16)) % 16
+    if pad > 0:
+        var zeros := PackedByteArray(); zeros.resize(pad)
+        pc.append_array(zeros)
+
+    var gx: int = int(ceil(float(w) / 16.0))
+    var gy: int = int(ceil(float(h) / 16.0))
+    var read_from_a: bool = true
+    for _p in range(max(1, passes)):
+        var buf_t_in: RID = buf_t_a if read_from_a else buf_t_b
+        var buf_m_in: RID = buf_m_a if read_from_a else buf_m_b
+        var buf_t_out: RID = buf_t_b if read_from_a else buf_t_a
+        var buf_m_out: RID = buf_m_b if read_from_a else buf_m_a
 
         var uniforms: Array = []
         var u: RDUniform
@@ -60,40 +79,26 @@ func apply_mountain_radiance(w: int, h: int, biomes: PackedInt32Array, temperatu
         u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_m_out); uniforms.append(u)
         var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 
-        var pc := PackedByteArray()
-        var ints := PackedInt32Array([w, h])
-        var cool_per: float = cool_amp / float(max(1, passes))
-        var wet_per: float = wet_amp / float(max(1, passes))
-        var floats := PackedFloat32Array([cool_per, wet_per])
-        pc.append_array(ints.to_byte_array()); pc.append_array(floats.to_byte_array())
-        # Align push constants to 16 bytes
-        var pad := (16 - (pc.size() % 16)) % 16
-        if pad > 0:
-            var zeros := PackedByteArray(); zeros.resize(pad)
-            pc.append_array(zeros)
-
-        var gx: int = int(ceil(float(w) / 16.0))
-        var gy: int = int(ceil(float(h) / 16.0))
         var cl := _rd.compute_list_begin()
         _rd.compute_list_bind_compute_pipeline(cl, _pipeline)
         _rd.compute_list_bind_uniform_set(cl, u_set, 0)
         _rd.compute_list_set_push_constant(cl, pc, pc.size())
         _rd.compute_list_dispatch(cl, gx, gy, 1)
         _rd.compute_list_end()
-
-        # Read back for next pass or final output
-        var t_bytes := _rd.buffer_get_data(buf_t_out)
-        var m_bytes := _rd.buffer_get_data(buf_m_out)
-        temp_in = t_bytes.to_float32_array()
-        moist_in = m_bytes.to_float32_array()
-
         _rd.free_rid(u_set)
-        _rd.free_rid(buf_t_in)
-        _rd.free_rid(buf_m_in)
-        _rd.free_rid(buf_b)
-        _rd.free_rid(buf_t_out)
-        _rd.free_rid(buf_m_out)
+        read_from_a = not read_from_a
 
-    return {"temperature": temp_in, "moisture": moist_in}
+    var final_t_buf: RID = buf_t_a if read_from_a else buf_t_b
+    var final_m_buf: RID = buf_m_a if read_from_a else buf_m_b
+    var out_temp: PackedFloat32Array = _rd.buffer_get_data(final_t_buf).to_float32_array()
+    var out_moist: PackedFloat32Array = _rd.buffer_get_data(final_m_buf).to_float32_array()
+
+    _rd.free_rid(buf_t_a)
+    _rd.free_rid(buf_m_a)
+    _rd.free_rid(buf_t_b)
+    _rd.free_rid(buf_m_b)
+    _rd.free_rid(buf_b)
+
+    return {"temperature": out_temp, "moisture": out_moist}
 
 
