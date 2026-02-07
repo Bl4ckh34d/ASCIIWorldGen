@@ -41,9 +41,9 @@ const CONTINENTALITY_SCALE: float = 1.2
 const SEASON_AMP_EQUATOR: float = 0.10
 const SEASON_AMP_POLE: float = 0.25
 const SEASON_OCEAN_DAMP: float = 0.60
-const DIURNAL_AMP_EQUATOR: float = 0.15  # Enhanced for visibility
-const DIURNAL_AMP_POLE: float = 0.08     # Enhanced for visibility
-const DIURNAL_OCEAN_DAMP: float = 0.3
+const DIURNAL_AMP_EQUATOR: float = 0.05
+const DIURNAL_AMP_POLE: float = 0.09
+const DIURNAL_OCEAN_DAMP: float = 0.28
 
 # Day-night visual settings
 const DAY_NIGHT_CONTRAST: float = 0.75

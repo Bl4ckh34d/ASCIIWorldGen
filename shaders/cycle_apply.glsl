@@ -61,7 +61,10 @@ void main(){
     float dT_season = amp_lat * amp_cont * season_driver * hemi * equator_fade;
 
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat_abs, 1.2));
-    float amp_cont_d = land ? 1.0 : PC.diurnal_ocean_damp;
+    // Continental interiors (farther from coast) get stronger day/night swing.
+    float coast_dist01 = clamp(dc_norm, 0.0, 1.0);
+    float land_diurnal_gain = mix(0.55, 1.35, coast_dist01);
+    float amp_cont_d = land ? land_diurnal_gain : PC.diurnal_ocean_damp;
     float local_time = fract(PC.time_of_day + float(x) / float(max(1, W)));
     float dT_diurnal = amp_lat_d * amp_cont_d * cos(6.2831853 * local_time);
 

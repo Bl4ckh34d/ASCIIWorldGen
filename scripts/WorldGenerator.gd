@@ -99,10 +99,10 @@ class Config:
 	var season_amp_equator: float = 0.10
 	var season_amp_pole: float = 0.25
 	var season_ocean_damp: float = 0.60
-	# Diurnal temperature cycle (enhanced for visibility)
-	var diurnal_amp_equator: float = 0.06
-	var diurnal_amp_pole: float = 0.03
-	var diurnal_ocean_damp: float = 0.6
+	# Diurnal temperature cycle (continental interiors swing more than coasts/ocean)
+	var diurnal_amp_equator: float = 0.05
+	var diurnal_amp_pole: float = 0.09
+	var diurnal_ocean_damp: float = 0.28
 	var time_of_day: float = 0.0
 	# Day-night visual settings
 	var day_night_contrast: float = 0.75
@@ -219,6 +219,8 @@ var _debug_cache_moist: PackedFloat32Array = PackedFloat32Array()
 var _debug_cache_biome: PackedInt32Array = PackedInt32Array()
 var _debug_cache_rock: PackedInt32Array = PackedInt32Array()
 var _debug_cache_fertility: PackedFloat32Array = PackedFloat32Array()
+const DEBUG_CACHE_STALE_USEC: int = 250000
+var _debug_cache_last_refresh_usec: int = 0
 var _climate_cpu_mirror_dirty: bool = true
 
 func _init() -> void:
@@ -383,9 +385,9 @@ func _apply_seeded_physical_defaults(force: bool = false) -> void:
 	config.season_amp_equator = clamp(0.10 + rng.randf_range(-0.02, 0.02), 0.07, 0.13)
 	config.season_amp_pole = clamp(0.25 + rng.randf_range(-0.03, 0.03), 0.20, 0.30)
 	config.season_ocean_damp = clamp(0.60 + rng.randf_range(-0.06, 0.06), 0.48, 0.72)
-	config.diurnal_amp_equator = clamp(0.06 + rng.randf_range(-0.015, 0.015), 0.04, 0.08)
-	config.diurnal_amp_pole = clamp(0.03 + rng.randf_range(-0.01, 0.01), 0.02, 0.05)
-	config.diurnal_ocean_damp = clamp(0.60 + rng.randf_range(-0.08, 0.08), 0.45, 0.75)
+	config.diurnal_amp_equator = clamp(0.05 + rng.randf_range(-0.012, 0.012), 0.035, 0.065)
+	config.diurnal_amp_pole = clamp(0.09 + rng.randf_range(-0.015, 0.015), 0.07, 0.12)
+	config.diurnal_ocean_damp = clamp(0.28 + rng.randf_range(-0.06, 0.06), 0.16, 0.40)
 	_physical_defaults_seed = int(config.rng_seed)
 
 func _setup_noises() -> void:
@@ -588,6 +590,24 @@ func clear() -> void:
 	# Reset ocean fraction
 	last_ocean_fraction = 0.5
 	_climate_cpu_mirror_dirty = true
+	# Reset hover/debug cache so new generations never show stale tile info.
+	_debug_cache_valid = false
+	_debug_cache_x0 = 0
+	_debug_cache_y0 = 0
+	_debug_cache_w = 0
+	_debug_cache_h = 0
+	_debug_cache_last_refresh_usec = 0
+	_debug_cache_height.clear()
+	_debug_cache_land.clear()
+	_debug_cache_beach.clear()
+	_debug_cache_lava.clear()
+	_debug_cache_river.clear()
+	_debug_cache_lake.clear()
+	_debug_cache_temp.clear()
+	_debug_cache_moist.clear()
+	_debug_cache_biome.clear()
+	_debug_cache_rock.clear()
+	_debug_cache_fertility.clear()
 	# debug removed
 
 func _evaluate_climate_gpu_only(
@@ -2236,7 +2256,10 @@ func sync_debug_cpu_snapshot(x: int, y: int, radius_tiles: int = 3, prefetch_mar
 				or local_x >= max(0, _debug_cache_w - 1 - margin)
 				or local_y >= max(0, _debug_cache_h - 1 - margin)
 			)
-			need_refresh = near_edge
+			var stale_refresh: bool = false
+			if _debug_cache_last_refresh_usec > 0:
+				stale_refresh = (Time.get_ticks_usec() - _debug_cache_last_refresh_usec) >= DEBUG_CACHE_STALE_USEC
+			need_refresh = near_edge or stale_refresh
 	if not need_refresh:
 		return
 	var r: int = max(0, radius_tiles)
@@ -2272,6 +2295,7 @@ func sync_debug_cpu_snapshot(x: int, y: int, radius_tiles: int = 3, prefetch_mar
 	_debug_cache_y0 = y0
 	_debug_cache_w = rw
 	_debug_cache_h = rh
+	_debug_cache_last_refresh_usec = Time.get_ticks_usec()
 
 func sync_climate_cpu_mirror_from_gpu(_max_cells: int = CLIMATE_CPU_MIRROR_MAX_CELLS) -> void:
 	"""Optional compatibility sync for legacy CPU reads; not used in runtime hot paths."""
@@ -2377,4 +2401,3 @@ func set_world_data_1_override(tex: Texture2D) -> void:
 
 func set_world_data_2_override(tex: Texture2D) -> void:
 	world_data_2_override = tex
-
