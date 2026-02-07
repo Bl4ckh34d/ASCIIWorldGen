@@ -338,10 +338,16 @@ vec3 render_bigbang(vec2 uv, float t) {
 	vec4 my_state = sample_mycelium_morph(uv, qn, t * 1.12, spread, progress_raw);
 	float my_density_raw = clamp(my_state.z, 0.0, 1.0);
 	float morph_phase = clamp((spread - 0.018) / max(0.0001, 2.30 - 0.018), 0.0, 1.0);
-	float morph_t = t * mix(1.0, 1.48, morph_phase) + progress_raw * 0.36;
-	float my_morph_noise0 = fbm(qn * 5.2 + vec2(morph_t * 0.68, -morph_t * 0.61));
-	float my_morph_noise1 = fbm(rot2(1.13) * qn * 8.1 + vec2(-morph_t * 0.52, morph_t * 0.57) + my_morph_noise0 * 2.4 + 21.7);
-	float my_morph_noise2 = fbm(qn * 12.0 + vec2(my_morph_noise0, -my_morph_noise1) * 2.8 + vec2(morph_t * 0.94, morph_t * 0.83) - 17.3);
+	// Accelerate both spatial frequency growth and temporal morph speed over the explosion timeline.
+	float accel_n = clamp(progress_raw / 1.85, 0.0, 1.0);
+	float accel_curve = pow(accel_n, 1.75);
+	float noise_scale = mix(1.0, 2.45, accel_curve);
+	float morph_speed = mix(1.0, 2.20, accel_curve);
+	float morph_t = t * mix(1.0, 1.48, morph_phase) * morph_speed + progress_raw * (0.36 + 0.52 * accel_curve);
+	vec2 color_uv = qn * noise_scale;
+	float my_morph_noise0 = fbm(color_uv * 5.2 + vec2(morph_t * 0.68, -morph_t * 0.61));
+	float my_morph_noise1 = fbm(rot2(1.13) * color_uv * 8.1 + vec2(-morph_t * 0.52, morph_t * 0.57) + my_morph_noise0 * 2.4 + 21.7);
+	float my_morph_noise2 = fbm(color_uv * 12.0 + vec2(my_morph_noise0, -my_morph_noise1) * 2.8 + vec2(morph_t * 0.94, morph_t * 0.83) - 17.3);
 	float my_struct = clamp(my_morph_noise0 * 0.35 + my_morph_noise1 * 0.40 + my_morph_noise2 * 0.45, 0.0, 1.0);
 	// Keep psychedelic modulation tied to simulated density so empty regions stay dark.
 	float my_density = clamp(
@@ -349,9 +355,9 @@ vec3 render_bigbang(vec2 uv, float t) {
 		0.0,
 		1.0
 	);
-	float psy_noise = fbm(qn * 3.6 + vec2(t * 0.42, -t * 0.37));
-	float psy_noise2 = fbm(rot2(0.57) * qn * 6.2 + vec2(-t * 0.35, t * 0.31) + psy_noise * 2.0 + 8.7);
-	float psy_phase = t * 1.05 + (psy_noise * 2.0 - 1.0) * 2.4 + (psy_noise2 * 2.0 - 1.0) * 1.9;
+	float psy_noise = fbm(color_uv * 3.6 + vec2(morph_t * 0.42, -morph_t * 0.37));
+	float psy_noise2 = fbm(rot2(0.57) * color_uv * 6.2 + vec2(-morph_t * 0.35, morph_t * 0.31) + psy_noise * 2.0 + 8.7);
+	float psy_phase = morph_t * 1.05 + (psy_noise * 2.0 - 1.0) * 2.4 + (psy_noise2 * 2.0 - 1.0) * 1.9;
 	float hue_wobble = 0.22 * sin(psy_phase * 1.2) + 0.16 * sin(psy_phase * 2.1 + 1.7);
 	float my_hue = fract(my_state.w + hue_wobble);
 	// Enforce center-out reveal envelope for mycelium contribution.

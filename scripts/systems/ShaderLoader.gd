@@ -81,13 +81,20 @@ static func _attempt_load(path: String) -> RDShaderFile:
 
 static func _choose_best_version(versions: Array) -> Variant:
 	"""Choose the best shader version (prefer Vulkan)"""
+	if versions.is_empty():
+		return null
+	var first_valid: Variant = null
 	# Prefer Vulkan if available
 	for v in versions:
+		if v == null:
+			continue
+		if first_valid == null:
+			first_valid = v
 		if String(v) == "vulkan":
 			return v
 	
-	# Fall back to first available version
-	return versions[0]
+	# Fall back to first non-null available version
+	return first_valid
 
 static func create_shader_and_pipeline(rd: RenderingDevice, shader_file: RDShaderFile, name: String = "") -> Dictionary:
 	"""Create both shader and pipeline with error handling"""
@@ -103,6 +110,9 @@ static func create_shader_and_pipeline(rd: RenderingDevice, shader_file: RDShade
 	# Get SPIRV
 	var versions = shader_file.get_version_list()
 	var chosen_version = _choose_best_version(versions)
+	if chosen_version == null:
+		push_error("ShaderLoader: No non-null shader version for: " + name)
+		return {"shader": RID(), "pipeline": RID(), "success": false}
 	var spirv = shader_file.get_spirv(chosen_version)
 	
 	if spirv == null:

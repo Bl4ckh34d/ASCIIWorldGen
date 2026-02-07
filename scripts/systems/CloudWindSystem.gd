@@ -99,6 +99,8 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 		if String(v) == "vulkan":
 			chosen_version = v
 			break
+	if chosen_version == null:
+		return null
 	return file.get_spirv(chosen_version)
 
 func initialize(gen: Object, time_sys: Object = null) -> void:
@@ -122,6 +124,9 @@ func initialize(gen: Object, time_sys: Object = null) -> void:
 	_cloud_tex = load("res://scripts/systems/CloudTextureCompute.gd").new()
 	# Prepare advection shader if available
 	var rd := RenderingServer.get_rendering_device()
+	if rd == null:
+		_force_resync = true
+		return
 	if _advec_shader != null:
 		var spirv := _get_spirv(_advec_shader)
 		if spirv != null:

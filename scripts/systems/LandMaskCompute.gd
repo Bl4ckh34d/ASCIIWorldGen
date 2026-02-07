@@ -20,6 +20,8 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 		if String(v) == "vulkan":
 			chosen_version = v
 			break
+	if chosen_version == null:
+		return null
 	return file.get_spirv(chosen_version)
 
 func _ensure() -> void:

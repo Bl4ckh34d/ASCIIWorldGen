@@ -103,13 +103,20 @@ static func get_spirv_safe(file: RDShaderFile, name: String = "") -> RDShaderSPI
 		return null
 	
 	var versions: Array = file.get_version_list()
-	var chosen_version = versions[0]
+	var chosen_version: Variant = null
 	
 	# Prefer Vulkan version if available
 	for v in versions:
+		if v == null:
+			continue
+		if chosen_version == null:
+			chosen_version = v
 		if String(v) == "vulkan":
 			chosen_version = v
 			break
+	if chosen_version == null:
+		push_error("No non-null shader version available: " + name)
+		return null
 	
 	var spirv = file.get_spirv(chosen_version)
 	if spirv == null:

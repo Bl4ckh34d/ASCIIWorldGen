@@ -13,6 +13,8 @@ func _init():
 
 func ensure_buffer(name: String, size_bytes: int, initial_data: PackedByteArray = PackedByteArray()) -> RID:
 	"""Ensure a persistent buffer exists with at least the specified size"""
+	if _rd == null:
+		return RID()
 	var existing = _buffers.get(name, {})
 	
 	# If buffer exists and is large enough, reuse it
@@ -48,6 +50,8 @@ func get_buffer(name: String) -> RID:
 
 func update_buffer(name: String, data: PackedByteArray, offset: int = 0) -> bool:
 	"""Update buffer contents"""
+	if _rd == null:
+		return false
 	var buf = _buffers.get(name, {})
 	if not buf.has("rid") or not buf.rid.is_valid():
 		return false
@@ -61,6 +65,8 @@ func update_buffer(name: String, data: PackedByteArray, offset: int = 0) -> bool
 
 func read_buffer(name: String, staging_name: String = "") -> PackedByteArray:
 	"""Read buffer contents back to CPU with optional staging buffer name"""
+	if _rd == null:
+		return PackedByteArray()
 	var buf = _buffers.get(name, {})
 	if not buf.has("rid") or not buf.rid.is_valid():
 		return PackedByteArray()
@@ -82,6 +88,8 @@ func read_buffer(name: String, staging_name: String = "") -> PackedByteArray:
 
 func read_buffer_region(name: String, offset_bytes: int, size_bytes: int) -> PackedByteArray:
 	"""Read a byte range from a managed buffer."""
+	if _rd == null:
+		return PackedByteArray()
 	var buf = _buffers.get(name, {})
 	if not buf.has("rid") or not buf.rid.is_valid():
 		return PackedByteArray()
@@ -97,6 +105,8 @@ func read_buffer_region(name: String, offset_bytes: int, size_bytes: int) -> Pac
 
 func clear_buffer(name: String, clear_value: int = 0) -> bool:
 	"""Clear buffer to specified value using GPU clear shader"""
+	if _rd == null:
+		return false
 	var buf = _buffers.get(name, {})
 	if not buf.has("rid") or not buf.rid.is_valid():
 		return false
@@ -110,6 +120,9 @@ func clear_buffer(name: String, clear_value: int = 0) -> bool:
 
 func free_buffer(name: String) -> void:
 	"""Free a specific buffer"""
+	if _rd == null:
+		_buffers.erase(name)
+		return
 	var buf = _buffers.get(name, {})
 	if buf.has("rid") and buf.rid.is_valid():
 		_rd.free_rid(buf.rid)
@@ -117,6 +130,10 @@ func free_buffer(name: String) -> void:
 
 func cleanup() -> void:
 	"""Free all managed buffers"""
+	if _rd == null:
+		_buffers.clear()
+		_staging_buffers.clear()
+		return
 	for name in _buffers.keys():
 		var buf = _buffers[name]
 		if buf.has("rid") and buf.rid.is_valid():

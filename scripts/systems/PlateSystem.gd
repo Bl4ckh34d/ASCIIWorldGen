@@ -509,16 +509,24 @@ func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 			if approach > 0.1:
 				uplift = uplift_rate_per_day * dt_days * approach * 0.72
 			elif approach < -0.1:
-				# Divergent boundaries: stabilize around a shallow rift floor.
-				# This avoids runaway abyssal deepening as plates continue separating.
+				# Divergent boundaries: preserve local bathymetry and keep only a narrow deep seam.
 				var div: float = (-approach) - 0.1
 				var land_factor: float = clamp((heights[i] - generator.config.sea_level + 0.02) / 0.35, 0.0, 1.0)
-				var rift_target: float = lerp(generator.config.sea_level - 0.16, generator.config.sea_level - 0.08, land_factor)
+				var h_other: float = heights[nx_sel + ny_sel * w]
+				var local_ref: float = lerp(min(heights[i], h_other), 0.5 * (heights[i] + h_other), 0.72)
+				var n_div: float = _noise.get_noise_2d(float(x) * 0.61 + float(pid) * 2.3, float(y) * 0.61 + float(p_other) * 1.7) * 0.5 + 0.5
+				var jitter: float = (n_div - 0.5) * lerp(0.016, 0.009, land_factor)
+				var rift_target: float = local_ref + jitter
 				var to_target: float = rift_target - heights[i]
-				var settle_rate: float = subduction_rate_per_day * dt_days * div * lerp(0.40, 0.26, land_factor)
+				var settle_rate: float = subduction_rate_per_day * dt_days * div * lerp(0.33, 0.22, land_factor)
 				uplift = clamp(to_target, -settle_rate, settle_rate)
-				uplift += ridge_rate_per_day * dt_days * div * lerp(0.44, 0.16, land_factor)
-				var divergence_floor: float = lerp(generator.config.sea_level - 0.24, generator.config.sea_level - 0.12, land_factor)
+				var seam_w: float = clamp(1.0 - dist_len / 1.6, 0.0, 1.0)
+				var deep_axis: float = trench_rate_per_day * dt_days * div * lerp(1.00, 0.52, land_factor)
+				uplift -= deep_axis * seam_w * seam_w
+				uplift += ridge_rate_per_day * dt_days * div * lerp(0.18, 0.08, land_factor)
+				var seam_floor: float = local_ref - lerp(0.22, 0.10, land_factor)
+				var flank_floor: float = local_ref - lerp(0.06, 0.03, land_factor)
+				var divergence_floor: float = lerp(flank_floor, seam_floor, seam_w)
 				if heights[i] + uplift < divergence_floor:
 					uplift = divergence_floor - heights[i]
 			else:
@@ -560,10 +568,10 @@ func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 			if pid_b != pid2: div_score -= (plate_vel_v[pid2] - plate_vel_v[pid_b])
 			if div_score > 1.2:
 				var land_factor2: float = clamp((heights[i2] - generator.config.sea_level + 0.02) / 0.35, 0.0, 1.0)
-				var floor_level: float = lerp(generator.config.sea_level - 0.24, generator.config.sea_level - 0.12, land_factor2)
-				var rift_target2: float = lerp(generator.config.sea_level - 0.16, generator.config.sea_level - 0.08, land_factor2)
+				var floor_level: float = heights[i2] - lerp(0.06, 0.03, land_factor2)
+				var rift_target2: float = heights[i2] + (_noise.get_noise_2d(float(x2) * 0.37, float(y2) * 0.37) * 0.5 + 0.5 - 0.5) * lerp(0.012, 0.007, land_factor2)
 				var to_target2: float = rift_target2 - heights[i2]
-				var settle2: float = subduction_rate_per_day * dt_days * min(1.6, div_score) * lerp(0.30, 0.20, land_factor2)
+				var settle2: float = subduction_rate_per_day * dt_days * min(1.6, div_score) * lerp(0.24, 0.16, land_factor2)
 				heights[i2] = clamp(heights[i2] + clamp(to_target2, -settle2, settle2), floor_level, 2.0)
 	# Commit height changes
 	generator.last_height = heights

@@ -205,7 +205,7 @@ void fragment() {
     float plate_boundary = data3.a;
 
     float lake_flag = data4.r;
-    float river_flag = data4.g;
+    float river_flag = _river_mask_at(world_cell);
     float lava_flag = (use_lava_texture != 0) ? texture(lava_texture, world_uv).r : data4.b;
     float lake_level_raw = data4.a * 2.0 - 1.0;
     
@@ -215,10 +215,7 @@ void fragment() {
     
     bool is_land_tile = (is_land >= 0.5);
     bool bedrock_mode = (bedrock_only_mode != 0);
-    if (bedrock_mode && !is_land_tile) {
-        COLOR = vec4(0.0, 0.0, 0.0, 0.0);
-        return;
-    }
+    bool hide_ocean_in_bedrock = (bedrock_mode && !is_land_tile);
     bool lake_here = (lake_flag > 0.5);
     bool river_here = (river_flag > 0.5);
     bool lava_here = (lava_flag > 0.5);
@@ -226,7 +223,10 @@ void fragment() {
     float out_char_index = char_index;
     float lake_circle_mask = 0.0;
 
-    if (!is_land_tile) {
+    if (hide_ocean_in_bedrock) {
+        base_color = vec3(0.0);
+        out_char_index = 0.0;
+    } else if (!is_land_tile) {
         base_color = water_color_from_height(height_raw, sea_level, turq_strength, shelf_val);
         out_char_index = CHAR_IDX_TILDE;
         if (!is_land_tile && abs(biome_id - BIOME_ICE_SHEET) < 0.5) {
