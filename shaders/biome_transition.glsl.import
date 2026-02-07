@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://d0jc3g6lfg6sk"
+path="res://.godot/imported/biome_transition.glsl-c2fec274ef17c40034c3837f7901f7d1.res"
+
+[deps]
+
+source_file="res://shaders/biome_transition.glsl"
+dest_files=["res://.godot/imported/biome_transition.glsl-c2fec274ef17c40034c3837f7901f7d1.res"]
+
+[params]
+

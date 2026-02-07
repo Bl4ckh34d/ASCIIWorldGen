@@ -10,12 +10,13 @@ var _biome_compute: Object = null
 var _biome_post_compute: Object = null
 var _lithology_compute: Object = null
 var _fertility_compute: Object = null
+var _transition_compute: Object = null
 var biome_climate_tau_days: float = 3650.0 # ~10 years for macro-biome memory
-var biome_transition_tau_days: float = 180.0
-var cryosphere_transition_tau_days: float = 30.0
+var biome_transition_tau_days: float = 540.0
+var cryosphere_transition_tau_days: float = 180.0
 var cryosphere_climate_tau_days: float = 45.0
-var biome_transition_max_step: float = 0.15
-var cryosphere_transition_max_step: float = 0.35
+var biome_transition_max_step: float = 0.035
+var cryosphere_transition_max_step: float = 0.06
 var ocean_ice_base_thresh_c: float = -9.5
 var ocean_ice_wiggle_amp_c: float = 1.1
 var _height_min_cache: float = 0.0
@@ -24,14 +25,13 @@ var _height_cache_size: int = -1
 var _height_cache_refresh_counter: int = 0
 var _transition_epoch: int = 0
 const HEIGHT_MINMAX_REFRESH_INTERVAL: int = 24
-const CPU_MIRROR_MAX_CELLS: int = 250000
-const BIOME_ICE_SHEET_ID: int = 1
-const BIOME_GLACIER_ID: int = 24
 const FERTILITY_WEATHERING_RATE: float = 0.012
 const FERTILITY_HUMUS_RATE: float = 0.010
 const FERTILITY_FLOW_SCALE: float = 64.0
 const MAX_BIOME_EFFECTIVE_DT_DAYS: float = 0.25
 const MAX_FERTILITY_EFFECTIVE_DT_DAYS: float = 0.10
+const MAX_BIOME_TRANSITION_DT_DAYS: float = 3.0
+const MAX_CRYOSPHERE_TRANSITION_DT_DAYS: float = 1.0
 
 var run_full_biome: bool = true
 var run_cryosphere: bool = true
@@ -45,6 +45,7 @@ func initialize(gen: Object) -> void:
 	_biome_post_compute = load("res://scripts/systems/BiomePostCompute.gd").new()
 	_lithology_compute = load("res://scripts/systems/LithologyCompute.gd").new()
 	_fertility_compute = load("res://scripts/systems/FertilityLithologyCompute.gd").new()
+	_transition_compute = load("res://scripts/systems/BiomeTransitionCompute.gd").new()
 
 func set_update_modes(full_biome_enabled: bool, cryosphere_enabled: bool) -> void:
 	run_full_biome = bool(full_biome_enabled)
@@ -79,12 +80,13 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var flow_buf: RID = generator.get_persistent_buffer("flow_accum")
 	var fertility_buf: RID = generator.get_persistent_buffer("fertility")
 	var biome_buf: RID = generator.get_persistent_buffer("biome_id")
+	var biome_prev_buf: RID = generator.get_persistent_buffer("biome_prev")
 	var biome_tmp: RID = generator.get_persistent_buffer("biome_tmp")
 	var lake_buf: RID = generator.get_persistent_buffer("lake")
 	var lava_buf: RID = generator.get_persistent_buffer("lava")
 	if not height_buf.is_valid() or not land_buf.is_valid():
 		return {}
-	if not biome_buf.is_valid() or not biome_tmp.is_valid():
+	if not biome_buf.is_valid() or not biome_prev_buf.is_valid() or not biome_tmp.is_valid():
 		return {}
 	if not temp_now_buf.is_valid() or not moist_now_buf.is_valid():
 		return {}
@@ -96,11 +98,16 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		_lithology_compute = load("res://scripts/systems/LithologyCompute.gd").new()
 	if _fertility_compute == null:
 		_fertility_compute = load("res://scripts/systems/FertilityLithologyCompute.gd").new()
+	if _transition_compute == null:
+		_transition_compute = load("res://scripts/systems/BiomeTransitionCompute.gd").new()
 
 	var dt_sim: float = _compute_sim_dt(world, dt_days)
 	var dt_biome: float = min(dt_sim, MAX_BIOME_EFFECTIVE_DT_DAYS)
 	var dt_fertility: float = min(dt_sim, MAX_FERTILITY_EFFECTIVE_DT_DAYS)
-	var use_temporal_transition: bool = false
+	var dt_transition_biome: float = min(dt_sim, MAX_BIOME_TRANSITION_DT_DAYS)
+	var dt_transition_cryo: float = min(dt_sim, MAX_CRYOSPHERE_TRANSITION_DT_DAYS)
+	var biome_step: float = _compute_transition_fraction(dt_transition_biome, biome_transition_tau_days, biome_transition_max_step)
+	var cryosphere_step: float = _compute_transition_fraction(dt_transition_cryo, cryosphere_transition_tau_days, cryosphere_transition_max_step)
 
 	var biome_changed: bool = false
 	var lava_changed: bool = false
@@ -121,6 +128,8 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			moist_for_cryosphere = cryo_moist_buf
 
 	if run_full_biome:
+		if not _copy_u32_buffer(biome_buf, biome_prev_buf, size):
+			return {}
 		var params := {
 			"width": w,
 			"height": h,
@@ -132,13 +141,13 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			"temp_min_c": generator.config.temp_min_c,
 			"temp_max_c": generator.config.temp_max_c,
 		}
-		params["biome_noise_strength_c"] = 0.45
-		params["biome_moist_jitter"] = 0.025
+		params["biome_noise_strength_c"] = 0.28
+		params["biome_moist_jitter"] = 0.012
 		# Keep biome noise phase stable across ticks to avoid large reclassification jumps.
 		params["biome_phase"] = generator.biome_phase if ("biome_phase" in generator) else 0.0
-		params["biome_moist_jitter2"] = 0.015
-		params["biome_moist_islands"] = 0.20
-		params["biome_moist_elev_dry"] = 0.20
+		params["biome_moist_jitter2"] = 0.008
+		params["biome_moist_islands"] = 0.16
+		params["biome_moist_elev_dry"] = 0.14
 
 		var alpha: float = 0.0
 		if dt_biome > 0.0 and biome_climate_tau_days > 0.0:
@@ -258,9 +267,19 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		if not ok_reapply:
 			if not _copy_u32_buffer(biome_tmp, biome_buf, size):
 				return {}
-		# High-speed path: accept full classify/post result and avoid readback blending.
-		biome_changed = true
+		biome_changed = _apply_temporal_transition_gpu(
+			w,
+			h,
+			size,
+			biome_prev_buf,
+			biome_buf,
+			biome_tmp,
+			biome_step,
+			cryosphere_step
+		)
 	elif run_cryosphere:
+		if not _copy_u32_buffer(biome_buf, biome_prev_buf, size):
+			return {}
 		# Cryosphere-only path: reapply seasonal ice/glacier masks to current biomes.
 		if not _copy_u32_buffer(biome_buf, biome_tmp, size):
 			return {}
@@ -277,9 +296,16 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		if not ok_reapply_only:
 			if not _copy_u32_buffer(biome_tmp, biome_buf, size):
 				return {}
-		# Do not stochastic-blend cryosphere-only updates at tiny dt steps (1x speed),
-		# otherwise sparse random ice pixels can pop in/out between ticks.
-		biome_changed = true
+		biome_changed = _apply_temporal_transition_gpu(
+			w,
+			h,
+			size,
+			biome_prev_buf,
+			biome_buf,
+			biome_tmp,
+			0.0,
+			cryosphere_step
+		)
 
 	if biome_changed and _biome_tex:
 		var btex: Texture2D = _biome_tex.update_from_buffer(w, h, biome_buf)
@@ -306,8 +332,57 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 func _compute_sim_dt(_world: Object, dt_days: float) -> float:
 	return max(0.0, dt_days)
 
-func _is_cryosphere_biome(biome_id: int) -> bool:
-	return biome_id == BIOME_ICE_SHEET_ID or biome_id == BIOME_GLACIER_ID
+func _compute_transition_fraction(dt_sim: float, tau_days: float, max_step: float) -> float:
+	if dt_sim <= 0.0:
+		return 0.0
+	if tau_days <= 0.0:
+		return clamp(max_step, 0.0, 1.0)
+	var raw: float = 1.0 - exp(-dt_sim / max(0.001, tau_days))
+	return clamp(raw, 0.0, clamp(max_step, 0.0, 1.0))
+
+func _apply_temporal_transition_gpu(
+		w: int,
+		h: int,
+		size: int,
+		old_biome_buf: RID,
+		new_biome_buf: RID,
+		scratch_out_buf: RID,
+		biome_step: float,
+		cryosphere_step: float
+	) -> bool:
+	if size <= 0:
+		return false
+	if not old_biome_buf.is_valid() or not new_biome_buf.is_valid() or not scratch_out_buf.is_valid():
+		return false
+	var step_b: float = clamp(biome_step, 0.0, 1.0)
+	var step_c: float = clamp(cryosphere_step, 0.0, 1.0)
+	if step_b <= 0.0 and step_c <= 0.0:
+		if not _copy_u32_buffer(old_biome_buf, new_biome_buf, size):
+			return false
+		return false
+	if step_b >= 0.999 and step_c >= 0.999:
+		return true
+	if _transition_compute == null:
+		_transition_compute = load("res://scripts/systems/BiomeTransitionCompute.gd").new()
+	if _transition_compute == null:
+		return true
+	_transition_epoch += 1
+	var ok: bool = _transition_compute.blend_to_buffer(
+		w,
+		h,
+		old_biome_buf,
+		new_biome_buf,
+		scratch_out_buf,
+		step_b,
+		step_c,
+		int(generator.config.rng_seed),
+		_transition_epoch
+	)
+	if not ok:
+		return true
+	if not _copy_u32_buffer(scratch_out_buf, new_biome_buf, size):
+		return true
+	return true
 
 func _reapply_cryosphere(
 		w: int,

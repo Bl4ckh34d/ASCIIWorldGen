@@ -23,13 +23,17 @@ const SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD: float = 10000.0
 const SPEED_LOD_CLIMATE_MAX_SIM_DAYS: float = 21.0
 const SPEED_LOD_HYDRO_MAX_SIM_DAYS: float = 16.0
 const SPEED_LOD_EROSION_MAX_SIM_DAYS: float = 18.0
-const SPEED_LOD_BIOME_MAX_SIM_DAYS: float = 45.0
+const SPEED_LOD_BIOME_MAX_SIM_DAYS: float = 180.0
 const SPEED_LOD_CRYOSPHERE_MAX_SIM_DAYS: float = 20.0
 const SPEED_LOD_VOLCANISM_MAX_SIM_DAYS: float = 30.0
 const SPEED_LOD_PLATES_MAX_SIM_DAYS: float = 365.0
 const HYDRO_CATCHUP_MAX_DAYS: float = 0.5
 const EROSION_CATCHUP_MAX_DAYS: float = 0.5
+const BIOME_CATCHUP_MAX_DAYS: float = 2.0
+const CRYOSPHERE_CATCHUP_MAX_DAYS: float = 0.5
 const HYDRO_CATCHUP_EXTRA_RUN_MARGIN: int = 2
+const BIOME_MAX_RUNS_PER_TICK: int = 2
+const CRYOSPHERE_MAX_RUNS_PER_TICK: int = 2
 const HIGH_SPEED_VALIDATION_MIN_SCALE: float = 1000.0
 const HIGH_SPEED_VALIDATION_INTERVAL_TICKS: int = 30
 const HIGH_SPEED_DEBT_GROWTH_LIMIT: float = 1.20
@@ -1234,7 +1238,7 @@ func _register_biome_systems() -> void:
 			if "register_system" in simulation:
 				var ts_b: float = float(time_system.time_scale) if time_system and "time_scale" in time_system else 1.0
 				var biome_cad_init: int = _cadence_ticks_for_sim_days(float(WorldConstants.CADENCE_BIOMES), ts_b)
-				simulation.register_system(_biome_sys, biome_cad_init, 0, false, 90.0)
+				simulation.register_system(_biome_sys, biome_cad_init, 0, true, BIOME_CATCHUP_MAX_DAYS, BIOME_MAX_RUNS_PER_TICK)
 			_biome_like_systems.append(_biome_sys)
 		if ENABLE_CRYOSPHERE_TICK:
 			_cryosphere_sys = load(biome_path).new()
@@ -1245,7 +1249,7 @@ func _register_biome_systems() -> void:
 			if "register_system" in simulation:
 				var ts_c: float = float(time_system.time_scale) if time_system and "time_scale" in time_system else 1.0
 				var cryo_cad_init: int = _cadence_ticks_for_sim_days(float(WorldConstants.CADENCE_CRYOSPHERE), ts_c)
-				simulation.register_system(_cryosphere_sys, cryo_cad_init, 0, false, 45.0)
+				simulation.register_system(_cryosphere_sys, cryo_cad_init, 0, true, CRYOSPHERE_CATCHUP_MAX_DAYS, CRYOSPHERE_MAX_RUNS_PER_TICK)
 		return
 	var split_systems := [
 		{
@@ -1908,49 +1912,49 @@ func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 	if ts >= 1000000.0:
 		hydro_target_days = 2.0
 		erosion_target_days = 2.0
-		biome_target_days = 120.0
+		biome_target_days = 540.0
 		cryosphere_target_days = 30.0
 		volcanism_target_days = 21.0
 		plates_target_days = 3650.0
 	elif ts >= 100000.0:
 		hydro_target_days = 1.0
 		erosion_target_days = 1.0
-		biome_target_days = 90.0
+		biome_target_days = 360.0
 		cryosphere_target_days = 20.0
 		volcanism_target_days = 14.0
 		plates_target_days = 2920.0
 	elif ts >= 10000.0:
 		hydro_target_days = 0.5
 		erosion_target_days = 0.5
-		biome_target_days = 60.0
+		biome_target_days = 270.0
 		cryosphere_target_days = 14.0
 		volcanism_target_days = 10.0
 		plates_target_days = 1825.0
 	elif ts >= SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD:
 		hydro_target_days = 0.5
 		erosion_target_days = 0.5
-		biome_target_days = 45.0
+		biome_target_days = 180.0
 		cryosphere_target_days = 10.0
 		volcanism_target_days = 7.0
 		plates_target_days = 1460.0
 	elif ts >= 1000.0:
 		hydro_target_days = 0.33
 		erosion_target_days = 0.33
-		biome_target_days = 30.0
+		biome_target_days = 180.0
 		cryosphere_target_days = 7.0
 		volcanism_target_days = 4.0
 		plates_target_days = 1095.0
 	elif ts >= 100.0:
 		hydro_target_days = 0.25
 		erosion_target_days = 0.25
-		biome_target_days = 21.0
+		biome_target_days = 120.0
 		cryosphere_target_days = 4.0
 		volcanism_target_days = 2.0
 		plates_target_days = 730.0
 	elif ts >= 10.0:
 		hydro_target_days = 0.25
 		erosion_target_days = 0.25
-		biome_target_days = 14.0
+		biome_target_days = 90.0
 		cryosphere_target_days = 2.0
 		volcanism_target_days = 1.0
 		plates_target_days = 365.0
@@ -2002,11 +2006,11 @@ func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 			simulation.set_system_catchup_max_days(_erosion_sys, EROSION_CATCHUP_MAX_DAYS)
 		for biome_sys in _biome_like_systems:
 			if biome_sys:
-				simulation.set_system_catchup_max_days(biome_sys, 90.0)
+				simulation.set_system_catchup_max_days(biome_sys, BIOME_CATCHUP_MAX_DAYS)
 		if _biome_like_systems.is_empty() and _biome_sys:
-			simulation.set_system_catchup_max_days(_biome_sys, 90.0)
+			simulation.set_system_catchup_max_days(_biome_sys, BIOME_CATCHUP_MAX_DAYS)
 		if _cryosphere_sys:
-			simulation.set_system_catchup_max_days(_cryosphere_sys, 45.0)
+			simulation.set_system_catchup_max_days(_cryosphere_sys, CRYOSPHERE_CATCHUP_MAX_DAYS)
 		if _plates_sys:
 			simulation.set_system_catchup_max_days(_plates_sys, 180.0)
 		if _volcanism_sys:
@@ -2018,11 +2022,11 @@ func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 			simulation.set_system_max_runs_per_tick(_erosion_sys, max_runs_per_tick)
 		for biome_sys in _biome_like_systems:
 			if biome_sys:
-				simulation.set_system_max_runs_per_tick(biome_sys, max_runs_per_tick)
+				simulation.set_system_max_runs_per_tick(biome_sys, BIOME_MAX_RUNS_PER_TICK)
 		if _biome_like_systems.is_empty() and _biome_sys:
-			simulation.set_system_max_runs_per_tick(_biome_sys, max_runs_per_tick)
+			simulation.set_system_max_runs_per_tick(_biome_sys, BIOME_MAX_RUNS_PER_TICK)
 		if _cryosphere_sys:
-			simulation.set_system_max_runs_per_tick(_cryosphere_sys, max_runs_per_tick)
+			simulation.set_system_max_runs_per_tick(_cryosphere_sys, CRYOSPHERE_MAX_RUNS_PER_TICK)
 		if _plates_sys:
 			simulation.set_system_max_runs_per_tick(_plates_sys, max_runs_per_tick)
 		if _volcanism_sys:

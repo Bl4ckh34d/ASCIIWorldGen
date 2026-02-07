@@ -11,7 +11,6 @@ const DistanceTransform = preload("res://scripts/systems/DistanceTransform.gd")
 const DistanceTransformCompute = preload("res://scripts/systems/DistanceTransformCompute.gd")
 const ContinentalShelf = preload("res://scripts/systems/ContinentalShelf.gd")
 const ContinentalShelfCompute = preload("res://scripts/systems/ContinentalShelfCompute.gd")
-var ClimatePost = load("res://scripts/systems/ClimatePost.gd")
 const ClimatePostCompute = preload("res://scripts/systems/ClimatePostCompute.gd")
 const PoolingSystem = preload("res://scripts/systems/PoolingSystem.gd")
 const ClimateBase = preload("res://scripts/systems/ClimateBase.gd")
@@ -204,7 +203,6 @@ var _world_data1_tex_compute: Object = null
 var _world_data2_tex_compute: Object = null
 var _buffers_seeded: bool = false
 var _buffer_seed_size: int = 0
-var _max_valid_biome_id_cache: int = -1
 var _debug_cache_valid: bool = false
 var _debug_cache_x0: int = 0
 var _debug_cache_y0: int = 0
@@ -221,6 +219,7 @@ var _debug_cache_moist: PackedFloat32Array = PackedFloat32Array()
 var _debug_cache_biome: PackedInt32Array = PackedInt32Array()
 var _debug_cache_rock: PackedInt32Array = PackedInt32Array()
 var _debug_cache_fertility: PackedFloat32Array = PackedFloat32Array()
+var _climate_cpu_mirror_dirty: bool = true
 
 func _init() -> void:
 	randomize()
@@ -588,20 +587,8 @@ func clear() -> void:
 	
 	# Reset ocean fraction
 	last_ocean_fraction = 0.5
+	_climate_cpu_mirror_dirty = true
 	# debug removed
-
-func _is_valid_climate_result(climate: Dictionary, expected_size: int) -> bool:
-	if climate.is_empty():
-		return false
-	if not climate.has("temperature") or not climate.has("moisture"):
-		return false
-	var t_val = climate.get("temperature")
-	var m_val = climate.get("moisture")
-	if typeof(t_val) != TYPE_PACKED_FLOAT32_ARRAY or typeof(m_val) != TYPE_PACKED_FLOAT32_ARRAY:
-		return false
-	var t: PackedFloat32Array = t_val
-	var m: PackedFloat32Array = m_val
-	return t.size() == expected_size and m.size() == expected_size
 
 func _evaluate_climate_gpu_only(
 		w: int,
@@ -609,7 +596,7 @@ func _evaluate_climate_gpu_only(
 		params: Dictionary,
 		distance_to_coast: PackedFloat32Array,
 		ocean_frac: float
-	) -> Dictionary:
+	) -> bool:
 	var size: int = max(0, w * h)
 	if _climate_compute_gpu == null:
 		_climate_compute_gpu = ClimateAdjustCompute.new()
@@ -629,25 +616,10 @@ func _evaluate_climate_gpu_only(
 			update_persistent_buffer("distance", distance_to_coast.to_byte_array())
 			var ok_gpu: bool = _climate_compute_gpu.evaluate_to_buffers_gpu(w, h, hbuf, land_buf, dist_buf, params, ocean_frac, temp_buf, moist_buf, precip_buf)
 			if ok_gpu:
-				var t_vals := PackedFloat32Array()
-				t_vals.resize(size)
-				if last_temperature.size() == size:
-					t_vals = last_temperature.duplicate()
-				else:
-					t_vals.fill(0.5)
-				var m_vals := PackedFloat32Array()
-				m_vals.resize(size)
-				if last_moisture.size() == size:
-					m_vals = last_moisture.duplicate()
-				else:
-					m_vals.fill(0.5)
-				return {
-					"temperature": t_vals,
-					"moisture": m_vals,
-					"precip": PackedFloat32Array(),
-				}
+				_climate_cpu_mirror_dirty = true
+				return true
 	push_error("Climate GPU evaluate failed in GPU-only mode.")
-	return {}
+	return false
 
 func generate() -> PackedByteArray:
 	var w: int = config.width
@@ -830,19 +802,29 @@ func generate() -> PackedByteArray:
 	# Step 3: climate via GPU
 	params["distance_to_coast"] = last_water_distance
 	# time_of_day is set via SeasonalClimateSystem apply_config; nothing to do here
-	var climate: Dictionary = _evaluate_climate_gpu_only(w, h, params, last_water_distance, last_ocean_fraction)
-	if not _is_valid_climate_result(climate, size):
+	var climate_ok: bool = _evaluate_climate_gpu_only(w, h, params, last_water_distance, last_ocean_fraction)
+	if not climate_ok:
 		push_error("Climate GPU evaluate failed during generate(); aborting world generation in GPU-only mode.")
 		return last_is_land
-	last_temperature = climate["temperature"]
-	last_moisture = climate["moisture"]
+	# CPU climate arrays are non-authoritative in GPU-only mode.
+	if last_temperature.size() != size:
+		last_temperature.resize(size)
+		last_temperature.fill(0.5)
+	if last_moisture.size() != size:
+		last_moisture.resize(size)
+		last_moisture.fill(0.5)
 	last_distance_to_coast = last_water_distance
 
-	# Build initial day/night light field used by cloud generation and rendering.
-	if _climate_compute_gpu != null:
-		var light_init: PackedFloat32Array = _climate_compute_gpu.evaluate_light_field(w, h, params)
-		if light_init.size() == w * h:
-			last_light = light_init
+	# Build initial day/night light field directly in persistent GPU buffer.
+	var light_ok: bool = false
+	if _climate_compute_gpu != null and _gpu_buffer_manager != null:
+		ensure_persistent_buffers(false)
+		var light_buf_init: RID = get_persistent_buffer("light")
+		if light_buf_init.is_valid():
+			light_ok = _climate_compute_gpu.evaluate_light_field_gpu(w, h, params, light_buf_init)
+	if not light_ok:
+		push_error("Generate: light field GPU pass failed (CPU fallback removed).")
+		return PackedByteArray()
 	if last_light.size() != w * h:
 		last_light.resize(w * h)
 		last_light.fill(0.75)
@@ -868,11 +850,9 @@ func generate() -> PackedByteArray:
 				dispatch_copy_u32(t_tmp0, t_buf0, size)
 			if mr_gpu_ok and not bool(mr0.get("moist_in_primary", true)):
 				dispatch_copy_u32(m_tmp0, m_buf0, size)
-	if not mr_gpu_ok:
-		var post: Dictionary = climpost.apply_mountain_radiance(w, h, last_biomes, last_temperature, last_moisture, config.mountain_cool_amp, config.mountain_wet_amp, mr_passes)
-		if not post.is_empty():
-			last_temperature = post["temperature"]
-			last_moisture = post["moisture"]
+	if mr_passes > 0 and not mr_gpu_ok:
+		push_error("Generate: mountain radiance GPU pass failed (CPU fallback removed).")
+		return PackedByteArray()
 	# Reset biome/cryosphere climate history from current generated climate to avoid
 	# stale persistence artifacts (e.g. isolated frozen biome seeds after regen).
 	_sync_biome_climate_history_buffers(size)
@@ -1397,6 +1377,7 @@ func quick_update_climate(skip_light: bool = false) -> void:
 	if not climate_ok:
 		push_error("Climate GPU update failed in quick_update_climate (no CPU fallback/readback).")
 		return
+	_climate_cpu_mirror_dirty = true
 
 	var climpost: Object = ensure_climate_post_compute()
 	var mr_passes: int = max(0, config.mountain_radiance_passes)
@@ -1451,9 +1432,12 @@ func _update_lithology_map(w: int, h: int) -> void:
 	var size: int = w * h
 	if size <= 0:
 		return
-	if last_height.size() != size or last_is_land.size() != size or last_temperature.size() != size or last_moisture.size() != size:
+	if last_height.size() != size or last_is_land.size() != size:
 		last_rock_type.resize(size)
 		last_rock_type.fill(LithologyCompute.ROCK_BASALTIC)
+		return
+	if _gpu_buffer_manager == null:
+		push_error("_update_lithology_map: GPU buffer manager unavailable (CPU fallback removed).")
 		return
 	if _lithology_compute == null:
 		_lithology_compute = LithologyCompute.new()
@@ -1471,43 +1455,23 @@ func _update_lithology_map(w: int, h: int) -> void:
 	lith_params["min_h"] = min_h
 	lith_params["max_h"] = max_h
 
-	var used_gpu_buffers: bool = false
-	if _gpu_buffer_manager != null:
-		ensure_persistent_buffers(false)
-		var height_buf: RID = get_persistent_buffer("height")
-		var land_buf: RID = get_persistent_buffer("is_land")
-		var temp_buf: RID = get_persistent_buffer("temperature")
-		var moist_buf: RID = get_persistent_buffer("moisture")
-		var lava_buf: RID = get_persistent_buffer("lava")
-		var desert_buf: RID = get_persistent_buffer("desert_noise")
-		var rock_buf: RID = get_persistent_buffer("rock_type")
-		if height_buf.is_valid() and land_buf.is_valid() and temp_buf.is_valid() and moist_buf.is_valid() and lava_buf.is_valid() and rock_buf.is_valid():
-			used_gpu_buffers = _lithology_compute.classify_to_buffer(
-				w, h, height_buf, land_buf, temp_buf, moist_buf, lava_buf, desert_buf, lith_params, rock_buf
-			)
-
-	if not used_gpu_buffers:
-		var rocks_gpu: PackedInt32Array = _lithology_compute.classify(
-			w,
-			h,
-			last_height,
-			last_is_land,
-			last_temperature,
-			last_moisture,
-			last_lava,
-			last_desert_noise_field,
-			lith_params
-		)
-		if rocks_gpu.size() == size:
-			last_rock_type = rocks_gpu
-		else:
-			last_rock_type.resize(size)
-			last_rock_type.fill(LithologyCompute.ROCK_BASALTIC)
-		if _gpu_buffer_manager != null:
-			# Do not trigger full persistent-buffer seeding here; many other fields may still
-			# be transiently unsized during generation. Only ensure/update rock_type.
-			_gpu_buffer_manager.ensure_buffer("rock_type", size * 4, last_rock_type.to_byte_array())
-			update_persistent_buffer("rock_type", last_rock_type.to_byte_array())
+	ensure_persistent_buffers(false)
+	var height_buf: RID = get_persistent_buffer("height")
+	var land_buf: RID = get_persistent_buffer("is_land")
+	var temp_buf: RID = get_persistent_buffer("temperature")
+	var moist_buf: RID = get_persistent_buffer("moisture")
+	var lava_buf: RID = get_persistent_buffer("lava")
+	var desert_buf: RID = get_persistent_buffer("desert_noise")
+	var rock_buf: RID = get_persistent_buffer("rock_type")
+	if not height_buf.is_valid() or not land_buf.is_valid() or not temp_buf.is_valid() or not moist_buf.is_valid() or not lava_buf.is_valid() or not rock_buf.is_valid():
+		push_error("_update_lithology_map: required GPU buffers unavailable (CPU fallback removed).")
+		return
+	var ok_gpu: bool = _lithology_compute.classify_to_buffer(
+		w, h, height_buf, land_buf, temp_buf, moist_buf, lava_buf, desert_buf, lith_params, rock_buf
+	)
+	if not ok_gpu:
+		push_error("_update_lithology_map: lithology GPU classify failed (CPU fallback removed).")
+		return
 
 func _base_fertility_for_rock(rock_type: int) -> float:
 	match rock_type:
@@ -1530,55 +1494,31 @@ func _seed_fertility_from_lithology(reset_existing: bool = false) -> void:
 	var size: int = config.width * config.height
 	if size <= 0:
 		return
-	# Preferred path: seed fertility directly on GPU buffers.
-	if _gpu_buffer_manager != null:
-		ensure_persistent_buffers(false)
-		var rock_buf: RID = get_persistent_buffer("rock_type")
-		var land_buf: RID = get_persistent_buffer("is_land")
-		var moist_buf: RID = get_persistent_buffer("moisture")
-		var lava_buf: RID = get_persistent_buffer("lava")
-		var fertility_buf: RID = get_persistent_buffer("fertility")
-		var fert: Object = ensure_fertility_compute()
-		if rock_buf.is_valid() and land_buf.is_valid() and moist_buf.is_valid() and lava_buf.is_valid() and fertility_buf.is_valid() and fert != null and "seed_from_lithology_gpu_buffers" in fert:
-			var gpu_ok: bool = fert.seed_from_lithology_gpu_buffers(
-				config.width,
-				config.height,
-				rock_buf,
-				land_buf,
-				moist_buf,
-				lava_buf,
-				fertility_buf,
-				(reset_existing or last_fertility.size() != size)
-			)
-			if gpu_ok:
-				return
-
-	# Fallback: CPU seed loop.
-	var must_reset: bool = reset_existing or last_fertility.size() != size
-	if must_reset:
-		last_fertility.resize(size)
-	for i in range(size):
-		var on_land: bool = (i < last_is_land.size() and last_is_land[i] != 0)
-		var has_lava: bool = (i < last_lava.size() and last_lava[i] != 0)
-		if not on_land:
-			if must_reset:
-				last_fertility[i] = 0.04
-			else:
-				last_fertility[i] = clamp(lerp(last_fertility[i], 0.04, 0.25), 0.0, 1.0)
-			continue
-		var rock: int = last_rock_type[i] if i < last_rock_type.size() else LithologyCompute.ROCK_BASALTIC
-		var base: float = _base_fertility_for_rock(rock)
-		var moist: float = last_moisture[i] if i < last_moisture.size() else 0.5
-		var target: float = clamp(base * (0.78 + 0.22 * clamp(moist, 0.0, 1.0)), 0.0, 1.0)
-		if has_lava:
-			target = min(target, base * 0.30)
-		if must_reset:
-			last_fertility[i] = target
-		else:
-			last_fertility[i] = clamp(lerp(last_fertility[i], target, 0.20), 0.0, 1.0)
-	if _gpu_buffer_manager != null:
-		_gpu_buffer_manager.ensure_buffer("fertility", size * 4, last_fertility.to_byte_array())
-		update_persistent_buffer("fertility", last_fertility.to_byte_array())
+	if _gpu_buffer_manager == null:
+		push_error("_seed_fertility_from_lithology: GPU buffer manager unavailable (CPU fallback removed).")
+		return
+	ensure_persistent_buffers(false)
+	var rock_buf: RID = get_persistent_buffer("rock_type")
+	var land_buf: RID = get_persistent_buffer("is_land")
+	var moist_buf: RID = get_persistent_buffer("moisture")
+	var lava_buf: RID = get_persistent_buffer("lava")
+	var fertility_buf: RID = get_persistent_buffer("fertility")
+	var fert: Object = ensure_fertility_compute()
+	if not rock_buf.is_valid() or not land_buf.is_valid() or not moist_buf.is_valid() or not lava_buf.is_valid() or not fertility_buf.is_valid() or fert == null or not ("seed_from_lithology_gpu_buffers" in fert):
+		push_error("_seed_fertility_from_lithology: required GPU fertility resources unavailable (CPU fallback removed).")
+		return
+	var gpu_ok: bool = fert.seed_from_lithology_gpu_buffers(
+		config.width,
+		config.height,
+		rock_buf,
+		land_buf,
+		moist_buf,
+		lava_buf,
+		fertility_buf,
+		(reset_existing or last_fertility.size() != size)
+	)
+	if not gpu_ok:
+		push_error("_seed_fertility_from_lithology: fertility GPU seed failed (CPU fallback removed).")
 
 func quick_update_biomes() -> void:
 	# Reclassify biomes entirely on GPU buffers (no runtime readback/fallback).
@@ -1774,6 +1714,9 @@ func get_height() -> int:
 func get_cell_info(x: int, y: int) -> Dictionary:
 	if x < 0 or y < 0 or x >= config.width or y >= config.height:
 		return {}
+	# Keep cell-info climate/biome reads coherent with authoritative GPU buffers.
+	if _gpu_buffer_manager != null:
+		sync_debug_cpu_snapshot(x, y)
 	var i: int = x + y * config.width
 	var ci: int = _debug_cache_index(x, y)
 	var h_val: float = 0.0
@@ -1958,158 +1901,6 @@ func _biome_to_string(b: int) -> String:
 		_:
 			return "Grassland"
 
-func _ensure_valid_biomes() -> void:
-	var w: int = config.width
-	var h: int = config.height
-	var size: int = w * h
-	var max_valid_biome_id: int = _get_max_valid_biome_id()
-	if last_biomes.size() != size:
-		last_biomes.resize(size)
-	for i in range(size):
-		if last_is_land[i] == 0:
-			# Preserve special ocean biomes like ICE_SHEET from classifier
-			var prev: int = (last_biomes[i] if i < last_biomes.size() else BiomeClassifier.Biome.OCEAN)
-			last_biomes[i] = prev if prev == BiomeClassifier.Biome.ICE_SHEET else BiomeClassifier.Biome.OCEAN
-			continue
-		if i < last_beach.size() and last_beach[i] != 0:
-			last_biomes[i] = BiomeClassifier.Biome.BEACH
-			continue
-		var b: int = (last_biomes[i] if i < last_biomes.size() else -1)
-		if b < 0 or b > max_valid_biome_id:
-			last_biomes[i] = _fallback_biome(i)
-
-func _get_max_valid_biome_id() -> int:
-	if _max_valid_biome_id_cache >= 0:
-		return _max_valid_biome_id_cache
-	var max_id: int = 0
-	for biome_value in BiomeClassifier.Biome.values():
-		max_id = max(max_id, int(biome_value))
-	_max_valid_biome_id_cache = max_id
-	return _max_valid_biome_id_cache
-
-func _fallback_biome(i: int) -> int:
-	# Deterministic fallback using same features as classifier
-	var t: float = (last_temperature[i] if i < last_temperature.size() else 0.5)
-	var m: float = (last_moisture[i] if i < last_moisture.size() else 0.5)
-	var elev: float = (last_height[i] if i < last_height.size() else 0.0)
-	# freeze check
-	if t <= 0.16:
-		return BiomeClassifier.Biome.DESERT_ICE
-	var high: float = clamp((elev - 0.5) * 2.0, 0.0, 1.0)
-	var alpine: float = clamp((elev - 0.8) * 5.0, 0.0, 1.0)
-	var cold: float = clamp((0.45 - t) * 3.0, 0.0, 1.0)
-	var hot: float = clamp((t - 0.60) * 2.4, 0.0, 1.0)
-	var dry: float = clamp((0.40 - m) * 2.6, 0.0, 1.0)
-	var wet: float = clamp((m - 0.70) * 2.6, 0.0, 1.0)
-	if high > 0.6:
-		return BiomeClassifier.Biome.ALPINE if alpine > 0.5 else BiomeClassifier.Biome.MOUNTAINS
-	if dry > 0.6 and hot > 0.3:
-		return BiomeClassifier.Biome.DESERT_SAND
-	if dry > 0.6 and hot <= 0.3:
-		return BiomeClassifier.Biome.WASTELAND
-	if cold > 0.6 and dry > 0.4:
-		return BiomeClassifier.Biome.DESERT_ICE
-	if wet > 0.6 and hot > 0.4:
-		return BiomeClassifier.Biome.RAINFOREST
-	if m > 0.55 and t > 0.5:
-		return BiomeClassifier.Biome.RAINFOREST
-	if wet > 0.5 and cold > 0.4:
-		return BiomeClassifier.Biome.SWAMP
-	if cold > 0.6:
-		return BiomeClassifier.Biome.BOREAL_FOREST
-	if m > 0.6 and t > 0.5:
-		return BiomeClassifier.Biome.TEMPERATE_FOREST
-	if m > 0.4 and t > 0.4:
-		return BiomeClassifier.Biome.BOREAL_FOREST
-	if m > 0.3 and t > 0.3:
-		return BiomeClassifier.Biome.GRASSLAND
-	if m > 0.25 and t > 0.35:
-		return BiomeClassifier.Biome.GRASSLAND
-	if m > 0.2 and t > 0.25:
-		return BiomeClassifier.Biome.STEPPE
-	if high > 0.3:
-		return BiomeClassifier.Biome.HILLS
-	if high > 0.2:
-		return BiomeClassifier.Biome.HILLS
-	return BiomeClassifier.Biome.GRASSLAND
-
-func _apply_mountain_radiance(w: int, h: int) -> void:
-	var passes: int = max(0, config.mountain_radiance_passes)
-	if passes == 0:
-		return
-	var cool_amp: float = config.mountain_cool_amp
-	var wet_amp: float = config.mountain_wet_amp
-	if last_biomes.size() != w * h:
-		return
-	for p in range(passes):
-		var temp2 := last_temperature.duplicate()
-		var moist2 := last_moisture.duplicate()
-		for y in range(h):
-			for x in range(w):
-				var i: int = x + y * w
-				var b: int = last_biomes[i]
-				if b == BiomeClassifier.Biome.MOUNTAINS or b == BiomeClassifier.Biome.ALPINE:
-					for dy in range(-2, 3):
-						for dx in range(-2, 3):
-							var nx: int = x + dx
-							var ny: int = y + dy
-							if nx < 0 or ny < 0 or nx >= w or ny >= h:
-								continue
-							var j: int = nx + ny * w
-							var dist: float = sqrt(float(dx * dx + dy * dy))
-							var fall: float = clamp(1.0 - dist / 3.0, 0.0, 1.0)
-							temp2[j] = clamp(temp2[j] - cool_amp * fall / float(passes), 0.0, 1.0)
-							moist2[j] = clamp(moist2[j] + wet_amp * fall / float(passes), 0.0, 1.0)
-		last_temperature = temp2
-		last_moisture = moist2
-
-func _apply_hot_temperature_override(w: int, h: int) -> void:
-	var t_c_threshold: float = 30.0
-	var n := FastNoiseLite.new()
-	n.seed = int(config.rng_seed) ^ 0xBEEF
-	n.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	n.frequency = 0.008
-	for y in range(h):
-		for x in range(w):
-			var i: int = x + y * w
-			if last_is_land.size() != w * h or last_is_land[i] == 0:
-				continue
-			var t_norm: float = (last_temperature[i] if i < last_temperature.size() else 0.5)
-			var t_c: float = config.temp_min_c + t_norm * (config.temp_max_c - config.temp_min_c)
-			if t_c >= t_c_threshold and t_c < config.lava_temp_threshold_c:
-				var m: float = (last_moisture[i] if i < last_moisture.size() else 0.5)
-				var b: int = last_biomes[i]
-				# Very dry -> deserts
-				if m < 0.40:
-					var hot: float = clamp((t_norm - 0.60) * 2.4, 0.0, 1.0)
-					var noise_val: float = n.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
-					var sand_prob: float = clamp(0.25 + 0.6 * hot, 0.0, 0.98)
-					last_biomes[i] = BiomeClassifier.Biome.DESERT_SAND if noise_val < sand_prob else BiomeClassifier.Biome.WASTELAND
-				else:
-					# Hot but not very dry: keep relief unless quite dry
-					if (b == BiomeClassifier.Biome.MOUNTAINS or b == BiomeClassifier.Biome.ALPINE or b == BiomeClassifier.Biome.HILLS):
-						if m < 0.35:
-							last_biomes[i] = BiomeClassifier.Biome.WASTELAND
-						# else keep relief biome
-					else:
-						last_biomes[i] = BiomeClassifier.Biome.STEPPE
-
-func _apply_cold_temperature_override(w: int, h: int) -> void:
-	var t_c_threshold: float = 2.0
-	for y in range(h):
-		for x in range(w):
-			var i: int = x + y * w
-			if last_is_land.size() != w * h or last_is_land[i] == 0:
-				continue
-			var t_norm: float = (last_temperature[i] if i < last_temperature.size() else 0.5)
-			var t_c: float = config.temp_min_c + t_norm * (config.temp_max_c - config.temp_min_c)
-			if t_c <= t_c_threshold:
-				var m: float = (last_moisture[i] if i < last_moisture.size() else 0.0)
-				if m >= 0.25:
-					last_biomes[i] = BiomeClassifier.Biome.DESERT_ICE
-				else:
-					last_biomes[i] = BiomeClassifier.Biome.WASTELAND
-
 # GPU Buffer Management for Persistent SSBOs
 func ensure_persistent_buffers(refresh: bool = true) -> void:
 	"""Allocate persistent GPU buffers for all major world data"""
@@ -2199,6 +1990,7 @@ func ensure_persistent_buffers(refresh: bool = true) -> void:
 	_gpu_buffer_manager.ensure_buffer("flow_dir", int_size, last_flow_dir.to_byte_array() if refresh else PackedByteArray())
 	_gpu_buffer_manager.ensure_buffer("flow_accum", float_size, last_flow_accum.to_byte_array() if refresh else PackedByteArray())
 	_gpu_buffer_manager.ensure_buffer("biome_id", int_size, last_biomes.to_byte_array() if refresh else PackedByteArray())
+	_gpu_buffer_manager.ensure_buffer("biome_prev", int_size, last_biomes.to_byte_array() if refresh else PackedByteArray())
 	if refresh and last_rock_type.size() != size:
 		last_rock_type.resize(size)
 		last_rock_type.fill(LithologyCompute.ROCK_BASALTIC)
@@ -2482,8 +2274,31 @@ func sync_debug_cpu_snapshot(x: int, y: int, radius_tiles: int = 3, prefetch_mar
 	_debug_cache_h = rh
 
 func sync_climate_cpu_mirror_from_gpu(_max_cells: int = CLIMATE_CPU_MIRROR_MAX_CELLS) -> void:
-	"""GPU-only runtime: CPU climate mirror sync is intentionally disabled."""
-	pass
+	"""Optional compatibility sync for legacy CPU reads; not used in runtime hot paths."""
+	if not _climate_cpu_mirror_dirty:
+		return
+	if _gpu_buffer_manager == null:
+		return
+	var w: int = config.width
+	var h: int = config.height
+	var size: int = w * h
+	if size <= 0 or size > _max_cells:
+		return
+	var temp_vals: PackedFloat32Array = _read_window_f32("temperature", 0, 0, w, h, w)
+	var moist_vals: PackedFloat32Array = _read_window_f32("moisture", 0, 0, w, h, w)
+	var synced: bool = false
+	if temp_vals.size() == size:
+		last_temperature = temp_vals
+		synced = true
+	if moist_vals.size() == size:
+		last_moisture = moist_vals
+		synced = true
+	if synced:
+		_climate_cpu_mirror_dirty = false
+
+func mark_climate_cpu_mirror_dirty() -> void:
+	"""Signals that GPU climate/moisture buffers changed and CPU mirrors are stale."""
+	_climate_cpu_mirror_dirty = true
 
 func get_buffer_memory_stats() -> Dictionary:
 	"""Get GPU buffer memory usage statistics"""
@@ -2562,3 +2377,4 @@ func set_world_data_1_override(tex: Texture2D) -> void:
 
 func set_world_data_2_override(tex: Texture2D) -> void:
 	world_data_2_override = tex
+

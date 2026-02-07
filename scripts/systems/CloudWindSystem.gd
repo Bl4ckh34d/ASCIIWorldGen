@@ -379,6 +379,8 @@ func _apply_cloud_moisture_coupling_gpu(dt_days: float, w: int, h: int, rain_mul
 	rd.compute_list_dispatch(cl, gx, gy, 1)
 	rd.compute_list_end()
 	rd.free_rid(u_set)
+	if "mark_climate_cpu_mirror_dirty" in generator:
+		generator.mark_climate_cpu_mirror_dirty()
 
 func _ensure_buffers(w: int, h: int) -> void:
 	var size: int = w * h

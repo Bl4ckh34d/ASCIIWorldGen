@@ -36,6 +36,8 @@ func maybe_checkpoint(sim_time_days: float) -> void:
 func save_checkpoint(sim_time_days: float = -1.0) -> void:
 	if generator == null:
 		return
+	if "sync_climate_cpu_mirror_from_gpu" in generator:
+		generator.sync_climate_cpu_mirror_from_gpu()
 	var t: float = sim_time_days
 	if t < 0.0:
 		if "_world_state" in generator and generator._world_state != null:
