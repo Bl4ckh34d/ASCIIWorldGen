@@ -4,7 +4,9 @@
 
 ## Goals and KPIs
 
-- **Stability**: 0 startup crashes from RD init; safe CPU fallbacks everywhere.
+- Runtime direction: GPU-only simulation and rendering pipeline (no CPU/GPU runtime toggles).
+
+- **Stability**: 0 startup crashes from RD init in GPU-only runtime.
 - **VRAM**: ≥60–75% reduction in peak GPU memory during gen/updates.
 - **GPU perf**: ≥70–80% faster climate shore pass; no long stalls from barriers.
 - **CPU perf**: ≥40–50% faster hot paths; remove O(n²) loops in critical systems.
@@ -53,11 +55,11 @@
 - [ ] Centralize RD acquisition in `scripts/systems/ComputeShaderBase.gd`; early return on null with clear error.
 - [ ] Enforce explicit SPIR‑V selection in `scripts/systems/ShaderLoader.gd` (e.g., "vulkan"); validate non‑null spirv.
 - [ ] Adopt `GPUBufferManager.gd` across: `BiomeCompute.gd`, `ClimateAdjustCompute.gd`, `RiverCompute.gd`.
-- [ ] Defer renderer RD init until after first ASCII draw or a user toggle in `GPUAsciiRenderer.gd` / `Main.gd`.
+- [ ] Initialize renderer RD only after capability checks and robust startup guards in `GPUAsciiRenderer.gd` / `Main.gd`.
 
 #### Acceptance (M1)
 
-- [ ] No RD calls if device is null; safe CPU fallbacks activated and logged.
+- [ ] No RD calls if device is null; fail clearly and log diagnostics (GPU-only mode).
 - [ ] No raw `storage_buffer_create` outside `GPUBufferManager` in the targeted systems.
 - [ ] Peak VRAM reduced ≥60% in the baseline scenario after pooling.
 
@@ -87,12 +89,13 @@
 
 ### M4 -- Architecture & UI (P1)
 
-- [ ] Decompose `scripts/Main.gd` into controllers; move programmatic UI into scenes.
+- [~] Decompose `scripts/Main.gd` into controllers; move programmatic UI into scenes.
 - [ ] Harden `SettingsDialog.gd` with validation/sanitization and safe node access.
 
 #### Acceptance (M4)
 
 - [ ] `scripts/Main.gd` shrinks substantially; UI is scene‑based; no leaks on exit.
+- [x] High-speed validation extracted from `scripts/Main.gd` to `scripts/core/HighSpeedValidator.gd`.
 
 ### M5 -- Array Memory Pooling & CPU Cleanup (P1)
 
@@ -145,6 +148,7 @@
   - [ ] Invalidate caches on terrain/hydro updates
 
 - `scripts/WorldGenerator.gd` (P0, M5)
+  - [x] Remove legacy CPU/GPU toggle branches (`use_gpu_all`, `use_gpu_clouds`, `use_gpu_pooling`) for GPU-only runtime.
   - [ ] Move large `Packed*Array` ownership to `ArrayPool.gd`
   - [ ] Add GPU fallback/cleanup on errors consistently
   - [ ] Replace O(n) counts in hot paths with cached values from `WorldState.gd`

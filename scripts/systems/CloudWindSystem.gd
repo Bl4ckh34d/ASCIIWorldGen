@@ -154,9 +154,6 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	_sync_gpu_manager(w, h)
 	if generator.last_temperature.size() != w * h or generator.last_moisture.size() != w * h:
 		return {}
-	var gpu_only: bool = ("config" in generator and generator.config.use_gpu_all)
-	if not gpu_only:
-		return {}
 	_tick_counter += 1
 	if updates_paused:
 		return {}
@@ -484,7 +481,7 @@ func _update_wind_field_gpu(world: Object, w: int, h: int) -> void:
 	var size: int = w * h
 	if wind_u.size() != size: wind_u.resize(size)
 	if wind_v.size() != size: wind_v.resize(size)
-	var use_persistent: bool = (generator != null and "config" in generator and generator.config.use_gpu_all)
+	var use_persistent: bool = true
 	var u_buf: RID
 	var v_buf: RID
 	if use_persistent and generator and "ensure_persistent_buffers" in generator:

@@ -41,11 +41,15 @@ func apply_gpu_buffers(
 	lake_buf: RID,
 	lava_buf: RID,
 	biome_buf: RID,
+	rock_buf: RID,
 	dt_days: float,
 	sea_level: float,
 	base_rate_per_day: float,
 	max_rate_per_day: float,
 	noise_phase: float,
+	glacier_smoothing_bias: float,
+	cryo_rate_scale: float,
+	cryo_cap_scale: float,
 	biome_ice_sheet_id: int,
 	biome_glacier_id: int,
 	biome_desert_ice_id: int,
@@ -57,6 +61,8 @@ func apply_gpu_buffers(
 	if not height_in_buf.is_valid() or not moisture_buf.is_valid() or not flow_accum_buf.is_valid():
 		return false
 	if not land_buf.is_valid() or not lake_buf.is_valid() or not lava_buf.is_valid() or not biome_buf.is_valid():
+		return false
+	if not rock_buf.is_valid():
 		return false
 	if not height_out_buf.is_valid():
 		return false
@@ -73,6 +79,7 @@ func apply_gpu_buffers(
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(lava_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(biome_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(height_out_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 8; u.add_id(rock_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 
 	var pc := PackedByteArray()
@@ -83,9 +90,9 @@ func apply_gpu_buffers(
 		base_rate_per_day,
 		max_rate_per_day,
 		noise_phase,
-		0.0,
-		0.0,
-		0.0
+		clamp(glacier_smoothing_bias, 0.0, 1.0),
+		max(0.1, cryo_rate_scale),
+		max(0.1, cryo_cap_scale)
 	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())

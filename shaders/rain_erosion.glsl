@@ -15,6 +15,7 @@ layout(std430, set = 0, binding = 4) readonly buffer LakeBuf { uint lake_mask[];
 layout(std430, set = 0, binding = 5) readonly buffer LavaBuf { float lava[]; } Lava;
 layout(std430, set = 0, binding = 6) readonly buffer BiomeBuf { int biome_id[]; } Biome;
 layout(std430, set = 0, binding = 7) writeonly buffer HeightOutBuf { float height_out[]; } HeightOut;
+layout(std430, set = 0, binding = 8) readonly buffer RockBuf { int rock_type[]; } Rock;
 
 layout(push_constant) uniform Params {
 	int width;
@@ -30,9 +31,9 @@ layout(push_constant) uniform Params {
 	float base_rate_per_day;
 	float max_rate_per_day;
 	float noise_phase;
-	float _pad0;
-	float _pad1;
-	float _pad2;
+	float glacier_smoothing_bias;
+	float cryo_rate_scale;
+	float cryo_cap_scale;
 } PC;
 
 int index_of(int x, int y) {
@@ -43,6 +44,31 @@ float hash12(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
 	p3 += dot(p3, p3.yzx + 33.33);
 	return fract((p3.x + p3.y) * p3.z);
+}
+
+const int ROCK_BASALTIC = 0;
+const int ROCK_GRANITIC = 1;
+const int ROCK_SEDIMENTARY_CLASTIC = 2;
+const int ROCK_LIMESTONE = 3;
+const int ROCK_METAMORPHIC = 4;
+const int ROCK_VOLCANIC_ASH = 5;
+
+float rock_erodibility(int r) {
+	if (r == ROCK_GRANITIC) return 0.62;
+	if (r == ROCK_SEDIMENTARY_CLASTIC) return 1.40;
+	if (r == ROCK_LIMESTONE) return 1.08;
+	if (r == ROCK_METAMORPHIC) return 0.78;
+	if (r == ROCK_VOLCANIC_ASH) return 1.62;
+	return 0.72; // basaltic default
+}
+
+float rock_transportability(int r) {
+	if (r == ROCK_GRANITIC) return 0.72;
+	if (r == ROCK_SEDIMENTARY_CLASTIC) return 1.45;
+	if (r == ROCK_LIMESTONE) return 1.12;
+	if (r == ROCK_METAMORPHIC) return 0.82;
+	if (r == ROCK_VOLCANIC_ASH) return 1.68;
+	return 0.76; // basaltic default
 }
 
 void main() {
@@ -71,6 +97,7 @@ void main() {
 
 	float best_drop = 0.0;
 	float slope_sum = 0.0;
+	float neighbor_sum = 0.0;
 	int slope_count = 0;
 	int ocean_neighbors = 0;
 	int land_neighbors = 0;
@@ -92,6 +119,7 @@ void main() {
 				best_drop = dh;
 			}
 			slope_sum += abs(dh);
+			neighbor_sum += hn;
 			slope_count++;
 
 			bool n_land = (Land.is_land[j] != 0u);
@@ -110,14 +138,20 @@ void main() {
 				float flow_drive_n = flow_n / (flow_n + 64.0);
 				float src_elev = max(0.0, hn - PC.sea_level);
 				float shore_drop = max(0.0, hn - h0);
+				float transport_n = rock_transportability(Rock.rock_type[j]);
 				float src = moist_n * 0.55 + flow_drive_n * 0.25 + clamp(shore_drop / 0.16, 0.0, 1.0) * 0.20;
 				src *= clamp(src_elev / 0.6, 0.0, 1.0);
+				src *= transport_n;
 				sediment_src += src;
 			}
 		}
 	}
 
 	float shape_noise = 0.82 + 0.36 * hash12(vec2(float(x), float(y)) + vec2(PC.noise_phase, PC.noise_phase * 0.37));
+	float neighbor_mean = h0;
+	if (slope_count > 0) {
+		neighbor_mean = neighbor_sum / float(slope_count);
+	}
 
 	// Nearshore deposition: any ocean cell next to land can slowly receive sediment.
 	if (!is_land_px) {
@@ -160,6 +194,8 @@ void main() {
 
 	float erode = 0.0;
 	float erode_cap = PC.max_rate_per_day * PC.dt_days;
+	int rock = Rock.rock_type[i];
+	float rock_erode_mult = rock_erodibility(rock);
 
 	if (is_cryo) {
 		// Glacial abrasion/plucking:
@@ -168,11 +204,20 @@ void main() {
 		// - stronger at higher elevations where persistent ice survives
 		float moist = clamp(Moisture.moisture[i], 0.0, 1.0);
 		float ice_flux = 0.45 + 0.55 * moist;
-		float cryo_relief = clamp((best_drop * 0.70 + avg_slope * 0.30 - 0.0004) / 0.045, 0.0, 1.0);
+		float smooth_bias = clamp(PC.glacier_smoothing_bias, 0.0, 1.0);
+		float cryo_relief_raw = clamp((best_drop * 0.70 + avg_slope * 0.30 - 0.0004) / 0.045, 0.0, 1.0);
+		float cryo_relief_smooth = clamp((best_drop * 0.52 + avg_slope * 0.48 - 0.0003) / 0.055, 0.0, 1.0);
+		float cryo_relief = mix(cryo_relief_raw, cryo_relief_smooth, smooth_bias * 0.55);
 		float cryo_altitude = 0.65 + 0.85 * clamp((above_sea - 0.02) / 0.65, 0.0, 1.0);
-		float cryo_rate = PC.base_rate_per_day * 2.1;
-		float cryo_rate_max = PC.max_rate_per_day * 2.4;
+		float cryo_rate = PC.base_rate_per_day * max(0.1, PC.cryo_rate_scale);
+		float cryo_rate_max = PC.max_rate_per_day * max(0.1, PC.cryo_cap_scale);
 		erode = PC.dt_days * cryo_rate * cryo_relief * cryo_altitude * ice_flux * (0.88 + 0.24 * shape_noise);
+		float laplacian = neighbor_mean - h0;
+		float peak_drive = clamp((-laplacian - 0.0008) / 0.055, 0.0, 1.0);
+		float valley_drive = clamp((laplacian - 0.0008) / 0.055, 0.0, 1.0);
+		float smooth_factor = 1.0 + smooth_bias * (peak_drive * 0.65 - valley_drive * 0.50);
+		erode *= clamp(smooth_factor, 0.45, 1.55);
+		erode *= (0.85 + 0.35 * rock_erode_mult);
 		erode_cap = min(cryo_rate_max * PC.dt_days, best_drop * 0.52);
 	} else {
 		float moist = clamp(Moisture.moisture[i], 0.0, 1.0);
@@ -182,6 +227,7 @@ void main() {
 		if (rain_drive > 0.02) {
 			float mountain_drive = 0.6 + 1.4 * clamp((above_sea - 0.04) / 0.55, 0.0, 1.0);
 			erode = PC.dt_days * PC.base_rate_per_day * rain_drive * slope_drive * mountain_drive * shape_noise;
+			erode *= rock_erode_mult;
 			erode_cap = min(PC.max_rate_per_day * PC.dt_days, best_drop * 0.42);
 		}
 	}
@@ -190,13 +236,15 @@ void main() {
 	if (coastal_exposure > 0.0) {
 		float coast_drive = coastal_exposure * (0.55 + 0.45 * clamp(best_drop / 0.10, 0.0, 1.0));
 		float coast_rate = PC.base_rate_per_day * (is_cryo ? 0.30 : 0.42);
+		coast_rate *= (0.78 + 0.42 * rock_erode_mult);
 		float coast_erode = PC.dt_days * coast_rate * coast_drive * (0.88 + 0.28 * shape_noise);
 		float coast_cap = min(PC.max_rate_per_day * PC.dt_days * 0.30, best_drop * 0.25 + 0.0007);
 		erode += min(coast_erode, coast_cap);
 	}
 
 	erode = min(erode, erode_cap);
-	float total_cap = min(PC.max_rate_per_day * PC.dt_days * (is_cryo ? 2.6 : 1.2), best_drop * 0.65 + 0.0008);
+	float total_cap_mult = (is_cryo ? max(1.05, PC.cryo_cap_scale * 1.05) : 1.2);
+	float total_cap = min(PC.max_rate_per_day * PC.dt_days * total_cap_mult, best_drop * 0.65 + 0.0008);
 	erode = min(erode, total_cap);
 	if (erode <= 0.0) {
 		HeightOut.height_out[i] = h0;

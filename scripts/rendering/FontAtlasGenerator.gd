@@ -32,9 +32,9 @@ func _generate_atlas(font: Font, font_size: int, atlas_size: int) -> void:
 	"""Internal atlas generation"""
 	# debug removed
 	
-	# Calculate character dimensions (use float division to avoid warnings)
-	char_width = atlas_size / float(CHARS_PER_ROW)
-	char_height = atlas_size / float(CHARS_PER_COL)
+	# Calculate character dimensions with explicit rounding to keep int fields precise.
+	char_width = int(floor(float(atlas_size) / float(CHARS_PER_ROW)))
+	char_height = int(floor(float(atlas_size) / float(CHARS_PER_COL)))
 	char_uv_width = 1.0 / float(CHARS_PER_ROW)
 	char_uv_height = 1.0 / float(CHARS_PER_COL)
 	
@@ -52,8 +52,8 @@ func _generate_atlas(font: Font, font_size: int, atlas_size: int) -> void:
 		var char_string = char(char_code)
 		
 		# Calculate grid position
-		var grid_x = i % CHARS_PER_ROW
-		var grid_y = i / CHARS_PER_ROW
+		var grid_x: int = i % CHARS_PER_ROW
+		var grid_y: int = int(floor(float(i) / float(CHARS_PER_ROW)))
 		
 		# Calculate pixel position in atlas
 		var pixel_x = grid_x * char_width

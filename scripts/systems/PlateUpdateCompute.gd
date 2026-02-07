@@ -61,7 +61,7 @@ func build_voronoi_and_boundary(
 		site_x: PackedInt32Array,
 		site_y: PackedInt32Array,
 		site_weight: PackedFloat32Array = PackedFloat32Array(),
-		seed: int = 0,
+		rng_seed: int = 0,
 		warp_strength_cells: float = 8.5,
 		warp_frequency: float = 0.013,
 		lat_anisotropy: float = 1.2
@@ -90,7 +90,7 @@ func build_voronoi_and_boundary(
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_pid); uniforms1.append(u)
 	var u_set1 := _rd.uniform_set_create(uniforms1, _label_shader, 0)
 	var pc1 := PackedByteArray()
-	var ints1 := PackedInt32Array([w, h, site_x.size(), seed])
+	var ints1 := PackedInt32Array([w, h, site_x.size(), rng_seed])
 	var floats1 := PackedFloat32Array([
 		warp_strength_cells,
 		warp_frequency,

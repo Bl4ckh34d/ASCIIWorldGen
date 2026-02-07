@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://2p7m5fxj2u1e"
+path="res://.godot/imported/fertility_lithology_update.glsl-cdadf45891c36eed92565244f19f8b7f.res"
+
+[deps]
+
+source_file="res://shaders/fertility_lithology_update.glsl"
+dest_files=["res://.godot/imported/fertility_lithology_update.glsl-cdadf45891c36eed92565244f19f8b7f.res"]
+
+[params]
+

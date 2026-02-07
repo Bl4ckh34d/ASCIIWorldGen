@@ -54,11 +54,11 @@ void main(){
     float amp_lat = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat_abs, 1.2));
     float amp_cont = mix(PC.season_ocean_damp, 1.0, cont_amp);
 
-    // Hemisphere inversion: southern hemisphere (+0.5 phase)
-    float phase_h = PC.season_phase + (lat_norm_signed < 0.0 ? 0.5 : 0.0);
-    phase_h = fract(phase_h);
-
-    float dT_season = amp_lat * amp_cont * cos(6.2831853 * phase_h);
+    // Smooth hemispheric opposition (no hard equator seam).
+    float hemi = clamp(lat_norm_signed * 2.0, -1.0, 1.0);
+    float equator_fade = smoothstep(0.03, 0.20, lat_abs);
+    float season_driver = cos(6.2831853 * PC.season_phase);
+    float dT_season = amp_lat * amp_cont * season_driver * hemi * equator_fade;
 
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat_abs, 1.2));
     float amp_cont_d = land ? 1.0 : PC.diurnal_ocean_damp;
@@ -67,6 +67,27 @@ void main(){
 
     float t = Temp.temp_in[i];
     float t_out = clamp01(t + dT_season + dT_diurnal);
+
+    // Insolation-driven relaxation (energy-density proxy from solar zenith angle).
+    const float PI = 3.14159265359;
+    const float TAU = 6.28318530718;
+    float phi = lat_norm_signed * PI;
+    float decl = radians(23.44) * cos(TAU * PC.season_phase);
+    float hour_angle = TAU * local_time;
+    float sun_dot = sin(phi) * sin(decl) + cos(phi) * cos(decl) * cos(hour_angle);
+    float insol = clamp01(max(0.0, sun_dot));
+
+    // Simple albedo proxy: brighter surfaces (snow/ice) hold lower equilibrium temps.
+    float cryo_hint = smoothstep(0.36, 0.14, t_out);
+    float albedo = mix(0.20, 0.58, cryo_hint);
+    float eq_temp = clamp01(pow(insol, 0.72) * (1.0 - 0.42 * albedo) + 0.06);
+
+    // Thermal inertia: oceans react slower than continental interiors.
+    float ocean_inertia = mix(0.012, 0.030, clamp(dc_norm, 0.0, 1.0));
+    float land_inertia = mix(0.022, 0.060, clamp(dc_norm, 0.0, 1.0));
+    float inertia = land ? land_inertia : ocean_inertia;
+    t_out = clamp01(mix(t_out, eq_temp, inertia));
+
     // Re-anchor fast-path output against the baseline temperature buffer.
     // This lets long-term paleoclimate drift (warm/ice ages) show up without
     // accumulating additive error each tick.

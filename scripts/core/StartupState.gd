@@ -84,38 +84,41 @@ func _sanitize_planet_name(raw_value: String) -> String:
 func _derive_world_config(orbit: float) -> Dictionary:
 	var orbit_n: float = clamp(orbit, 0.0, 1.0)
 	# Left side of the habitable band is hotter, right side is colder.
+	# Use side-specific edge curves so extremes ramp up close to the zone limits,
+	# keeping mid-side placements broadly habitable.
 	var heat: float = 1.0 - orbit_n
-	var cold: float = orbit_n
-	# Center of band is most temperate; edges are harsher.
 	var edge: float = clamp(abs(orbit_n - 0.5) * 2.0, 0.0, 1.0)
 	var habitability: float = 1.0 - edge
-	var hot_extreme: float = pow(heat, 1.35)
-	var cold_extreme: float = pow(cold, 1.35)
-	var harshness: float = pow(edge, 1.20)
+	var hot_side: float = clamp((0.5 - orbit_n) * 2.0, 0.0, 1.0)
+	var cold_side: float = clamp((orbit_n - 0.5) * 2.0, 0.0, 1.0)
+	var hot_extreme: float = pow(hot_side, 2.20)
+	var cold_extreme: float = pow(cold_side, 2.20)
+	var harshness: float = pow(edge, 1.55)
 
-	# Stronger directional climate split so left/right zone edges feel clearly different.
-	var temp_min_c: float = lerp(-118.0, 18.0, heat)
-	var temp_max_c: float = lerp(4.0, 112.0, heat)
+	# Temperature envelope: colder side grows polar ice but preserves an equatorial band
+	# except near the very edge; hotter side becomes arid/scorched progressively.
+	var temp_min_c: float = -14.0 - cold_extreme * 50.0 + hot_extreme * 12.0
+	var temp_max_c: float = 46.0 - cold_extreme * 22.0 + hot_extreme * 48.0
 
-	# Keep very-low oceans on the hot edge; allow somewhat more water on cold edge.
-	var sea_level: float = 0.10 - harshness * 0.42 - hot_extreme * 0.24 + cold_extreme * 0.12
-	sea_level = clamp(sea_level, -0.72, 0.22)
+	# Keep oceans present through most of the band; reduce only near harsh hot edge.
+	var sea_level: float = 0.08 - harshness * 0.10 - hot_extreme * 0.20 + cold_extreme * 0.06
+	sea_level = clamp(sea_level, -0.40, 0.22)
 
-	var polar_cap_frac: float = clamp(0.03 + cold_extreme * 0.55 + harshness * 0.06, 0.02, 0.62)
-	var moist_base_offset: float = 0.02 + habitability * 0.16 - hot_extreme * 0.34 - cold_extreme * 0.10
-	var moist_scale: float = clamp(0.74 + habitability * 0.34 - hot_extreme * 0.18, 0.58, 1.22)
-	var season_amp_equator: float = lerp(0.05, 0.18, harshness)
-	var season_amp_pole: float = lerp(0.15, 0.52, harshness)
-	var diurnal_amp_equator: float = lerp(0.07, 0.24, hot_extreme)
-	var diurnal_amp_pole: float = lerp(0.03, 0.14, hot_extreme)
-	var min_ocean_fraction: float = clamp(0.015 + habitability * 0.11 + cold_extreme * 0.05 - hot_extreme * 0.01, 0.01, 0.20)
-	var lake_fill_ocean_ref: float = clamp(0.40 + habitability * 0.75 + cold_extreme * 0.10 - hot_extreme * 0.18, 0.25, 1.10)
+	var polar_cap_frac: float = clamp(0.04 + cold_extreme * 0.34 + harshness * 0.04, 0.03, 0.50)
+	var moist_base_offset: float = 0.10 + habitability * 0.10 - hot_extreme * 0.20 - cold_extreme * 0.06
+	var moist_scale: float = clamp(0.84 + habitability * 0.22 - hot_extreme * 0.12 + cold_extreme * 0.04, 0.62, 1.14)
+	var season_amp_equator: float = lerp(0.05, 0.14, harshness)
+	var season_amp_pole: float = lerp(0.16, 0.40, harshness)
+	var diurnal_amp_equator: float = lerp(0.08, 0.20, hot_extreme)
+	var diurnal_amp_pole: float = lerp(0.04, 0.12, hot_extreme)
+	var min_ocean_fraction: float = clamp(0.03 + habitability * 0.10 + cold_extreme * 0.03 - hot_extreme * 0.04, 0.02, 0.18)
+	var lake_fill_ocean_ref: float = clamp(0.50 + habitability * 0.40 + cold_extreme * 0.08 - hot_extreme * 0.12, 0.30, 1.00)
 
 	return {
 		"temp_min_c": temp_min_c,
 		"temp_max_c": temp_max_c,
-		"temp_base_offset": lerp(-0.55, 0.62, heat),
-		"temp_scale": lerp(0.64, 1.46, heat),
+		"temp_base_offset": 0.20 + hot_extreme * 0.22 - cold_extreme * 0.18,
+		"temp_scale": clamp(0.96 + hot_extreme * 0.18 + cold_extreme * 0.10 - harshness * 0.05, 0.88, 1.18),
 		"sea_level": sea_level,
 		"polar_cap_frac": polar_cap_frac,
 		"moist_base_offset": moist_base_offset,
@@ -124,8 +127,8 @@ func _derive_world_config(orbit: float) -> Dictionary:
 		"season_amp_pole": season_amp_pole,
 		"diurnal_amp_equator": diurnal_amp_equator,
 		"diurnal_amp_pole": diurnal_amp_pole,
-		"season_ocean_damp": lerp(0.44, 0.82, cold_extreme),
-		"continentality_scale": lerp(1.10, 1.68, harshness),
+		"season_ocean_damp": lerp(0.52, 0.76, cold_extreme),
+		"continentality_scale": lerp(1.08, 1.40, harshness),
 		"min_ocean_fraction": min_ocean_fraction,
 		"lake_fill_ocean_ref": lake_fill_ocean_ref,
 	}

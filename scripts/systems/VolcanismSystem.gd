@@ -28,9 +28,6 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var size: int = w * h
 	if size <= 0:
 		return {}
-	var use_gpu_only: bool = ("config" in generator and generator.config.use_gpu_all)
-	if not use_gpu_only:
-		return {}
 	var phase: float = 0.0
 	if world != null and "simulation_time_days" in world:
 		var days_per_year = time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else 365.0

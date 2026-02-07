@@ -30,7 +30,7 @@ signal settings_applied(config: Dictionary)
 var polar_cap_frac: SpinBox
 var temp_min_spin: SpinBox
 var temp_max_spin: SpinBox
-@onready var gpu_all: CheckBox = $VBox/Tabs/General/Grid/GPUAll
+@onready var bedrock_view: CheckBox = $VBox/Tabs/General/Grid/BedrockView
 
 func _ready() -> void:
 	polar_cap_frac = get_node_or_null("VBox/Tabs/Climate/Grid/PolarCapFrac") as SpinBox
@@ -63,8 +63,8 @@ func _on_apply() -> void:
 		cfg["temp_min_c"] = float(temp_min_spin.value) * 2.0
 	if temp_max_spin != null:
 		cfg["temp_max_c"] = float(temp_max_spin.value) * 2.0
-	# compute toggles
-	cfg["use_gpu_all"] = bool(gpu_all.button_pressed)
+		# GPU-only runtime
+		cfg["show_bedrock_view"] = bool(bedrock_view.button_pressed)
 	# rivers
 	cfg["river_enabled"] = bool(river_enabled.button_pressed)
 	cfg["lakes_enabled"] = bool(lakes_enabled.button_pressed)
@@ -78,3 +78,7 @@ func _on_apply() -> void:
 
 func _on_close() -> void:
 	hide()
+
+func set_show_bedrock_view(enabled: bool) -> void:
+	if bedrock_view:
+		bedrock_view.button_pressed = enabled

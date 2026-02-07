@@ -31,7 +31,7 @@ func _ensure() -> void:
 	if not _pipeline.is_valid() and _shader.is_valid():
 		_pipeline = _rd.compute_pipeline_create(_shader)
 
-func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperature: PackedFloat32Array, moisture: PackedFloat32Array, biomes: PackedInt32Array, temp_min_c: float, temp_max_c: float, lava_temp_threshold_c: float, lake_mask: PackedByteArray = PackedByteArray(), update_lava: float = 1.0) -> Dictionary:
+func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperature: PackedFloat32Array, moisture: PackedFloat32Array, biomes: PackedInt32Array, temp_min_c: float, temp_max_c: float, lava_temp_threshold_c: float, lake_mask: PackedByteArray = PackedByteArray(), update_lava: float = 1.0, rock_types: PackedInt32Array = PackedInt32Array()) -> Dictionary:
 	_ensure()
 	if not _pipeline.is_valid():
 		return {"biomes": biomes, "lava": PackedByteArray()}
@@ -57,6 +57,11 @@ func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperat
 	var lake_u := PackedInt32Array(); lake_u.resize(size)
 	for k in range(size): lake_u[k] = 1 if (k < lake_mask.size() and lake_mask[k] != 0) else 0
 	var buf_lake := _rd.storage_buffer_create(lake_u.to_byte_array().size(), lake_u.to_byte_array())
+	var rocks_u := rock_types if rock_types.size() == size else PackedInt32Array()
+	if rocks_u.size() != size:
+		rocks_u.resize(size)
+		rocks_u.fill(0)
+	var buf_rock := _rd.storage_buffer_create(rocks_u.to_byte_array().size(), rocks_u.to_byte_array())
 
 	# Uniforms
 	var uniforms: Array = []
@@ -68,6 +73,7 @@ func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperat
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_out_b); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(buf_lava); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(buf_lake); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(buf_rock); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 
 	# Push constants
@@ -105,6 +111,7 @@ func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperat
 	_rd.free_rid(buf_out_b)
 	_rd.free_rid(buf_lava)
 	_rd.free_rid(buf_lake)
+	_rd.free_rid(buf_rock)
 
 	return {"biomes": biomes_out, "lava": out_lava}
 
@@ -115,6 +122,7 @@ func apply_overrides_and_lava_gpu(
 		moist_buf: RID,
 		biome_in_buf: RID,
 		lake_buf: RID,
+		rock_buf: RID,
 		out_biome_buf: RID,
 		out_lava_buf: RID,
 		temp_min_c: float,
@@ -127,7 +135,7 @@ func apply_overrides_and_lava_gpu(
 	var size: int = max(0, w * h)
 	if size == 0:
 		return false
-	if not land_buf.is_valid() or not temp_buf.is_valid() or not moist_buf.is_valid() or not biome_in_buf.is_valid() or not out_biome_buf.is_valid() or not out_lava_buf.is_valid() or not lake_buf.is_valid():
+	if not land_buf.is_valid() or not temp_buf.is_valid() or not moist_buf.is_valid() or not biome_in_buf.is_valid() or not out_biome_buf.is_valid() or not out_lava_buf.is_valid() or not lake_buf.is_valid() or not rock_buf.is_valid():
 		return false
 	var uniforms: Array = []
 	var u: RDUniform
@@ -138,6 +146,7 @@ func apply_overrides_and_lava_gpu(
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(out_biome_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(out_lava_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(lake_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(rock_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
@@ -157,4 +166,3 @@ func apply_overrides_and_lava_gpu(
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
 	return true
-

@@ -355,12 +355,9 @@ func _capture_config() -> Dictionary:
 	d["season_amp_pole"] = float(c.season_amp_pole)
 	d["season_ocean_damp"] = float(c.season_ocean_damp)
 	# Toggles
-	d["use_gpu_all"] = bool(c.use_gpu_all)
-	d["use_gpu_clouds"] = bool(c.use_gpu_clouds)
 	d["rivers_enabled"] = bool(c.rivers_enabled)
 	d["lakes_enabled"] = bool(c.lakes_enabled)
 	d["realistic_pooling_enabled"] = bool(c.realistic_pooling_enabled)
-	d["use_gpu_pooling"] = bool(c.use_gpu_pooling)
 	# Hydro outflow
 	d["max_forced_outflows"] = c.max_forced_outflows
 	d["prob_outflow_0"] = float(c.prob_outflow_0)

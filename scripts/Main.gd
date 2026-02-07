@@ -1,7 +1,9 @@
 # File: res://scripts/Main.gd
 extends Control
+class_name MainController
 
 const WorldConstants = preload("res://scripts/core/WorldConstants.gd")
+const HighSpeedValidator = preload("res://scripts/core/HighSpeedValidator.gd")
 
 # --- Performance toggles (turn off heavy systems for faster world map) ---
 const ENABLE_SEASONAL_CLIMATE: bool = true
@@ -18,6 +20,23 @@ const GPU_TILE_SCALE: float = 2.0
 const SPEED_PRESETS: Array = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0]
 const SPEED_CLOUDS_PAUSE_THRESHOLD: float = 100000.0
 const SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD: float = 10000.0
+const SPEED_LOD_CLIMATE_MAX_SIM_DAYS: float = 21.0
+const SPEED_LOD_HYDRO_MAX_SIM_DAYS: float = 16.0
+const SPEED_LOD_EROSION_MAX_SIM_DAYS: float = 18.0
+const SPEED_LOD_BIOME_MAX_SIM_DAYS: float = 45.0
+const SPEED_LOD_CRYOSPHERE_MAX_SIM_DAYS: float = 20.0
+const SPEED_LOD_VOLCANISM_MAX_SIM_DAYS: float = 30.0
+const SPEED_LOD_PLATES_MAX_SIM_DAYS: float = 365.0
+const HYDRO_CATCHUP_MAX_DAYS: float = 4.0
+const HYDRO_CATCHUP_EXTRA_RUN_MARGIN: int = 2
+const HIGH_SPEED_VALIDATION_MIN_SCALE: float = 1000.0
+const HIGH_SPEED_VALIDATION_INTERVAL_TICKS: int = 30
+const HIGH_SPEED_DEBT_GROWTH_LIMIT: float = 1.20
+const HIGH_SPEED_DEBT_ABS_LIMIT_DAYS: float = 365.0
+const HIGH_SPEED_SKIP_DELTA_LIMIT: int = 120
+const HIGH_SPEED_BUDGET_RATIO_LIMIT: float = 1.15
+const HIGH_SPEED_PROGRESS_RATIO_LIMIT: float = 0.55
+const HIGH_SPEED_BACKLOG_DAYS_LIMIT: float = 365.0
 const STARTUP_ACCLIMATE_STEPS: int = 2
 const STARTUP_ACCLIMATE_STEP_DAYS: float = 0.25
 const INTRO_SCENE_REVEAL_MIN_DELAY_SEC: float = 0.30
@@ -54,11 +73,6 @@ var hydro_vbox: VBoxContainer
 var simulation_vbox: VBoxContainer
 var systems_vbox: VBoxContainer
 
-# UI Box containers for legacy UI sections
-var general_box: VBoxContainer
-var systems_box: VBoxContainer
-var simulation_box: VBoxContainer
-var climate_box: VBoxContainer
 var top_bar: HBoxContainer
 
 # UI Controls
@@ -134,7 +148,6 @@ var plates_cad: SpinBox
 # GPU rendering system
 var gpu_ascii_renderer: Control
 var use_gpu_rendering: bool = true
-var gpu_rendering_toggle: CheckBox
 
 # Bottom panel controls  
 var panel_hidden: bool = false
@@ -154,6 +167,7 @@ var cryosphere_spin: SpinBox
 var hover_has_tile: bool = false
 var hover_tile_x: int = -1
 var hover_tile_y: int = -1
+var show_bedrock_view: bool = false
 var _selected_speed_scale: float = 1.0
 var _last_speed_time_scale: float = 1.0
 var _speed_lod_clouds_paused: bool = false
@@ -165,6 +179,7 @@ var _scene_fade_tween: Tween = null
 var _pending_intro_reveal: bool = false
 var _intro_reveal_min_delay_elapsed: bool = false
 var _intro_reveal_first_tick_seen: bool = false
+var _high_speed_validator: HighSpeedValidator = HighSpeedValidator.new()
 
 func _initialize_ui_nodes() -> void:
 	"""Initialize all UI node references with the new layout"""
@@ -364,10 +379,10 @@ func _setup_simulation_tab() -> void:
 	
 	# GPU rendering
 	_add_section_header(simulation_vbox, "Rendering")
-	gpu_rendering_toggle = _add_checkbox(simulation_vbox, "GPU Rendering", use_gpu_rendering, func(v): _on_gpu_rendering_toggled(v))
-	if gpu_rendering_toggle:
-		gpu_rendering_toggle.disabled = true
-		gpu_rendering_toggle.tooltip_text = "GPU-only rendering is required."
+	var gpu_rendering_indicator = _add_checkbox(simulation_vbox, "GPU Rendering (Required)", true, Callable())
+	if gpu_rendering_indicator:
+		gpu_rendering_indicator.disabled = true
+		gpu_rendering_indicator.tooltip_text = "GPU-only rendering is always enabled."
 	
 	# Checkpoints
 	_add_section_header(simulation_vbox, "Checkpoints")
@@ -702,7 +717,7 @@ func _start_simulation() -> void:
 			seed_used_label.text = "Used: %d" % generator.config.rng_seed
 		_update_top_seed_label()
 	# Ensure persistent buffers are seeded before first simulation tick.
-	if generator and "config" in generator and generator.config.use_gpu_all and "ensure_persistent_buffers" in generator:
+	if generator and "ensure_persistent_buffers" in generator:
 		generator.ensure_persistent_buffers(true)
 	_refresh_plate_masks_for_current_size()
 	_redraw_ascii_from_current_state()
@@ -754,6 +769,8 @@ func _generate_new_world() -> void:
 	_generate_and_draw()
 
 func _on_settings_pressed() -> void:
+	if settings_dialog and "set_show_bedrock_view" in settings_dialog:
+		settings_dialog.set_show_bedrock_view(show_bedrock_view)
 	_show_centered_dialog(settings_dialog)
 
 func _show_centered_dialog(dialog: Window) -> void:
@@ -916,7 +933,7 @@ func _ready() -> void:
 		if "initialize" in _erosion_sys:
 			_erosion_sys.initialize(generator)
 		if "register_system" in simulation:
-			simulation.register_system(_erosion_sys, WorldConstants.CADENCE_EROSION, 0, true, 14.0)
+			simulation.register_system(_erosion_sys, WorldConstants.CADENCE_EROSION, 0, true, 6.0)
 	# Register cloud/wind overlay updater (visual only for now)
 	if ENABLE_CLOUDS:
 		_clouds_sys = load("res://scripts/systems/CloudWindSystem.gd").new()
@@ -938,7 +955,7 @@ func _ready() -> void:
 				if "set_update_modes" in _biome_sys:
 					_biome_sys.set_update_modes(true, false)
 				if "register_system" in simulation:
-					simulation.register_system(_biome_sys, WorldConstants.CADENCE_BIOMES, 0, false, 365.0)  # Biomes: cadence/world-time driven
+					simulation.register_system(_biome_sys, WorldConstants.CADENCE_BIOMES, 0, false, 90.0)  # Biomes: cadence/world-time driven
 				_biome_like_systems.append(_biome_sys)
 			if ENABLE_CRYOSPHERE_TICK:
 				_cryosphere_sys = load(biome_path).new()
@@ -947,7 +964,7 @@ func _ready() -> void:
 				if "set_update_modes" in _cryosphere_sys:
 					_cryosphere_sys.set_update_modes(false, true)
 				if "register_system" in simulation:
-					simulation.register_system(_cryosphere_sys, WorldConstants.CADENCE_CRYOSPHERE, 0, false, 180.0)  # Cryosphere: cadence/world-time driven
+					simulation.register_system(_cryosphere_sys, WorldConstants.CADENCE_CRYOSPHERE, 0, false, 45.0)  # Cryosphere: cadence/world-time driven
 		else:
 			# Compatibility path for explicit split systems.
 			var split_systems := [
@@ -957,7 +974,7 @@ func _ready() -> void:
 					"enabled": ENABLE_CRYOSPHERE_TICK,
 					"cadence": WorldConstants.CADENCE_CRYOSPHERE if "CADENCE_CRYOSPHERE" in WorldConstants else WorldConstants.CADENCE_BIOMES,
 					"use_time_debt": false,
-					"max_catchup_days": 180.0
+					"max_catchup_days": 45.0
 				},
 				{
 					"path": "res://scripts/systems/BiosphereUpdateSystem.gd",
@@ -965,7 +982,7 @@ func _ready() -> void:
 					"enabled": ENABLE_BIOMES_TICK,
 					"cadence": WorldConstants.CADENCE_BIOMES,
 					"use_time_debt": false,
-					"max_catchup_days": 365.0
+					"max_catchup_days": 90.0
 				},
 				{
 					"path": "res://scripts/systems/VegetationUpdateSystem.gd",
@@ -973,7 +990,7 @@ func _ready() -> void:
 					"enabled": ENABLE_BIOMES_TICK,
 					"cadence": WorldConstants.CADENCE_BIOMES,
 					"use_time_debt": false,
-					"max_catchup_days": 365.0
+					"max_catchup_days": 90.0
 				}
 			]
 			for def in split_systems:
@@ -1005,14 +1022,14 @@ func _ready() -> void:
 		if "initialize" in _plates_sys:
 			_plates_sys.initialize(generator)
 		if "register_system" in simulation:
-			simulation.register_system(_plates_sys, int(time_system.get_days_per_year()), 0, false, 730.0)  # Plate tectonics: cadence/world-time driven
+			simulation.register_system(_plates_sys, int(time_system.get_days_per_year()), 0, false, 180.0)  # Plate tectonics: cadence/world-time driven
 	# Register volcanism system at slower cadence
 	if ENABLE_VOLCANISM:
 		_volcanism_sys = load("res://scripts/systems/VolcanismSystem.gd").new()
 		if "initialize" in _volcanism_sys:
 			_volcanism_sys.initialize(generator, time_system)
 		if "register_system" in simulation:
-			simulation.register_system(_volcanism_sys, 3, 0, false, 60.0)  # Volcanism: cadence/world-time driven
+			simulation.register_system(_volcanism_sys, 3, 0, false, 30.0)  # Volcanism: cadence/world-time driven
 	# Forward ticks to simulation (world state lives in generator)
 	if time_system.has_signal("tick"):
 		time_system.connect("tick", Callable(self, "_on_sim_tick"))
@@ -1042,194 +1059,6 @@ func _ready() -> void:
 		_update_sea_label()
 		sea_last_applied = float(generator.config.sea_level)
 		sea_pending_value = sea_last_applied
-	else:
-		pass
-	# Build left panel tabs UI; if legacy boxes are missing, continue gracefully
-	if not general_box:
-		pass
-	if general_box:
-		var temp_label := Label.new(); temp_label.text = "Temp"; general_box.add_child(temp_label)
-		temp_slider = HSlider.new(); temp_slider.min_value = 0.0; temp_slider.max_value = 1.0; temp_slider.step = 0.001; temp_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; general_box.add_child(temp_slider)
-		temp_value_label = Label.new(); temp_value_label.text = ""; general_box.add_child(temp_value_label)
-		temp_slider.value_changed.connect(_on_temp_changed)
-		_update_temp_label()
-		var cont_label := Label.new(); cont_label.text = "Cont"; general_box.add_child(cont_label)
-		cont_slider = HSlider.new(); cont_slider.min_value = 0.0; cont_slider.max_value = 3.0; cont_slider.step = 0.01; cont_slider.value = 1.2; cont_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; general_box.add_child(cont_slider)
-		cont_value_label = Label.new(); cont_value_label.text = ""; general_box.add_child(cont_value_label)
-		cont_slider.value_changed.connect(_on_cont_changed)
-		_update_cont_label()
-		var season_lbl := Label.new(); season_lbl.text = "Season"; general_box.add_child(season_lbl)
-		season_slider = HSlider.new(); season_slider.min_value = 0.0; season_slider.max_value = 1.0; season_slider.step = 0.01; season_slider.value = 0.0; season_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; general_box.add_child(season_slider)
-		season_value_label = Label.new(); season_value_label.text = "x0.00"; general_box.add_child(season_value_label)
-		season_slider.value_changed.connect(_on_season_strength_changed)
-		var od_lbl := Label.new(); od_lbl.text = "OceanDamp"; general_box.add_child(od_lbl)
-		ocean_damp_slider = HSlider.new(); ocean_damp_slider.min_value = 0.0; ocean_damp_slider.max_value = 1.0; ocean_damp_slider.step = 0.01; ocean_damp_slider.value = 0.6; ocean_damp_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; general_box.add_child(ocean_damp_slider)
-		ocean_damp_value_label = Label.new(); ocean_damp_value_label.text = "0.60"; general_box.add_child(ocean_damp_value_label)
-		ocean_damp_slider.value_changed.connect(_on_ocean_damp_changed)
-	if systems_box:
-		var cad_lbl := Label.new(); cad_lbl.text = "Cadence"; systems_box.add_child(cad_lbl)
-		var clim_cad := SpinBox.new(); clim_cad.min_value = 1; clim_cad.max_value = 120; clim_cad.step = 1; clim_cad.value = 1; systems_box.add_child(clim_cad)
-		clim_cad.tooltip_text = "SeasonalClimateSystem now runs every tick (bypasses simulation orchestrator)"
-		clim_cad.editable = false  # Can't be changed since it runs directly in main loop
-		var hydro_cad := SpinBox.new(); hydro_cad.min_value = 1; hydro_cad.max_value = 120; hydro_cad.step = 1; hydro_cad.value = 30; systems_box.add_child(hydro_cad)
-		hydro_cad.value_changed.connect(func(v: float) -> void:
-			if simulation and _hydro_sys and "update_cadence" in simulation:
-				simulation.update_cadence(_hydro_sys, int(v))
-		)
-		var cloud_cad := SpinBox.new(); cloud_cad.min_value = 1; cloud_cad.max_value = 120; cloud_cad.step = 1; cloud_cad.value = 7; systems_box.add_child(cloud_cad)
-		cloud_cad.value_changed.connect(func(v: float) -> void:
-			if simulation and _clouds_sys and "update_cadence" in simulation:
-				simulation.update_cadence(_clouds_sys, int(v))
-		)
-		var biome_cad_lbl := Label.new(); biome_cad_lbl.text = "Biome"; systems_box.add_child(biome_cad_lbl)
-		var biome_cad := SpinBox.new(); biome_cad.min_value = 1; biome_cad.max_value = 200; biome_cad.step = 1; biome_cad.value = WorldConstants.CADENCE_BIOMES; systems_box.add_child(biome_cad)
-		biome_cad.value_changed.connect(func(v: float) -> void:
-			if simulation and "update_cadence" in simulation:
-				for sys in _biome_like_systems:
-					if sys:
-						simulation.update_cadence(sys, int(v))
-				if _biome_like_systems.is_empty() and _biome_sys:
-					simulation.update_cadence(_biome_sys, int(v))
-		)
-		var cryosphere_cad_lbl := Label.new(); cryosphere_cad_lbl.text = "Cryosphere"; systems_box.add_child(cryosphere_cad_lbl)
-		var cryosphere_cad := SpinBox.new(); cryosphere_cad.min_value = 1; cryosphere_cad.max_value = 200; cryosphere_cad.step = 1; cryosphere_cad.value = WorldConstants.CADENCE_CRYOSPHERE; systems_box.add_child(cryosphere_cad)
-		cryosphere_cad.value_changed.connect(func(v: float) -> void:
-			if simulation and _cryosphere_sys and "update_cadence" in simulation:
-				simulation.update_cadence(_cryosphere_sys, int(v))
-		)
-		var plates_cad_lbl := Label.new(); plates_cad_lbl.text = "Plates"; systems_box.add_child(plates_cad_lbl)
-		plates_cad = SpinBox.new(); plates_cad.min_value = 1; plates_cad.max_value = 1000; plates_cad.step = 1; plates_cad.value = time_system.get_days_per_year(); systems_box.add_child(plates_cad)
-		plates_cad.value_changed.connect(func(v: float) -> void:
-			if simulation and _plates_sys and "update_cadence" in simulation:
-				simulation.update_cadence(_plates_sys, int(v))
-		)
-	if simulation_box:
-		# Tile grid controls
-		var tiles_lbl := Label.new(); tiles_lbl.text = "Tiles across"; simulation_box.add_child(tiles_lbl)
-		tiles_across_spin = SpinBox.new(); tiles_across_spin.min_value = 8; tiles_across_spin.max_value = 1024; tiles_across_spin.step = 1; tiles_across_spin.value = max(1, tile_cols); simulation_box.add_child(tiles_across_spin)
-		tiles_across_spin.value_changed.connect(_on_tiles_across_changed)
-		lock_aspect_check = CheckBox.new(); lock_aspect_check.text = "Lock aspect"; lock_aspect_check.button_pressed = true; simulation_box.add_child(lock_aspect_check)
-		lock_aspect_check.toggled.connect(_on_lock_aspect_toggled)
-		var tiles_down_lbl := Label.new(); tiles_down_lbl.text = "Tiles down"; simulation_box.add_child(tiles_down_lbl)
-		tiles_down_spin = SpinBox.new(); tiles_down_spin.min_value = 8; tiles_down_spin.max_value = 1024; tiles_down_spin.step = 1; tiles_down_spin.value = max(1, tile_rows); simulation_box.add_child(tiles_down_spin)
-		tiles_down_spin.value_changed.connect(_on_tiles_down_changed)
-		var budget_lbl := Label.new(); budget_lbl.text = "Budget(#/tick)"; simulation_box.add_child(budget_lbl)
-		budget_spin = SpinBox.new(); budget_spin.min_value = 1; budget_spin.max_value = 10; budget_spin.step = 1; budget_spin.value = 3; simulation_box.add_child(budget_spin)
-		budget_spin.value_changed.connect(func(v: float) -> void:
-			if simulation and "set_max_systems_per_tick" in simulation:
-				simulation.set_max_systems_per_tick(int(v))
-		)
-		var time_lbl := Label.new(); time_lbl.text = "Time(ms/tick)"; simulation_box.add_child(time_lbl)
-		time_spin = SpinBox.new(); time_spin.min_value = 0.0; time_spin.max_value = 20.0; time_spin.step = 0.5; time_spin.value = 6.0; simulation_box.add_child(time_spin)
-		time_spin.value_changed.connect(func(v: float) -> void:
-			if simulation and "set_max_tick_time_ms" in simulation:
-				simulation.set_max_tick_time_ms(float(v))
-		)
-		var mode_lbl := Label.new(); mode_lbl.text = "Budget=Time"; simulation_box.add_child(mode_lbl)
-		var mode_check := CheckBox.new(); mode_check.text = "On"; mode_check.button_pressed = true; simulation_box.add_child(mode_check)
-		mode_check.toggled.connect(func(on: bool) -> void:
-			if simulation and "set_budget_mode_time" in simulation:
-				simulation.set_budget_mode_time(on)
-		)
-		
-		# Add GPU rendering toggle
-		var gpu_lbl := Label.new(); gpu_lbl.text = "GPU Rendering"; simulation_box.add_child(gpu_lbl)
-		gpu_rendering_toggle = CheckBox.new(); gpu_rendering_toggle.text = "Enabled"; gpu_rendering_toggle.button_pressed = use_gpu_rendering; simulation_box.add_child(gpu_rendering_toggle)
-		gpu_rendering_toggle.toggled.connect(_on_gpu_rendering_toggled)
-		gpu_rendering_toggle.disabled = true
-		gpu_rendering_toggle.tooltip_text = "GPU-only rendering is required."
-		year_label = Label.new(); year_label.text = "Year: 0.00"; simulation_box.add_child(year_label)
-		
-		# Year length controls
-		var year_len_lbl := Label.new(); year_len_lbl.text = "Days per Year"; simulation_box.add_child(year_len_lbl)
-		year_len_slider = HSlider.new(); year_len_slider.min_value = 50.0; year_len_slider.max_value = 500.0; year_len_slider.step = 1.0; year_len_slider.value = time_system.get_days_per_year(); year_len_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; simulation_box.add_child(year_len_slider)
-		year_len_value = Label.new(); year_len_value.text = str(int(time_system.get_days_per_year())); simulation_box.add_child(year_len_value)
-		year_len_slider.value_changed.connect(func(v: float) -> void:
-			time_system.set_days_per_year(v)
-			if year_len_value:
-				year_len_value.text = str(int(v))
-			# Update plates system cadence to match new year length
-			if simulation and _plates_sys and "update_cadence" in simulation:
-				simulation.update_cadence(_plates_sys, int(v))
-			# Update plates UI spinner value
-			if plates_cad:
-				plates_cad.value = v
-		)
-		
-		# FPS Settings
-		var fps_lbl := Label.new(); fps_lbl.text = "Simulation FPS"; simulation_box.add_child(fps_lbl)
-		fps_spin = SpinBox.new(); fps_spin.min_value = 1.0; fps_spin.max_value = 60.0; fps_spin.step = 1.0; fps_spin.value = 60.0; fps_spin.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN; simulation_box.add_child(fps_spin)
-		fps_spin.value_changed.connect(func(v: float) -> void:
-			if time_system and time_system._timer:
-				time_system._timer.wait_time = 1.0 / float(v)
-		)
-		
-		var speed_lbl := Label.new(); speed_lbl.text = "Speed"; simulation_box.add_child(speed_lbl)
-		speed_slider = HSlider.new(); speed_slider.value = 1.0; speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; simulation_box.add_child(speed_slider)
-		_configure_speed_slider(speed_slider, null)
-		var step_lbl := Label.new(); step_lbl.text = "Step (min)"; simulation_box.add_child(step_lbl)
-		step_spin = SpinBox.new(); step_spin.min_value = 1.0; step_spin.max_value = 1440.0; step_spin.step = 1.0; step_spin.value = 1.0; step_spin.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN; simulation_box.add_child(step_spin)
-		step_spin.value_changed.connect(_on_step_minutes_changed)
-		step_button = Button.new(); step_button.text = "Step"; simulation_box.add_child(step_button)
-		step_button.pressed.connect(_on_step_pressed)
-		backstep_button = Button.new(); backstep_button.text = "Backstep"; simulation_box.add_child(backstep_button)
-		backstep_button.pressed.connect(_on_backstep_pressed)
-		var ckpt_lbl := Label.new(); ckpt_lbl.text = "Ckpt (days)"; simulation_box.add_child(ckpt_lbl)
-		ckpt_interval_spin = SpinBox.new(); ckpt_interval_spin.min_value = 0.5; ckpt_interval_spin.max_value = 60.0; ckpt_interval_spin.step = 0.5; ckpt_interval_spin.value = 5.0; simulation_box.add_child(ckpt_interval_spin)
-		ckpt_interval_spin.value_changed.connect(func(v: float) -> void:
-			if _checkpoint_sys and "set_interval_days" in _checkpoint_sys:
-				_checkpoint_sys.set_interval_days(float(v))
-		)
-		# Save/Load checkpoint controls
-		var save_lbl := Label.new(); save_lbl.text = "Checkpoint"; simulation_box.add_child(save_lbl)
-		save_ckpt_button = Button.new(); save_ckpt_button.text = "Save"; simulation_box.add_child(save_ckpt_button)
-		save_ckpt_button.pressed.connect(func() -> void:
-			if save_dialog:
-				save_dialog.current_dir = "user://"
-				save_dialog.current_file = "world_%d.tres" % int(Time.get_ticks_msec())
-				_show_centered_dialog(save_dialog)
-		)
-		load_ckpt_button = Button.new(); load_ckpt_button.text = "Load"; simulation_box.add_child(load_ckpt_button)
-		load_ckpt_button.pressed.connect(func() -> void:
-			if load_dialog:
-				load_dialog.current_dir = "user://"
-				_show_centered_dialog(load_dialog)
-		)
-		# Scrub UI
-		var scrub_lbl := Label.new(); scrub_lbl.text = "Scrub (days)"; simulation_box.add_child(scrub_lbl)
-		scrub_days_spin = SpinBox.new(); scrub_days_spin.min_value = 0.0; scrub_days_spin.max_value = 100000.0; scrub_days_spin.step = 0.1; scrub_days_spin.value = 0.0; simulation_box.add_child(scrub_days_spin)
-		scrub_button = Button.new(); scrub_button.text = "Go"; simulation_box.add_child(scrub_button)
-		scrub_button.pressed.connect(func() -> void:
-			if _checkpoint_sys and "scrub_to" in _checkpoint_sys and time_system and simulation and generator and "_world_state" in generator:
-				var ok_scrub: bool = _checkpoint_sys.scrub_to(float(scrub_days_spin.value), time_system, simulation, generator._world_state)
-				if ok_scrub:
-					if year_label and time_system and "get_year_float" in time_system:
-						year_label.text = "Year: %.2f" % float(time_system.get_year_float())
-					_redraw_ascii_from_current_state()
-		)
-		# Checkpoint list UI
-		ckpt_list = OptionButton.new(); simulation_box.add_child(ckpt_list)
-		ckpt_refresh_button = Button.new(); ckpt_refresh_button.text = "Refresh"; simulation_box.add_child(ckpt_refresh_button)
-		ckpt_load_button = Button.new(); ckpt_load_button.text = "Load Selected"; simulation_box.add_child(ckpt_load_button)
-		ckpt_refresh_button.pressed.connect(func() -> void:
-			if _checkpoint_sys and "list_checkpoint_times" in _checkpoint_sys:
-				ckpt_list.clear()
-				var times: PackedFloat32Array = _checkpoint_sys.list_checkpoint_times()
-				for i in range(times.size()):
-					ckpt_list.add_item("t=%.2f d" % float(times[i]), i)
-		)
-		ckpt_load_button.pressed.connect(func() -> void:
-			if _checkpoint_sys and "load_by_index" in _checkpoint_sys:
-				var idx: int = int(ckpt_list.get_selected_id())
-				var ok_load: bool = _checkpoint_sys.load_by_index(idx)
-				if ok_load:
-					if "last_loaded_time_days" in _checkpoint_sys and time_system:
-						var lt: float = float(_checkpoint_sys.last_loaded_time_days)
-						time_system.simulation_time_days = lt
-					if year_label and time_system and "get_year_float" in time_system:
-						year_label.text = "Year: %.2f" % float(time_system.get_year_float())
-					_redraw_ascii_from_current_state()
-		)
 	# Always-visible Save/Load on Top Bar
 	if top_bar:
 		top_save_ckpt_button = Button.new(); top_save_ckpt_button.text = "Save"; top_bar.add_child(top_save_ckpt_button)
@@ -1251,35 +1080,9 @@ func _ready() -> void:
 		_update_top_seed_label()
 		_update_top_time_label()
 
-	# Register this root for quick lookup by overlay
-	add_to_group("MainRoot")
+		# Register this root for quick lookup by overlay
+		add_to_group("MainRoot")
 
-	if climate_box:
-		var cc_lbl := Label.new(); cc_lbl.text = "Cloud->Moisture"; climate_box.add_child(cc_lbl)
-		cloud_coupling_check = CheckBox.new(); cloud_coupling_check.text = "Enable"; cloud_coupling_check.button_pressed = true; climate_box.add_child(cloud_coupling_check)
-		cloud_coupling_check.toggled.connect(func(on: bool) -> void:
-			if _clouds_sys and "set_coupling_enabled" in _clouds_sys:
-				_clouds_sys.set_coupling_enabled(on)
-		)
-		var rain_lbl := Label.new(); rain_lbl.text = "Rain"; climate_box.add_child(rain_lbl)
-		rain_strength_slider = HSlider.new(); rain_strength_slider.min_value = 0.0; rain_strength_slider.max_value = 0.2; rain_strength_slider.step = 0.005; rain_strength_slider.value = 0.08; rain_strength_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; climate_box.add_child(rain_strength_slider)
-		rain_strength_slider.value_changed.connect(_on_rain_strength_changed)
-		var evap_lbl := Label.new(); evap_lbl.text = "Evap"; climate_box.add_child(evap_lbl)
-		evap_strength_slider = HSlider.new(); evap_strength_slider.min_value = 0.0; evap_strength_slider.max_value = 0.2; evap_strength_slider.step = 0.005; evap_strength_slider.value = 0.06; evap_strength_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL; climate_box.add_child(evap_strength_slider)
-		evap_strength_slider.value_changed.connect(_on_evap_strength_changed)
-		var cyc_lbl := Label.new(); cyc_lbl.text = "Cycles"; climate_box.add_child(cyc_lbl)
-		var di_mod_lbl := Label.new(); di_mod_lbl.text = "Diurnal"; climate_box.add_child(di_mod_lbl)
-		var di_mod := HSlider.new(); di_mod.min_value = 0.0; di_mod.max_value = 2.0; di_mod.step = 0.05; di_mod.value = 0.5; di_mod.size_flags_horizontal = Control.SIZE_EXPAND_FILL; climate_box.add_child(di_mod)
-		var se_mod_lbl := Label.new(); se_mod_lbl.text = "Seasonal"; climate_box.add_child(se_mod_lbl)
-		var se_mod := HSlider.new(); se_mod.min_value = 0.0; se_mod.max_value = 2.0; se_mod.step = 0.05; se_mod.value = 0.5; se_mod.size_flags_horizontal = Control.SIZE_EXPAND_FILL; climate_box.add_child(se_mod)
-		di_mod.value_changed.connect(func(_v: float) -> void:
-			if _clouds_sys and "set_cycle_modulation" in _clouds_sys:
-				_clouds_sys.set_cycle_modulation(float(di_mod.value), float(se_mod.value))
-		)
-		se_mod.value_changed.connect(func(_v: float) -> void:
-			if _clouds_sys and "set_cycle_modulation" in _clouds_sys:
-				_clouds_sys.set_cycle_modulation(float(di_mod.value), float(se_mod.value))
-		)
 	_sync_season_strength_from_config()
 	sea_debounce_timer = Timer.new()
 	sea_debounce_timer.one_shot = true
@@ -1439,6 +1242,8 @@ func _ensure_window_visible() -> void:
 
 
 func _on_settings_applied(config: Dictionary) -> void:
+	if config.has("show_bedrock_view"):
+		show_bedrock_view = bool(config["show_bedrock_view"])
 	generator.apply_config(config)
 	# update base dims if settings changed width/height
 	base_width = generator.config.width
@@ -1465,7 +1270,6 @@ func _generate_and_draw() -> void:
 	_sync_sea_slider_to_generator()
 	_redraw_ascii_from_current_state()
 	_update_cursor_dimensions()
-	_refresh_hover_info()
 	_refresh_hover_info()
 	# Sync world state's notion of time for info overlays
 	if time_system and "simulation_time_days" in time_system and "_world_state" in generator:
@@ -1540,8 +1344,6 @@ func _acclimate_generated_world() -> void:
 		simulation.set_max_tick_time_ms(prev_max_tick_ms)
 	if time_system:
 		time_system.simulation_time_days = float(world_state.simulation_time_days)
-	if "sync_climate_cpu_mirror_from_gpu" in generator:
-		generator.sync_climate_cpu_mirror_from_gpu()
 	if year_label and time_system and "get_year_float" in time_system:
 		year_label.text = "Year: %.2f" % float(time_system.get_year_float())
 
@@ -1604,8 +1406,6 @@ func _on_sim_tick(_dt_days: float) -> void:
 		if gpu_ascii_renderer:
 			if "light_texture_override" in generator and generator.light_texture_override:
 				gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
-			elif gpu_ascii_renderer.has_method("update_light_only"):
-				gpu_ascii_renderer.update_light_only(generator.last_light)
 		
 	
 	# CRITICAL: Always run essential systems like day-night cycle, even if frame budget is tight
@@ -1622,15 +1422,7 @@ func _on_sim_tick(_dt_days: float) -> void:
 	if simulation and "on_tick" in simulation and "_world_state" in generator:
 		simulation.on_tick(_dt_days, generator._world_state, {})
 		simulation_ran = true
-		# If clouds updated, refresh just the GPU cloud texture
-		if use_gpu_rendering and gpu_ascii_renderer and simulation.last_dirty_fields.has("clouds"):
-			if not ("cloud_texture_override" in generator and generator.cloud_texture_override):
-				gpu_ascii_renderer.update_clouds_only(
-					generator.last_turquoise_strength,
-					generator.last_shelf_value_noise_field,
-					generator.last_clouds,
-					_get_plate_boundary_mask()
-				)
+		# If clouds updated, rely on GPU cloud texture override path only.
 		# GPU cloud texture override (no CPU readback path)
 		if use_gpu_rendering and gpu_ascii_renderer and "cloud_texture_override" in generator and generator.cloud_texture_override:
 			gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
@@ -1642,29 +1434,20 @@ func _on_sim_tick(_dt_days: float) -> void:
 			gpu_ascii_renderer.set_river_texture_override(generator.river_texture_override)
 		# GPU biome/lava texture overrides (no CPU readback path)
 		if use_gpu_rendering and gpu_ascii_renderer and "biome_texture_override" in generator and generator.biome_texture_override:
-			gpu_ascii_renderer.set_biome_texture_override(generator.biome_texture_override)
+			gpu_ascii_renderer.set_biome_texture_override(null if show_bedrock_view else generator.biome_texture_override)
 		if use_gpu_rendering and gpu_ascii_renderer and "lava_texture_override" in generator and generator.lava_texture_override:
 			gpu_ascii_renderer.set_lava_texture_override(generator.lava_texture_override)
 		
-		# Debug performance every 30 ticks and auto-tune
-		if _sim_tick_counter % 30 == 0:
+		# Debug performance every validation interval and auto-tune
+		if _sim_tick_counter % HIGH_SPEED_VALIDATION_INTERVAL_TICKS == 0:
 			_log_performance_stats()
 			_auto_tune_performance()
+			_run_high_speed_validation()
 	# Ensure clouds still animate even when simulation budget skips systems
 	if _clouds_sys and "tick" in _clouds_sys and "_world_state" in generator:
 		var allow_fallback_cloud_tick: bool = (time_system and "time_scale" in time_system and float(time_system.time_scale) <= 10.0)
 		if (not simulation_ran) and allow_fallback_cloud_tick and not _speed_lod_clouds_paused:
-			var ret: Variant = _clouds_sys.tick(_dt_days, generator._world_state, {})
-			if typeof(ret) == TYPE_DICTIONARY and ret.has("dirty_fields"):
-				var df: PackedStringArray = ret["dirty_fields"]
-				if df.has("clouds") and use_gpu_rendering and gpu_ascii_renderer:
-					if not ("cloud_texture_override" in generator and generator.cloud_texture_override):
-						gpu_ascii_renderer.update_clouds_only(
-							generator.last_turquoise_strength,
-							generator.last_shelf_value_noise_field,
-							generator.last_clouds,
-							_get_plate_boundary_mask()
-						)
+			_clouds_sys.tick(_dt_days, generator._world_state, {})
 	
 	# Always do these lightweight tasks regardless of frame budget
 	# Periodic checkpointing based on in-game time
@@ -1698,10 +1481,62 @@ func _on_sim_tick(_dt_days: float) -> void:
 
 	# Hover info is now updated only when mouse moves to a different tile (performance optimization)
 
+func _reset_high_speed_validation_state() -> void:
+	if _high_speed_validator == null:
+		_high_speed_validator = HighSpeedValidator.new()
+	_high_speed_validator.reset_state()
+
+func _collect_total_system_debt_days() -> float:
+	if _high_speed_validator == null:
+		_high_speed_validator = HighSpeedValidator.new()
+	return _high_speed_validator.collect_total_system_debt_days(simulation)
+
+func _run_high_speed_validation() -> void:
+	if _high_speed_validator == null:
+		_high_speed_validator = HighSpeedValidator.new()
+	var result: Dictionary = _high_speed_validator.run(
+		simulation,
+		time_system,
+		generator,
+		_sim_tick_counter,
+		{
+			"min_scale": HIGH_SPEED_VALIDATION_MIN_SCALE,
+			"interval_ticks": HIGH_SPEED_VALIDATION_INTERVAL_TICKS,
+			"debt_growth_limit": HIGH_SPEED_DEBT_GROWTH_LIMIT,
+			"debt_abs_limit_days": HIGH_SPEED_DEBT_ABS_LIMIT_DAYS,
+			"skip_delta_limit": HIGH_SPEED_SKIP_DELTA_LIMIT,
+			"budget_ratio_limit": HIGH_SPEED_BUDGET_RATIO_LIMIT,
+			"progress_ratio_limit": HIGH_SPEED_PROGRESS_RATIO_LIMIT,
+			"backlog_days_limit": HIGH_SPEED_BACKLOG_DAYS_LIMIT,
+			"warning_interval": 5,
+		}
+	)
+	var warning_text: String = str(result.get("warning", ""))
+	if warning_text.length() > 0:
+		push_warning(warning_text)
+
 func _log_performance_stats() -> void:
 	"""Log performance statistics to help diagnose slow simulation"""
 	if simulation and "get_performance_stats" in simulation:
-		var _stats = simulation.get_performance_stats()
+		var stats: Dictionary = simulation.get_performance_stats()
+		var ts: float = max(1.0, float(time_system.time_scale)) if time_system and "time_scale" in time_system else 1.0
+		if ts >= HIGH_SPEED_VALIDATION_MIN_SCALE:
+			var total_debt: float = _collect_total_system_debt_days()
+			var backlog_days: float = 0.0
+			if time_system and "get_pending_backlog_days" in time_system:
+				backlog_days = max(0.0, float(time_system.get_pending_backlog_days()))
+			if (_sim_tick_counter % (HIGH_SPEED_VALIDATION_INTERVAL_TICKS * 4)) == 0:
+				print(
+					"[HS-BENCH] ts=%.0fx avg=%.2fms budget=%.2fms debt=%.2f backlog=%.2f skipped=%d" %
+					[
+						ts,
+						float(stats.get("avg_tick_time_ms", 0.0)),
+						float(stats.get("max_budget_ms", 0.0)),
+						total_debt,
+						backlog_days,
+						int(stats.get("skipped_systems_count", 0))
+					]
+				)
 
 func _auto_tune_performance() -> void:
 	"""Automatically adjust performance settings based on current stats with UI priority"""
@@ -1824,12 +1659,12 @@ func _redraw_ascii_from_current_state() -> void:
 			_initialize_gpu_renderer()
 		if gpu_ascii_renderer:
 			# GPU-only: refresh base world textures from buffers to avoid CPU packing
-			if "config" in generator and generator.config.use_gpu_all and "update_base_textures_gpu" in generator:
+			if "update_base_textures_gpu" in generator:
 				generator.update_base_textures_gpu()
 			if "world_data_1_override" in generator:
 				gpu_ascii_renderer.set_world_data_1_override(generator.world_data_1_override)
 			if "world_data_2_override" in generator:
-				gpu_ascii_renderer.set_world_data_2_override(generator.world_data_2_override)
+				gpu_ascii_renderer.set_world_data_2_override(null if show_bedrock_view else generator.world_data_2_override)
 			# Clear optional GPU texture overrides on full redraw to avoid stale textures after reset
 			if "cloud_texture_override" in generator:
 				gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
@@ -1838,10 +1673,10 @@ func _redraw_ascii_from_current_state() -> void:
 			if "river_texture_override" in generator:
 				gpu_ascii_renderer.set_river_texture_override(generator.river_texture_override)
 			if "biome_texture_override" in generator:
-				gpu_ascii_renderer.set_biome_texture_override(generator.biome_texture_override)
+				gpu_ascii_renderer.set_biome_texture_override(null if show_bedrock_view else generator.biome_texture_override)
 			if "lava_texture_override" in generator:
 				gpu_ascii_renderer.set_lava_texture_override(generator.lava_texture_override)
-			var skip_base_textures: bool = ("config" in generator and generator.config.use_gpu_all and "world_data_1_override" in generator and generator.world_data_1_override and "world_data_2_override" in generator and generator.world_data_2_override)
+			var skip_base_textures: bool = true
 			var skip_aux_textures: bool = skip_base_textures
 			var plate_mask_for_render: PackedByteArray = PackedByteArray() if skip_aux_textures else _get_plate_boundary_mask()
 			gpu_ascii_renderer.update_ascii_display(
@@ -1851,9 +1686,11 @@ func _redraw_ascii_from_current_state() -> void:
 				generator.last_moisture,
 				generator.last_light,
 				generator.last_biomes,
+				generator.last_rock_type,
 				generator.last_is_land,
 				generator.last_beach,
 				generator.config.rng_seed,
+				show_bedrock_view,
 				generator.last_turquoise_strength,
 				generator.last_shelf_value_noise_field,
 				generator.last_clouds,
@@ -1878,6 +1715,23 @@ func _redraw_ascii_from_current_state() -> void:
 func _on_speed_changed(v: float) -> void:
 	# Backward-compatible path if a slider emits values; snap to nearest preset.
 	_set_simulation_speed(float(v), false)
+
+func _sim_days_per_tick_for_scale(time_scale: float) -> float:
+	var base_tick_days: float = WorldConstants.TICK_DAYS_PER_MINUTE
+	if time_system and "tick_days" in time_system:
+		base_tick_days = max(1e-6, float(time_system.tick_days))
+	return max(0.0, base_tick_days * max(1.0, float(time_scale)))
+
+func _cap_interval_by_sim_days(current_interval: int, time_scale: float, max_sim_days_per_update: float) -> int:
+	var cur: int = max(1, int(current_interval))
+	if max_sim_days_per_update <= 0.0:
+		return cur
+	var dt_sim: float = _sim_days_per_tick_for_scale(time_scale)
+	if dt_sim <= 0.0:
+		return cur
+	var cap_interval: int = int(floor(max_sim_days_per_update / dt_sim))
+	cap_interval = max(1, cap_interval)
+	return min(cur, cap_interval)
 
 func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 	var ts: float = max(1.0, time_scale)
@@ -1920,6 +1774,7 @@ func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 	elif ts >= 10.0:
 		climate_interval = 24
 		light_interval = 1
+	climate_interval = _cap_interval_by_sim_days(climate_interval, ts, SPEED_LOD_CLIMATE_MAX_SIM_DAYS)
 	if _seasonal_sys and "set_update_intervals" in _seasonal_sys:
 		_seasonal_sys.set_update_intervals(climate_interval, light_interval)
 	# Keep long-term evolution systems active even at high speed.
@@ -1978,6 +1833,25 @@ func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 		biome_cad = 30
 		cryosphere_cad = 12
 		volcanism_cad = 6
+	hydro_cad = _cap_interval_by_sim_days(hydro_cad, ts, SPEED_LOD_HYDRO_MAX_SIM_DAYS)
+	erosion_cad = _cap_interval_by_sim_days(erosion_cad, ts, SPEED_LOD_EROSION_MAX_SIM_DAYS)
+	biome_cad = _cap_interval_by_sim_days(biome_cad, ts, SPEED_LOD_BIOME_MAX_SIM_DAYS)
+	cryosphere_cad = _cap_interval_by_sim_days(cryosphere_cad, ts, SPEED_LOD_CRYOSPHERE_MAX_SIM_DAYS)
+	volcanism_cad = _cap_interval_by_sim_days(volcanism_cad, ts, SPEED_LOD_VOLCANISM_MAX_SIM_DAYS)
+	plates_cadence = _cap_interval_by_sim_days(max(1, plates_cadence), ts, SPEED_LOD_PLATES_MAX_SIM_DAYS)
+	var max_runs_per_tick: int = 8
+	if ts >= 1000000.0:
+		max_runs_per_tick = 96
+	elif ts >= 100000.0:
+		max_runs_per_tick = 64
+	elif ts >= 10000.0:
+		max_runs_per_tick = 32
+	elif ts >= 1000.0:
+		max_runs_per_tick = 16
+	elif ts >= 100.0:
+		max_runs_per_tick = 12
+	var hydro_min_runs_to_keep_up: int = int(ceil(_sim_days_per_tick_for_scale(ts) / max(1e-6, HYDRO_CATCHUP_MAX_DAYS)))
+	var hydro_runs_per_tick: int = clamp(max(max_runs_per_tick, hydro_min_runs_to_keep_up + HYDRO_CATCHUP_EXTRA_RUN_MARGIN), 1, 128)
 	if simulation and "set_system_use_time_debt" in simulation:
 		if _hydro_sys:
 			simulation.set_system_use_time_debt(_hydro_sys, true)
@@ -1994,6 +1868,38 @@ func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 			simulation.set_system_use_time_debt(_plates_sys, true)
 		if _volcanism_sys:
 			simulation.set_system_use_time_debt(_volcanism_sys, true)
+	if simulation and "set_system_catchup_max_days" in simulation:
+		if _hydro_sys:
+			simulation.set_system_catchup_max_days(_hydro_sys, HYDRO_CATCHUP_MAX_DAYS)
+		if _erosion_sys:
+			simulation.set_system_catchup_max_days(_erosion_sys, 6.0)
+		for biome_sys in _biome_like_systems:
+			if biome_sys:
+				simulation.set_system_catchup_max_days(biome_sys, 90.0)
+		if _biome_like_systems.is_empty() and _biome_sys:
+			simulation.set_system_catchup_max_days(_biome_sys, 90.0)
+		if _cryosphere_sys:
+			simulation.set_system_catchup_max_days(_cryosphere_sys, 45.0)
+		if _plates_sys:
+			simulation.set_system_catchup_max_days(_plates_sys, 180.0)
+		if _volcanism_sys:
+			simulation.set_system_catchup_max_days(_volcanism_sys, 30.0)
+	if simulation and "set_system_max_runs_per_tick" in simulation:
+		if _hydro_sys:
+			simulation.set_system_max_runs_per_tick(_hydro_sys, hydro_runs_per_tick)
+		if _erosion_sys:
+			simulation.set_system_max_runs_per_tick(_erosion_sys, max_runs_per_tick)
+		for biome_sys in _biome_like_systems:
+			if biome_sys:
+				simulation.set_system_max_runs_per_tick(biome_sys, max_runs_per_tick)
+		if _biome_like_systems.is_empty() and _biome_sys:
+			simulation.set_system_max_runs_per_tick(_biome_sys, max_runs_per_tick)
+		if _cryosphere_sys:
+			simulation.set_system_max_runs_per_tick(_cryosphere_sys, max_runs_per_tick)
+		if _plates_sys:
+			simulation.set_system_max_runs_per_tick(_plates_sys, max_runs_per_tick)
+		if _volcanism_sys:
+			simulation.set_system_max_runs_per_tick(_volcanism_sys, max_runs_per_tick)
 	if simulation and "update_cadence" in simulation:
 		if _hydro_sys:
 			simulation.update_cadence(_hydro_sys, hydro_cad)
@@ -2250,23 +2156,6 @@ func _on_sea_debounce_timeout() -> void:
 	if sea_update_pending:
 		_apply_sea_level_from_slider()
 
-func _generate_and_draw_preserve_seed() -> void:
-	# If the last change was sea-level only, terrain arrays are already updated
-	# but to keep consistent pipeline, regen is safe and quick
-	# ensure generator uses scaled dimensions
-	var scaled_cfg := {
-		"width": max(1, base_width * map_scale),
-		"height": max(1, base_height * map_scale),
-	}
-	generator.apply_config(scaled_cfg)
-	# Force a fast recompute of sea-dependent fields (lakes, beaches, water distance)
-	generator.quick_update_sea_level(float(sea_slider.value))
-	_sync_sea_slider_to_generator()
-	_redraw_ascii_from_current_state()
-	_update_char_size_cache()
-	_update_cursor_dimensions()
-	_refresh_hover_info()
-
 func _apply_monospace_font() -> void:
 	# Use SystemFont to select an installed monospace safely (Godot 4)
 	var sys := SystemFont.new()
@@ -2282,42 +2171,6 @@ func _apply_monospace_font() -> void:
 		ascii_map.add_theme_font_override("normal_font", sys)
 		if cursor_overlay and cursor_overlay.has_method("apply_font"):
 			cursor_overlay.apply_font(sys)
-
-func _on_ascii_input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion:
-		var local: Vector2 = ascii_map.get_local_mouse_position()
-		var w: int = generator.get_width()
-		var h: int = generator.get_height()
-		if char_w_cached <= 0.0 or char_h_cached <= 0.0:
-			_update_char_size_cache()
-		var x: int = int(local.x / max(1.0, char_w_cached))
-		var y: int = int(local.y / max(1.0, char_h_cached))
-		if x >= 0 and y >= 0 and x < w and y < h:
-			var info: Dictionary = generator.get_cell_info(x, y)
-			if info.size() > 0:
-				var coords := "Coords: (%d / %d)" % [x, y]
-				var meters: float = float(generator.config.height_scale_m) * float(info["height"])
-				var htxt := "Height: %.1f m" % meters
-				var ttxt: String = "Ocean"
-				if info.has("biome_name"):
-					ttxt = String(info["biome_name"])
-				else:
-					ttxt = "Land" if info["is_land"] else "Ocean"
-				var humid: float = 0.0
-				var temp_c: float = 0.0
-				if info.has("humidity"):
-					humid = float(info["humidity"])
-				if info.has("temp_c"):
-					temp_c = float(info["temp_c"])
-				var flags: PackedStringArray = []
-				if info.get("is_beach", false): flags.append("Beach")
-				if info.get("is_lava", false): flags.append("Lava")
-				if info.get("is_river", false): flags.append("River")
-				var extra := ""
-				if flags.size() > 0: extra = " - " + ", ".join(flags)
-				info_label.text = "%s - %s - Type: %s - Humidity: %.2f - Temp: %.1f degC%s" % [coords, htxt, ttxt, humid, temp_c, extra]
-			else:
-				info_label.text = "Hover: -"
 
 # Old highlight functions removed - replaced by CursorOverlay system
 
@@ -2520,13 +2373,6 @@ func _apply_tile_grid_to_generator() -> void:
 	base_height = max(1, tile_rows)
 	_generate_and_draw()
 
-class StringBuilder:
-	var parts: PackedStringArray = []
-	func append(s: String) -> void:
-		parts.append(s)
-	func as_string() -> String:
-		return "".join(parts)
-
 # Connect cursor overlay signals
 func _connect_cursor_overlay() -> void:
 	if cursor_overlay and cursor_overlay.has_signal("tile_hovered"):
@@ -2643,7 +2489,7 @@ func _update_info_panel_for_tile(x: int, y: int) -> void:
 	var htxt: String = "%.2f" % info.get("height_m", 0.0)
 	var humid: float = info.get("moisture", 0.0)
 	var temp_c: float = info.get("temp_c", 0.0)
-	var ttxt: String = info.get("biome_name", "Unknown")
+	var ttxt: String = info.get("rock_name", "Unknown Rock") if show_bedrock_view else info.get("biome_name", "Unknown")
 	var flags: PackedStringArray = PackedStringArray()
 	if info.get("is_beach", false): flags.append("Beach")
 	if info.get("is_lava", false): flags.append("Lava")
@@ -2671,7 +2517,8 @@ func _update_info_panel_for_tile(x: int, y: int) -> void:
 		if parts.size() > 0:
 			geological_info = " | " + ", ".join(parts)
 	if info_label:
-		info_label.text = "%s - %s - Type: %s - Humidity: %.2f - Temp: %.1f degC%s%s" % [coords, htxt, ttxt, humid, temp_c, extra, geological_info]
+		var type_label: String = "Lithology" if show_bedrock_view else "Type"
+		info_label.text = "%s - %s - %s: %s - Humidity: %.2f - Temp: %.1f degC%s%s" % [coords, htxt, type_label, ttxt, humid, temp_c, extra, geological_info]
 
 func _refresh_hover_info() -> void:
 	if not hover_has_tile:
@@ -2720,25 +2567,15 @@ func _gpu_clear_hover() -> void:
 	if use_gpu_rendering and gpu_ascii_renderer and gpu_ascii_renderer.has_method("clear_hover_cell"):
 		gpu_ascii_renderer.clear_hover_cell()
 
-func _on_gpu_rendering_toggled(_enabled: bool) -> void:
-	"""GPU-only rendering (toggle kept for UI consistency)."""
-	use_gpu_rendering = true
-	if gpu_rendering_toggle:
-		gpu_rendering_toggle.button_pressed = true
-	if not gpu_ascii_renderer:
-		_initialize_gpu_renderer()
-	if ascii_map:
-		ascii_map.modulate.a = 0.0
-	# Force a redraw to show the change
-	_redraw_ascii_from_current_state()
-
 func _initialize_gpu_renderer() -> void:
 	"""Initialize GPU-based ASCII rendering system"""
 	
 	# Load GPU renderer class dynamically
 	var GPUAsciiRendererClass = load("res://scripts/rendering/GPUAsciiRenderer.gd")
 	if not GPUAsciiRendererClass:
-		use_gpu_rendering = false
+		push_error("Failed to load GPUAsciiRenderer.gd in GPU-only mode.")
+		if ascii_map:
+			ascii_map.modulate.a = 0.0
 		return
 	
 	# Create GPU renderer as a sibling to ASCII map in MapContainer
@@ -2775,17 +2612,18 @@ func _initialize_gpu_renderer() -> void:
 				# Hide the original RichTextLabel when using actual GPU rendering
 				ascii_map.modulate.a = 0.0
 			else:
-				# Keep ASCII map visible when using fallback
-				ascii_map.modulate.a = 1.0
+				push_error("GPUAsciiRenderer initialized without GPU path; CPU fallback is disabled.")
+				ascii_map.modulate.a = 0.0
 		else:
-			use_gpu_rendering = false
+			push_error("GPU ASCII rendering initialization failed in GPU-only mode.")
 			gpu_ascii_renderer.queue_free()
 			gpu_ascii_renderer = null
-			ascii_map.modulate.a = 1.0
+			ascii_map.modulate.a = 0.0
 	else:
-		use_gpu_rendering = false
+		push_error("GPUAsciiRenderer missing initialize_gpu_rendering() in GPU-only mode.")
 		gpu_ascii_renderer.queue_free()
 		gpu_ascii_renderer = null
+		ascii_map.modulate.a = 0.0
 
 func _get_plate_boundary_mask() -> PackedByteArray:
 	# Convert int32 boundary mask to byte mask for rendering

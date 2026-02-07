@@ -44,6 +44,7 @@ const float PI = 3.14159265359;
 const int SHADER_PHASE_QUOTE = 0;
 const int SHADER_PHASE_BIG_BANG = 1;
 const int SHADER_PHASE_STAGE2 = 2;
+const int INTRO_PHASE_CAMERA_PAN = 6;
 const int INTRO_PHASE_PLANET_PLACE = 7;
 
 float hash12(vec2 p) {
@@ -675,147 +676,163 @@ vec3 render_stage2(vec2 uv, float t) {
 	// Scene-2 should spawn the sun immediately at load (no fade-in).
 	float sun_reveal = space;
 	float sun_dist = r / max(0.0001, sun_r);
-	// Back-glow bridge from limb to corona: keep it thin and softly tapered.
-	float glow_out = max(0.0, sun_dist - 1.0);
-	float back_glow_peak = exp(-pow(glow_out * 14.0, 2.0));
-	float back_glow_tail = exp(-glow_out * 10.8);
-	float back_glow_gate = smoothstep(0.998, 1.015, sun_dist) * (1.0 - smoothstep(1.16, 1.30, sun_dist));
-	vec3 back_glow = vec3(1.0, 0.88, 0.22) * back_glow_peak * 0.17;
-	back_glow += vec3(1.0, 0.95, 0.42) * back_glow_tail * 0.045;
-	col += back_glow * sun_reveal * back_glow_gate;
+	float sun_halo_window = sun_r * 4.0 + 0.10;
+	if (r <= sun_halo_window) {
+		// Stronger near-limb bloom bridge to make the star read as a hot emitter.
+		float glow_out = max(0.0, sun_dist - 1.0);
+		float back_glow_peak = exp(-pow(glow_out * 9.5, 2.0));
+		float back_glow_tail = exp(-glow_out * 6.4);
+		float back_glow_gate = smoothstep(0.997, 1.018, sun_dist) * (1.0 - smoothstep(1.22, 1.58, sun_dist));
+		vec3 back_glow = vec3(1.0, 0.88, 0.22) * back_glow_peak * 0.42;
+		back_glow += vec3(1.0, 0.95, 0.42) * back_glow_tail * 0.18;
+		col += back_glow * sun_reveal * back_glow_gate;
+		// Wide halo for "strong bloom" impression in pure-shader 2D rendering.
+		float halo_mid = exp(-pow(glow_out * 2.8, 1.35));
+		float halo_far = exp(-glow_out * 2.4);
+		float halo_gate = smoothstep(1.00, 1.08, sun_dist) * (1.0 - smoothstep(2.90, 3.60, sun_dist));
+		vec3 sun_halo = vec3(1.0, 0.78, 0.22) * halo_mid * 0.34;
+		sun_halo += vec3(1.0, 0.90, 0.55) * halo_far * 0.14;
+		col += sun_halo * sun_reveal * halo_gate;
+	}
 
-	float sun_body = smoothstep(sun_r + 0.0025, sun_r - 0.0015, r);
-	vec2 np = rel / max(0.0001, sun_r);
-	float np_len2 = dot(np, np);
-	float hemisphere = sqrt(max(0.0, 1.0 - min(np_len2, 1.0)));
-	vec3 sphere_n = normalize(vec3(np, hemisphere));
-	// Seam-safe spin: move surface phase without rotating into a discontinuous projection.
-	float sun_spin = t * 0.22;
-	float sun_spin_uv = sun_spin * 0.38;
-	vec2 surf_uv = sun_spherical_warp_coord(sphere_n, t);
-	surf_uv.x += sun_spin_uv;
-	vec2 warp_p = surf_uv * 4.7;
-	float flow0 = filament_field(warp_p * 1.35 + flow_dir(warp_p * 1.8, t * 0.24) * 0.22, t * 0.24, 8.4, 0.30);
-	float flow1 = filament_field(rot2(0.52) * warp_p * 1.70 + vec2(-t * 0.08, t * 0.06), t * 0.19, 10.1, 0.28);
-	float honey_mask = honey_cells(warp_p * 1.28, t * 0.38);
-	float detail_noise = noise4q(vec4(sphere_n * 40.0 + vec3(83.23, 34.34, 67.453), t * 0.78 + sun_spin * 0.62));
-	detail_noise = smoothstep(0.38, 0.92, detail_noise);
-	// Keep Voronoi advection synced with photosphere spin; slower scalar avoids apparent over-rotation.
-	float granule_spin = sun_spin_uv * 0.27;
-	// Equal-area spherical mapping for more uniform granule cell size across the disc.
-	float granule_u = fract(atan(sphere_n.x, sphere_n.z) / TAU + 0.5 + granule_spin);
-	float granule_v = sphere_n.y * 0.5 + 0.5;
-	vec2 granule_uv = vec2(granule_u, granule_v);
-	vec2 granule_tile = vec2(228.0, 116.0);
-	vec2 granule_p = granule_uv * granule_tile;
-	float voronoi_morph_t = t * 0.46;
-	float shared_morph_t = t * 0.34 * 0.52;
-	vec2 shared_morph = sun_sine_morph_delta(warp_p, shared_morph_t);
-	granule_p += shared_morph * (granule_tile * vec2(0.020, 0.020));
-	vec2 granule_anchor_warp0 = vec2(
-		fbm(granule_uv * 17.0 + vec2(4.3, 9.7)),
-		fbm(rot2(0.87) * granule_uv * 23.0 + vec2(11.9, 1.6))
-	) - 0.5;
-	vec2 granule_anchor_warp1 = vec2(
-		fbm(granule_uv * 38.0 + vec2(17.4, 5.2)),
-		fbm(rot2(-0.49) * granule_uv * 33.0 + vec2(2.1, 13.3))
-	) - 0.5;
-	float granule_pulse_own = 0.5 + 0.5 * sin(voronoi_morph_t * 0.33 + dot(granule_uv, vec2(7.1, 5.3)) * TAU);
-	float granule_pulse_shared = 0.5 + 0.5 * sin(shared_morph_t * 0.74 + dot(granule_uv, vec2(5.9, 8.1)) * TAU);
-	float granule_pulse = mix(granule_pulse_own, granule_pulse_shared, 0.45);
-	granule_p += granule_anchor_warp0 * mix(4.2, 4.9, granule_pulse);
-	granule_p += granule_anchor_warp1 * mix(1.2, 1.6, granule_pulse);
-	float vor_morph_t = voronoi_morph_t + shared_morph_t * 0.65;
-	vec3 vor = sun_granule_voronoi(granule_p, granule_tile, vor_morph_t);
-	float edge_fuzz = fbm(granule_uv * 54.0 + vec2(7.2, -4.1));
-	float edge_wobble0 = fbm(granule_p * 0.31 + vec2(vor.z * 31.7, -vor.z * 17.9));
-	float edge_wobble1 = fbm(rot2(0.73) * granule_p * 0.41 + vec2(vor.z * 13.4, vor.z * 29.1));
-	float edge_pulse = 0.5 + 0.5 * sin(vor_morph_t * 0.92 + vor.z * TAU + edge_fuzz * 2.8);
-	float edge_shift = (edge_fuzz - 0.5) * mix(0.016, 0.028, edge_pulse) + (edge_wobble0 - 0.5) * mix(0.010, 0.020, 1.0 - edge_pulse);
-	float edge_metric = vor.y + (edge_wobble0 - 0.5) * 0.11 + (edge_wobble1 - 0.5) * 0.08;
-	float core_metric = vor.x + (edge_wobble1 - 0.5) * 0.05;
-	float vor_edge = 1.0 - smoothstep(0.014 + edge_shift, 0.205 + edge_shift, edge_metric);
-	float vor_cell = smoothstep(0.040 + edge_shift * 0.5, 0.34 + edge_shift * 0.5, edge_metric);
-	float vor_center = 1.0 - smoothstep(0.08, 0.47, core_metric);
-	float granule = clamp(vor_cell * 0.66 + vor_center * 0.34, 0.0, 1.0);
-	vor_edge = smoothstep(0.0, 1.0, clamp(pow(vor_edge, 0.62), 0.0, 1.0));
-	float bump_e = 0.42;
-	float h = sun_voronoi_bump_height(vor);
-	float hxp = sun_voronoi_bump_height(sun_granule_voronoi(granule_p + vec2(bump_e, 0.0), granule_tile, vor_morph_t));
-	float hyp = sun_voronoi_bump_height(sun_granule_voronoi(granule_p + vec2(0.0, bump_e), granule_tile, vor_morph_t));
-	float hx = hxp - h;
-	float hy = hyp - h;
-	vec3 tangent_x = normalize(vec3(1.0, 0.0, -sphere_n.x / max(0.10, sphere_n.z)));
-	vec3 tangent_y = normalize(vec3(0.0, 1.0, -sphere_n.y / max(0.10, sphere_n.z)));
-	float bump_strength = 0.94;
-	vec3 surf_n = normalize(sphere_n - tangent_x * hx * bump_strength - tangent_y * hy * bump_strength);
-	vec3 light_dir = normalize(vec3(cos(t * 0.18) * 0.28, sin(t * 0.14) * 0.22, 0.93));
-	float ndl = clamp(dot(surf_n, light_dir), 0.0, 1.0);
-	float ndl_diff = pow(ndl, 1.22);
-	float fres = pow(1.0 - clamp(surf_n.z, 0.0, 1.0), 2.6);
-	float veins = smoothstep(0.22, 0.84, mix(flow0, flow1, 0.36));
-	veins = mix(veins, honey_mask, 0.24);
-	veins = mix(veins, detail_noise, 0.10);
-	veins = mix(veins, granule, 0.30);
-	veins = clamp(veins - vor_edge * 0.030, 0.0, 1.0);
-	float core_grad = exp(-r / max(0.0001, sun_r * 0.55));
-	float limb = smoothstep(sun_r * 0.58, sun_r * 0.995, r);
+	float sun_heavy_window = sun_r * 2.9 + 0.06;
+	if (r <= sun_heavy_window) {
+		float sun_body = smoothstep(sun_r + 0.0025, sun_r - 0.0015, r);
+		vec2 np = rel / max(0.0001, sun_r);
+		float np_len2 = dot(np, np);
+		float hemisphere = sqrt(max(0.0, 1.0 - min(np_len2, 1.0)));
+		vec3 sphere_n = normalize(vec3(np, hemisphere));
+		// Seam-safe spin: move surface phase without rotating into a discontinuous projection.
+		float sun_spin = t * 0.22;
+		float sun_spin_uv = sun_spin * 0.38;
+		vec2 surf_uv = sun_spherical_warp_coord(sphere_n, t);
+		surf_uv.x += sun_spin_uv;
+		vec2 warp_p = surf_uv * 4.7;
+		float flow0 = filament_field(warp_p * 1.35 + flow_dir(warp_p * 1.8, t * 0.24) * 0.22, t * 0.24, 8.4, 0.30);
+		float flow1 = filament_field(rot2(0.52) * warp_p * 1.70 + vec2(-t * 0.08, t * 0.06), t * 0.19, 10.1, 0.28);
+		float honey_mask = honey_cells(warp_p * 1.28, t * 0.38);
+		float detail_noise = noise4q(vec4(sphere_n * 40.0 + vec3(83.23, 34.34, 67.453), t * 0.78 + sun_spin * 0.62));
+		detail_noise = smoothstep(0.38, 0.92, detail_noise);
+		// Keep Voronoi advection synced with photosphere spin; slower scalar avoids apparent over-rotation.
+		float granule_spin = sun_spin_uv * 0.27;
+		// Equal-area spherical mapping for more uniform granule cell size across the disc.
+		float granule_u = fract(atan(sphere_n.x, sphere_n.z) / TAU + 0.5 + granule_spin);
+		float granule_v = sphere_n.y * 0.5 + 0.5;
+		vec2 granule_uv = vec2(granule_u, granule_v);
+		vec2 granule_tile = vec2(228.0, 116.0);
+		vec2 granule_p = granule_uv * granule_tile;
+		float voronoi_morph_t = t * 0.46;
+		float shared_morph_t = t * 0.34 * 0.52;
+		vec2 shared_morph = sun_sine_morph_delta(warp_p, shared_morph_t);
+		granule_p += shared_morph * (granule_tile * vec2(0.020, 0.020));
+		vec2 granule_anchor_warp0 = vec2(
+			fbm(granule_uv * 17.0 + vec2(4.3, 9.7)),
+			fbm(rot2(0.87) * granule_uv * 23.0 + vec2(11.9, 1.6))
+		) - 0.5;
+		vec2 granule_anchor_warp1 = vec2(
+			fbm(granule_uv * 38.0 + vec2(17.4, 5.2)),
+			fbm(rot2(-0.49) * granule_uv * 33.0 + vec2(2.1, 13.3))
+		) - 0.5;
+		float granule_pulse_own = 0.5 + 0.5 * sin(voronoi_morph_t * 0.33 + dot(granule_uv, vec2(7.1, 5.3)) * TAU);
+		float granule_pulse_shared = 0.5 + 0.5 * sin(shared_morph_t * 0.74 + dot(granule_uv, vec2(5.9, 8.1)) * TAU);
+		float granule_pulse = mix(granule_pulse_own, granule_pulse_shared, 0.45);
+		granule_p += granule_anchor_warp0 * mix(4.2, 4.9, granule_pulse);
+		granule_p += granule_anchor_warp1 * mix(1.2, 1.6, granule_pulse);
+		float vor_morph_t = voronoi_morph_t + shared_morph_t * 0.65;
+		vec3 vor = sun_granule_voronoi(granule_p, granule_tile, vor_morph_t);
+		float edge_fuzz = fbm(granule_uv * 54.0 + vec2(7.2, -4.1));
+		float edge_wobble0 = fbm(granule_p * 0.31 + vec2(vor.z * 31.7, -vor.z * 17.9));
+		float edge_wobble1 = fbm(rot2(0.73) * granule_p * 0.41 + vec2(vor.z * 13.4, vor.z * 29.1));
+		float edge_pulse = 0.5 + 0.5 * sin(vor_morph_t * 0.92 + vor.z * TAU + edge_fuzz * 2.8);
+		float edge_shift = (edge_fuzz - 0.5) * mix(0.016, 0.028, edge_pulse) + (edge_wobble0 - 0.5) * mix(0.010, 0.020, 1.0 - edge_pulse);
+		float edge_metric = vor.y + (edge_wobble0 - 0.5) * 0.11 + (edge_wobble1 - 0.5) * 0.08;
+		float core_metric = vor.x + (edge_wobble1 - 0.5) * 0.05;
+		float vor_edge = 1.0 - smoothstep(0.014 + edge_shift, 0.205 + edge_shift, edge_metric);
+		float vor_cell = smoothstep(0.040 + edge_shift * 0.5, 0.34 + edge_shift * 0.5, edge_metric);
+		float vor_center = 1.0 - smoothstep(0.08, 0.47, core_metric);
+		float granule = clamp(vor_cell * 0.66 + vor_center * 0.34, 0.0, 1.0);
+		vor_edge = smoothstep(0.0, 1.0, clamp(pow(vor_edge, 0.62), 0.0, 1.0));
+		float bump_e = 0.42;
+		float h = sun_voronoi_bump_height(vor);
+		float hxp = sun_voronoi_bump_height(sun_granule_voronoi(granule_p + vec2(bump_e, 0.0), granule_tile, vor_morph_t));
+		float hyp = sun_voronoi_bump_height(sun_granule_voronoi(granule_p + vec2(0.0, bump_e), granule_tile, vor_morph_t));
+		float hx = hxp - h;
+		float hy = hyp - h;
+		vec3 tangent_x = normalize(vec3(1.0, 0.0, -sphere_n.x / max(0.10, sphere_n.z)));
+		vec3 tangent_y = normalize(vec3(0.0, 1.0, -sphere_n.y / max(0.10, sphere_n.z)));
+		float bump_strength = 0.94;
+		vec3 surf_n = normalize(sphere_n - tangent_x * hx * bump_strength - tangent_y * hy * bump_strength);
+		vec3 light_dir = normalize(vec3(cos(t * 0.18) * 0.28, sin(t * 0.14) * 0.22, 0.93));
+		float ndl = clamp(dot(surf_n, light_dir), 0.0, 1.0);
+		float ndl_diff = pow(ndl, 1.22);
+		float fres = pow(1.0 - clamp(surf_n.z, 0.0, 1.0), 2.6);
+		float veins = smoothstep(0.22, 0.84, mix(flow0, flow1, 0.36));
+		veins = mix(veins, honey_mask, 0.24);
+		veins = mix(veins, detail_noise, 0.10);
+		veins = mix(veins, granule, 0.30);
+		veins = clamp(veins - vor_edge * 0.030, 0.0, 1.0);
+		float core_grad = exp(-r / max(0.0001, sun_r * 0.55));
+		float limb = smoothstep(sun_r * 0.58, sun_r * 0.995, r);
 
-	vec3 sun_deep = vec3(0.54, 0.06, 0.00);
-	vec3 sun_mid = vec3(0.98, 0.24, 0.02);
-	vec3 sun_hot = vec3(1.0, 0.72, 0.08);
-	vec3 sun_core = vec3(1.0, 0.84, 0.40);
-	float color_mix0 = clamp(h * 0.42 + veins * 0.58, 0.0, 1.0);
-	vec3 base_col = mix(sun_deep, sun_mid, color_mix0);
-	base_col = mix(base_col, sun_hot, clamp(h * 0.28 + veins * 0.62, 0.0, 1.0));
-	base_col = mix(base_col, sun_mid * 0.86 + sun_hot * 0.14, vor_edge * 0.16);
-	base_col += sun_hot * vor_edge * 0.045;
-	base_col += sun_hot * granule * (0.06 + 0.10 * vor.z);
-	vec3 plasma = base_col;
-	float ember = smoothstep(0.62, 0.98, detail_noise);
-	plasma += vec3(1.0, 0.56, 0.06) * ember * (0.02 + 0.04 * veins);
-	plasma = mix(plasma, sun_core, clamp(core_grad * 0.45 + pow(ndl, 2.4) * 0.22, 0.0, 1.0));
-	plasma += sun_hot * veins * 0.24;
-	plasma += sun_core * ndl_diff * 0.11;
-	plasma += vec3(1.0, 0.82, 0.18) * fres * 0.15;
-	plasma *= 1.00 + ndl_diff * 0.12;
-	plasma *= (1.0 + limb * 0.18);
-	plasma = 1.0 - exp(-plasma * 1.34);
-	col = mix(col, plasma, sun_body * sun_reveal);
+		vec3 sun_deep = vec3(0.54, 0.06, 0.00);
+		vec3 sun_mid = vec3(0.98, 0.24, 0.02);
+		vec3 sun_hot = vec3(1.0, 0.72, 0.08);
+		vec3 sun_core = vec3(1.0, 0.84, 0.40);
+		float color_mix0 = clamp(h * 0.42 + veins * 0.58, 0.0, 1.0);
+		vec3 base_col = mix(sun_deep, sun_mid, color_mix0);
+		base_col = mix(base_col, sun_hot, clamp(h * 0.28 + veins * 0.62, 0.0, 1.0));
+		base_col = mix(base_col, sun_mid * 0.86 + sun_hot * 0.14, vor_edge * 0.16);
+		base_col += sun_hot * vor_edge * 0.045;
+		base_col += sun_hot * granule * (0.06 + 0.10 * vor.z);
+		vec3 plasma = base_col;
+		float ember = smoothstep(0.62, 0.98, detail_noise);
+		plasma += vec3(1.0, 0.56, 0.06) * ember * (0.02 + 0.04 * veins);
+		plasma = mix(plasma, sun_core, clamp(core_grad * 0.45 + pow(ndl, 2.4) * 0.22, 0.0, 1.0));
+		plasma += sun_hot * veins * 0.24;
+		plasma += sun_core * ndl_diff * 0.11;
+		plasma += vec3(1.0, 0.82, 0.18) * fres * 0.15;
+		plasma *= 1.00 + ndl_diff * 0.12;
+		plasma *= (1.0 + limb * 0.18);
+		plasma = 1.0 - exp(-plasma * 1.34);
+		col = mix(col, plasma, sun_body * sun_reveal);
 
-	float rn = length(np);
-	vec3 cor_rays = shadertoy_corona(np, t);
-	float outside_body = smoothstep(0.985, 1.02, rn);
-	float far_fade = 1.0 - smoothstep(1.52, 2.18, rn);
-	float corona_mask = outside_body * far_fade * sun_reveal;
-	float limb_out = max(0.0, rn - 1.0);
-	float limb_bridge = exp(-pow(limb_out * 34.0, 1.15)) * smoothstep(0.995, 1.018, rn) * sun_reveal;
-	corona_mask = max(corona_mask, limb_bridge * 0.23);
+		float rn = length(np);
+		vec3 cor_rays = shadertoy_corona(np, t);
+		float outside_body = smoothstep(0.985, 1.02, rn);
+		float far_fade = 1.0 - smoothstep(1.62, 2.65, rn);
+		float corona_mask = outside_body * far_fade * sun_reveal;
+		float limb_out = max(0.0, rn - 1.0);
+		float limb_bridge = exp(-pow(limb_out * 34.0, 1.15)) * smoothstep(0.995, 1.018, rn) * sun_reveal;
+		corona_mask = max(corona_mask, limb_bridge * 0.36);
 
-	vec2 p_cor = np * 0.70710678;
-	vec3 ray_cor = normalize(vec3(p_cor, 2.0));
-	vec3 pos_cor = vec3(0.0, 0.0, 3.0);
-	mat3 mr_cor = sun_corona_matrix(t);
-	float s3a = corona_ring_ray_noise(ray_cor, pos_cor, 0.96, 1.0, mr_cor, t);
-	vec3 ray_cor_b = normalize(vec3(rot2(0.31) * p_cor, 2.0));
-	float s3b = corona_ring_ray_noise(ray_cor_b, pos_cor, 1.02, 0.95, mr_cor, t * 1.11 + 0.37);
-	vec3 ray_cor_c = normalize(vec3(rot2(-0.63) * p_cor, 2.0));
-	float s3c = corona_ring_ray_noise(ray_cor_c, pos_cor, 0.99, 1.05, mr_cor, t * 1.29 - 0.41);
-	float swirl_raw = max(max(s3a, s3b * 0.88), s3c * 0.92);
-	float swirl_noise = corona_noise_texture(p_cor * 67.0 + vec2(t * 0.21, -t * 0.17));
-	swirl_raw += (swirl_noise - 0.5) * 0.10;
-	float swirl_soft = smoothstep(0.06, 0.70, swirl_raw);
-	float swirl_ridge = pow(smoothstep(0.30, 0.94, swirl_raw), 1.65);
-	float swirl = clamp(swirl_soft * 0.62 + swirl_ridge * 1.38, 0.0, 1.0);
-	float swirl_shell = smoothstep(1.02, 1.70, rn) * (1.0 - smoothstep(1.82, 2.15, rn));
-	vec3 cor_swirl = mix(vec3(0.98, 0.24, 0.02), vec3(1.0, 0.84, 0.40), swirl) * swirl;
-	cor_swirl *= 0.78 + swirl_shell * 0.92;
-	vec3 bridge_col = vec3(1.0, 0.72, 0.22) * limb_bridge * 0.24;
+		vec2 p_cor = np * 0.70710678;
+		// Add explicit corona-space advection so all corona lobes visibly evolve.
+		vec2 p_cor_anim = rot2(t * 0.036) * p_cor;
+		p_cor_anim += flow_dir(p_cor * 2.1 + vec2(1.7, -2.3), t * 0.12) * 0.032;
+		vec3 ray_cor = normalize(vec3(p_cor_anim, 2.0));
+		vec3 pos_cor = vec3(0.0, 0.0, 3.0);
+		mat3 mr_cor = sun_corona_matrix(t);
+		float s3a = corona_ring_ray_noise(ray_cor, pos_cor, 0.96, 1.0, mr_cor, t);
+		vec3 ray_cor_b = normalize(vec3(rot2(0.31 + t * 0.018) * p_cor_anim, 2.0));
+		float s3b = corona_ring_ray_noise(ray_cor_b, pos_cor, 1.02, 0.95, mr_cor, t * 1.11 + 0.37);
+		vec3 ray_cor_c = normalize(vec3(rot2(-0.63 - t * 0.014) * p_cor_anim, 2.0));
+		float s3c = corona_ring_ray_noise(ray_cor_c, pos_cor, 0.99, 1.05, mr_cor, t * 1.29 - 0.41);
+		float swirl_raw = max(max(s3a, s3b * 0.88), s3c * 0.92);
+		float swirl_noise = corona_noise_texture(p_cor_anim * 67.0 + vec2(t * 0.21, -t * 0.17));
+		swirl_raw += (swirl_noise - 0.5) * 0.10;
+		float swirl_soft = smoothstep(0.06, 0.70, swirl_raw);
+		float swirl_ridge = pow(smoothstep(0.30, 0.94, swirl_raw), 1.65);
+		float swirl = clamp(swirl_soft * 0.62 + swirl_ridge * 1.38, 0.0, 1.0);
+		float swirl_shell = smoothstep(1.02, 1.70, rn) * (1.0 - smoothstep(1.82, 2.15, rn));
+		vec3 cor_swirl = mix(vec3(0.98, 0.24, 0.02), vec3(1.0, 0.84, 0.40), swirl) * swirl;
+		cor_swirl *= 0.78 + swirl_shell * 0.92;
+		vec3 bridge_col = vec3(1.0, 0.72, 0.22) * limb_bridge * 0.42;
 
-	col += bridge_col;
-	col += cor_rays * corona_mask * mix(1.34, 0.88, swirl * 0.78);
-	col += cor_swirl * corona_mask * 1.56;
-	col += vec3(1.0, 0.78, 0.24) * swirl_ridge * corona_mask * 0.34;
+		col += bridge_col;
+		col += cor_rays * corona_mask * mix(1.85, 1.22, swirl * 0.78);
+		col += cor_swirl * corona_mask * 2.10;
+		col += vec3(1.0, 0.78, 0.24) * swirl_ridge * corona_mask * 0.68;
+	}
 
 	float inner = PC.zone_inner_radius / max(1.0, float(PC.height));
 	float outer = PC.zone_outer_radius / max(1.0, float(PC.height));
@@ -837,24 +854,53 @@ vec3 render_stage2(vec2 uv, float t) {
 	vec3 zone_col = mix(hot_to_mid, mid_to_cold, step(0.5, zone_t));
 	col += zone_col * band * band_reveal * 0.36 * band_pattern;
 
-	if (PC.intro_phase >= INTRO_PHASE_PLANET_PLACE) {
+	bool show_planet_system = (PC.intro_phase >= INTRO_PHASE_PLANET_PLACE);
+	float system_reveal = 1.0;
+	if (!show_planet_system && PC.intro_phase == INTRO_PHASE_CAMERA_PAN) {
+		system_reveal = smoothstep(0.74, 0.90, clamp(PC.pan_progress, 0.0, 1.0));
+		show_planet_system = system_reveal > 0.0001;
+	}
+	if (show_planet_system) {
 		float xpix = uvw.x * float(PC.width);
 		float ypix = uvw.y * float(PC.height);
+		float orbit_y = PC.orbit_y;
 
 		float px = PC.planet_x;
-		if (PC.intro_phase == INTRO_PHASE_PLANET_PLACE && PC.planet_has_position < 0.5) {
+		if ((PC.intro_phase == INTRO_PHASE_PLANET_PLACE || PC.intro_phase == INTRO_PHASE_CAMERA_PAN) && PC.planet_has_position < 0.5) {
 			px = PC.planet_preview_x;
 		}
+		float orbit_px = px; // Logical orbit position used for climate classification.
+		if (PC.intro_phase == INTRO_PHASE_CAMERA_PAN && PC.planet_has_position < 0.5) {
+			// During pan, keep the preview planet in the habitable-zone frame instead of screen-center lock.
+			vec2 pan_track_offset = sun_px - vec2(PC.sun_end_x, PC.sun_end_y);
+			px += pan_track_offset.x;
+			orbit_y += pan_track_offset.y;
+		}
 
-		vec2 p_rel = vec2((xpix - px) / max(1.0, float(PC.height)), (ypix - PC.orbit_y) / max(1.0, float(PC.height)));
+		vec2 p_rel = vec2((xpix - px) / max(1.0, float(PC.height)), (ypix - orbit_y) / max(1.0, float(PC.height)));
 		float pr = length(p_rel);
 		vec2 sun_rel_planet = vec2(
 			(sun_px.x - px) / max(1.0, float(PC.height)),
-			(sun_px.y - PC.orbit_y) / max(1.0, float(PC.height))
+			(sun_px.y - orbit_y) / max(1.0, float(PC.height))
 		);
-		float p_rad = 17.0 / max(1.0, float(PC.height));
+		float p_rad_base = 17.0 / max(1.0, float(PC.height));
+		const float PLANET_SCALE = 1.10;
+		const float ORBIT_SCALE = 1.10;
+		float p_rad = p_rad_base * PLANET_SCALE;
 		float p_mask = smoothstep(p_rad + 0.002, p_rad - 0.001, pr);
+			// Keep this rectangular for branch-friendly skipping, but large enough to avoid halo clipping.
+			vec2 planet_window_half = vec2(100.0, 100.0) / max(1.0, float(PC.height));
+			bool in_planet_window = abs(p_rel.x) <= planet_window_half.x && abs(p_rel.y) <= planet_window_half.y;
+		const float ORBIT_MUL_MAX = 2.80 + 2.0 * 1.45 + 0.40;
+		float max_orbit_r = p_rad_base * ORBIT_SCALE * ORBIT_MUL_MAX;
+		float max_moon_r = p_rad * 0.50;
+		vec2 moon_domain_half = vec2(
+			max_orbit_r + max_moon_r + 12.0 / max(1.0, float(PC.height)),
+			max_orbit_r * 0.22 + max_moon_r + 12.0 / max(1.0, float(PC.height))
+		);
+		bool in_moon_domain = abs(p_rel.x) <= moon_domain_half.x && abs(p_rel.y) <= moon_domain_half.y;
 
+		if (in_planet_window) {
 		vec2 p_local = p_rel / max(0.0001, p_rad);
 		float p_l2 = dot(p_local, p_local);
 		float p_z = sqrt(max(0.0, 1.0 - min(p_l2, 1.0)));
@@ -874,38 +920,140 @@ vec3 render_stage2(vec2 uv, float t) {
 		vec3 p_tangent_y = normalize(vec3(0.0, 1.0, -p_norm.y / max(0.10, p_norm.z)));
 		vec3 p_surf_n = normalize(p_norm - p_tangent_x * p_hx * 0.56 - p_tangent_y * p_hy * 0.56);
 
-		float p_vein = filament_field(p_surf * 6.2 + flow_dir(p_surf * 3.1, t * 0.22) * 0.20, t * 0.27, 8.6, 0.24);
-		float p_core = pow(max(0.0, p_norm.z), 1.9);
-		vec3 p_dark = vec3(0.34, 0.08, 0.03);
-		vec3 p_mid = vec3(0.78, 0.24, 0.08);
+			float p_vein = filament_field(p_surf * 6.2 + flow_dir(p_surf * 3.1, t * 0.22) * 0.20, t * 0.27, 8.6, 0.24);
+			float orbit_norm = clamp(
+				(orbit_px - PC.orbit_x_min) / max(1.0, PC.orbit_x_max - PC.orbit_x_min),
+				0.0,
+				1.0
+			);
+		float center_bias = clamp(1.0 - abs(orbit_norm - 0.5) * 2.0, 0.0, 1.0);
+		float habitable_center = pow(center_bias, 1.10);
+		float hotness = 1.0 - smoothstep(0.0, 0.52, orbit_norm);
+		float coldness = smoothstep(0.48, 1.0, orbit_norm);
+		float climate_extreme = 1.0 - habitable_center;
+
+		float water_frac = clamp(0.04 + habitable_center * 0.50 + coldness * 0.08 - hotness * 0.26, 0.015, 0.58);
+		float cont0 = fbm(p_surf * 2.05 + vec2(17.3, -9.1) + vec2(t * 0.008, -t * 0.006));
+		float cont1 = fbm(rot2(0.43) * p_surf * 3.20 + vec2(-6.7, 12.9) + vec2(-t * 0.006, t * 0.007));
+		float continent_field = clamp(cont0 * 0.68 + cont1 * 0.32, 0.0, 1.0);
+		continent_field = smoothstep(0.30, 0.80, continent_field);
+		float terrain = clamp(continent_field * 0.74 + p_h * 0.30 + p_vein * 0.12 - 0.16, 0.0, 1.0);
+		// Higher water_frac must produce higher sea level (more ocean coverage).
+		float sea_level = clamp(water_frac, 0.02, 0.72);
+		float coast_w = mix(0.032, 0.062, water_frac);
+		float ocean_mask = 1.0 - smoothstep(sea_level - coast_w, sea_level + coast_w, terrain);
+		float land_mask = 1.0 - ocean_mask;
+		float coast_mask = smoothstep(sea_level - coast_w * 1.60, sea_level - coast_w * 0.20, terrain) *
+			(1.0 - smoothstep(sea_level + coast_w * 0.20, sea_level + coast_w * 1.60, terrain));
+
+		float lat_abs = abs(p_norm.y);
+		float cap_start = mix(0.90, 0.20, pow(coldness, 1.20));
+		cap_start = min(cap_start + hotness * 0.14, 0.95);
+		float polar_band = smoothstep(cap_start, min(1.0, cap_start + 0.22), lat_abs);
+		float freeze_global = smoothstep(0.74, 1.0, coldness) * (0.55 + 0.45 * climate_extreme);
+		float freeze_amt = clamp(polar_band + freeze_global + coldness * 0.30, 0.0, 1.0);
+		float snow_amt = clamp(freeze_amt * (0.42 + land_mask * 0.58), 0.0, 1.0);
+		float ice_ocean_amt = clamp(freeze_amt * ocean_mask * (0.70 + 0.30 * coldness), 0.0, 1.0);
+
+		float equator_heat = 1.0 - lat_abs;
+		float equator_bias = smoothstep(0.10, 0.88, equator_heat);
+		float moisture = clamp(water_frac * 1.35 + coast_mask * 0.62, 0.0, 1.0);
+		float scorch = clamp(
+			hotness * (0.24 + 0.96 * equator_bias) +
+			hotness * (1.0 - moisture) * 0.38 +
+			climate_extreme * hotness * 0.20,
+			0.0,
+			1.0
+		);
+
+		// Hot worlds: vegetation shifts toward higher latitudes; cold worlds: lush belt near equator.
+		float veg_lat_center = mix(0.34, 0.64, hotness);
+		veg_lat_center = mix(veg_lat_center, 0.14, coldness);
+		float veg_lat_width = mix(0.28, 0.18, hotness);
+		veg_lat_width = mix(veg_lat_width, 0.22, coldness);
+		float veg_lat_band = exp(-pow((lat_abs - veg_lat_center) / max(0.06, veg_lat_width), 2.0));
+		float veg_climate = mix(0.34, 1.20, habitable_center);
+		veg_climate *= (1.0 - hotness * 0.76);
+		veg_climate *= (1.0 - coldness * 0.34);
+		veg_climate *= (0.52 + moisture * 0.86);
+		float veg_noise = smoothstep(0.25, 0.70, fbm(p_surf * 9.8 + vec2(21.3, -7.9) + vec2(t * 0.03, -t * 0.02)));
+		float vegetation = veg_climate * veg_lat_band * veg_noise * land_mask * (1.0 - snow_amt) * (1.0 - scorch * 0.82);
+		vegetation = clamp(vegetation * 1.55 + coast_mask * 0.16, 0.0, 1.0);
+
+		float ocean_depth = clamp((sea_level - terrain) / max(0.0001, sea_level), 0.0, 1.0);
+		vec3 ocean_deep = mix(vec3(0.03, 0.16, 0.30), vec3(0.02, 0.14, 0.24), hotness);
+		ocean_deep = mix(ocean_deep, vec3(0.06, 0.20, 0.32), coldness * 0.35);
+		vec3 ocean_shallow = mix(vec3(0.09, 0.44, 0.54), vec3(0.12, 0.30, 0.40), hotness);
+		ocean_shallow = mix(ocean_shallow, vec3(0.22, 0.48, 0.62), coldness * 0.25);
+		vec3 ocean_col = mix(ocean_shallow, ocean_deep, smoothstep(0.0, 1.0, ocean_depth));
+		ocean_col += vec3(0.03, 0.06, 0.08) * p_vein * 0.22;
+
+		vec3 land_soil = mix(vec3(0.46, 0.34, 0.24), vec3(0.64, 0.52, 0.30), hotness);
+		land_soil = mix(land_soil, vec3(0.42, 0.40, 0.38), coldness * 0.35);
+		vec3 land_rock = vec3(0.42, 0.36, 0.32);
+		vec3 land_green = mix(vec3(0.16, 0.44, 0.16), vec3(0.10, 0.62, 0.18), clamp(moisture * 0.82 + (1.0 - coldness) * 0.18, 0.0, 1.0));
+		vec3 scorched_col = mix(vec3(0.56, 0.38, 0.14), vec3(0.82, 0.70, 0.38), clamp(hotness * equator_bias + 0.25, 0.0, 1.0));
+		vec3 beach_col = mix(vec3(0.72, 0.62, 0.42), vec3(0.86, 0.78, 0.58), 0.35 + 0.65 * hotness);
+
+		vec3 land_col = mix(land_soil, land_rock, smoothstep(0.55, 0.95, terrain));
+		land_col = mix(land_col, land_green, clamp(vegetation, 0.0, 1.0));
+		land_col = mix(land_col, scorched_col, scorch * (1.0 - snow_amt));
+		land_col += vec3(0.05, 0.04, 0.03) * p_vein * 0.28;
+
+		vec3 snow_col = vec3(0.92, 0.96, 1.0);
+		vec3 ice_col = vec3(0.78, 0.90, 1.0);
+
+		vec3 p_col = ocean_col * ocean_mask + land_col * land_mask;
+		p_col = mix(p_col, beach_col, coast_mask * (1.0 - snow_amt) * (1.0 - ice_ocean_amt));
+		p_col = mix(p_col, ice_col, ice_ocean_amt);
+		p_col = mix(p_col, snow_col, snow_amt * land_mask + polar_band * 0.22);
+
 		vec3 p_hot = vec3(1.0, 0.62, 0.20);
 		vec3 p_core_col = vec3(1.0, 0.84, 0.42);
-		vec3 p_col = mix(p_dark, p_mid, p_h);
-		p_col = mix(p_col, p_hot, clamp(p_h * 0.68 + p_vein * 0.42, 0.0, 1.0));
-		p_col = mix(p_col, p_core_col, p_core * 0.20);
+		vec3 p_cold_rim = vec3(0.72, 0.86, 1.0);
 
 		vec3 planet_light_dir = normalize(vec3(sun_rel_planet, 0.92));
 		float p_ndl = clamp(dot(p_surf_n, planet_light_dir), 0.0, 1.0);
 		float p_wrap = clamp((dot(p_surf_n, planet_light_dir) + 0.30) / 1.30, 0.0, 1.0);
 		float p_fres = pow(1.0 - clamp(p_surf_n.z, 0.0, 1.0), 2.2);
+		vec2 sun_dir2 = normalize(sun_rel_planet + vec2(1e-5, 0.0));
+		vec2 rim_dir = normalize(p_rel + vec2(1e-5, 0.0));
+		float day_side = clamp(dot(rim_dir, sun_dir2) * 0.5 + 0.5, 0.0, 1.0);
+		float day_boost = smoothstep(0.22, 1.0, day_side);
 		float p_center = smoothstep(0.0, 0.96, p_norm.z);
-		float p_shade = 0.22 + p_wrap * 0.86;
+		float p_shade = 0.30 + p_wrap * 0.84;
 		p_col *= p_shade;
-		p_col *= mix(0.64, 1.0, p_center);
-		p_col += p_hot * p_fres * 0.08;
-		p_col += p_core_col * pow(p_ndl, 2.6) * 0.12;
-		p_col = 1.0 - exp(-p_col * 1.12);
+		p_col *= mix(0.74, 1.03, p_center);
+		float hot_land = hotness * land_mask * (1.0 - snow_amt);
+		p_col += vec3(0.20, 0.12, 0.05) * hot_land * (0.18 + 0.42 * equator_heat);
+		p_col += mix(p_cold_rim, p_hot, hotness) * p_fres * mix(0.05, 0.11, hotness);
+		p_col += mix(vec3(0.88, 0.96, 1.0), p_core_col, 0.35 + 0.65 * hotness) * pow(p_ndl, 2.6) * 0.11;
+		float atmo_fres = pow(1.0 - clamp(p_norm.z, 0.0, 1.0), 2.8);
+		vec3 atmo_in_col = mix(vec3(0.52, 0.68, 0.92), vec3(0.70, 0.84, 1.0), day_boost);
+		float atmo_in_strength = (0.008 + 0.024 * day_boost) * (0.28 + 0.72 * coldness);
+		p_col += atmo_in_col * atmo_fres * atmo_in_strength;
+		p_col = 1.0 - exp(-p_col * 1.08);
 
-		col = mix(col, p_col, p_mask);
+		col = mix(col, p_col, p_mask * system_reveal);
+		float d_out = max(0.0, pr - p_rad);
+		float atm_halo_tight = exp(-d_out * 120.0) * step(p_rad, pr);
+		float atm_halo_wide = exp(-d_out * 34.0) * step(p_rad, pr);
+		float atm_halo = atm_halo_tight * 0.68 + atm_halo_wide * 0.32;
+		vec3 atm_halo_col = mix(vec3(0.50, 0.68, 0.98), vec3(0.78, 0.90, 1.0), day_boost);
+		col += atm_halo_col * atm_halo * (0.08 + 0.12 * day_boost) * system_reveal;
 		float p_glow = exp(-max(0.0, pr - p_rad) * 45.0) * step(p_rad, pr);
-		col += vec3(1.0, 0.46, 0.14) * p_glow * 0.24;
+		vec3 p_glow_col = mix(vec3(0.52, 0.70, 0.96), vec3(0.82, 0.92, 1.0), day_boost);
+		p_glow_col = mix(p_glow_col, vec3(0.88, 0.96, 1.0), coldness * 0.45);
+		col += p_glow_col * p_glow * (0.07 + 0.09 * day_boost + coldness * 0.03) * system_reveal;
+		}
 
-		int moon_count = clamp(int(floor(PC.moon_count + 0.5)), 0, 3);
-		float moon_seed = max(0.0001, PC.moon_seed);
-		for (int mi = 0; mi < 3; mi++) {
-			if (mi >= moon_count) {
-				continue;
-			}
+		if (in_moon_domain) {
+			int moon_count = clamp(int(floor(PC.moon_count + 0.5)), 0, 3);
+			float moon_seed = max(0.0001, PC.moon_seed);
+			for (int mi = 0; mi < 3; mi++) {
+				if (mi >= moon_count) {
+					continue;
+				}
 			float fi = float(mi);
 			float h0 = hash12(vec2(moon_seed * 0.071 + fi * 11.13, moon_seed * 0.037 + fi * 3.97));
 			float h1 = hash12(vec2(moon_seed * 0.113 + fi * 7.21, moon_seed * 0.053 + fi * 5.61));
@@ -914,18 +1062,28 @@ vec3 render_stage2(vec2 uv, float t) {
 			float h4 = hash12(vec2(moon_seed * 0.251 + fi * 23.03, moon_seed * 0.131 + fi * 29.31));
 			float h5 = hash12(vec2(moon_seed * 0.307 + fi * 31.39, moon_seed * 0.149 + fi * 37.71));
 
-			// Keep moons on separated circular shells with more base spacing.
+			// Keep moons on separated equatorial shells (side-view: mostly horizontal motion).
 			float orbit_mul = 2.80 + fi * 1.45 + h0 * 0.40;
-			float orbit_r = p_rad * orbit_mul;
+			float orbit_r = p_rad_base * orbit_mul * ORBIT_SCALE;
 			float phase = h2 * TAU;
 			float omega = (1.80 + h5 * 0.65) / pow(max(0.5, orbit_mul), 1.5);
 			float ang = t * omega + phase;
-			vec2 m_off = vec2(cos(ang), sin(ang)) * orbit_r;
+			float orbit_incl = mix(0.05, 0.22, h3);
+				vec2 m_off = vec2(cos(ang), sin(ang) * orbit_incl) * orbit_r;
 
-			vec2 m_rel = p_rel - m_off;
-			float mr = length(m_rel);
-			float m_rad = p_rad * mix(0.10, 0.50, h4);
-			float m_mask = smoothstep(m_rad + 0.0018, m_rad - 0.0010, mr);
+				vec2 m_rel = p_rel - m_off;
+				float m_rad = p_rad * mix(0.10, 0.50, h4);
+				// Rectangular moon work window for cheaper branch culling.
+				vec2 moon_window_half = vec2(m_rad + 0.0035);
+				if (abs(m_rel.x) > moon_window_half.x || abs(m_rel.y) > moon_window_half.y) {
+					continue;
+				}
+				float mr = length(m_rel);
+				float m_mask = smoothstep(m_rad + 0.0018, m_rad - 0.0010, mr);
+			// Alternate front/back visibility around the orbit.
+			float moon_depth = sin(ang);
+			float moon_front = step(0.0, moon_depth);
+			float moon_visible_mask = m_mask * (1.0 - (1.0 - moon_front) * p_mask) * system_reveal;
 			vec2 m_local = m_rel / max(0.0001, m_rad);
 			float m_l2 = dot(m_local, m_local);
 			float m_z = sqrt(max(0.0, 1.0 - min(m_l2, 1.0)));
@@ -942,34 +1100,26 @@ vec3 render_stage2(vec2 uv, float t) {
 			float spin_rate = omega * spin_ratio;
 			float spin_ang = t * spin_rate + h1 * TAU;
 			float spin_phase = spin_ang / TAU;
-			float m_lon = atan(m_norm.y, m_norm.x) / TAU + 0.5;
-			float m_lat = acos(clamp(m_norm.z, -1.0, 1.0)) / PI;
+			// Equatorial spin mapping: poles stay at top/bottom (y-axis), not toward camera.
+			float m_lon = atan(m_norm.x, m_norm.z) / TAU + 0.5;
+			float m_lat = acos(clamp(m_norm.y, -1.0, 1.0)) / PI;
 			vec2 m_uv = vec2(fract(m_lon + spin_phase + h0 * 0.37), clamp(m_lat + (h3 - 0.5) * 0.08, 0.0, 1.0));
-
-			float patch0 = fbm(m_uv * (2.8 + h4 * 2.1) + vec2(1.7, -2.3));
-			float patch1 = fbm(rot2(1.11 + h5 * 0.35) * m_uv * (6.2 + h2 * 3.3) + vec2(-3.7, 2.1));
-			float patch_mix = clamp(patch0 * 0.65 + patch1 * 0.35, 0.0, 1.0);
-
-			float crater_seed0 = fbm(m_uv * (14.0 + h1 * 8.0) + vec2(7.0, -5.0));
-			float crater_seed1 = fbm(rot2(0.73 + h4 * 0.4) * m_uv * (22.0 + h5 * 6.0) + vec2(-4.0, 9.0));
-			float crater_field = max(crater_seed0, crater_seed1 * 0.92);
-			float crater_pit = pow(smoothstep(0.66, 0.99, crater_field), 1.18);
-			float crater_rim = smoothstep(0.46, 0.78, crater_field) * (1.0 - crater_pit);
-
-			float canyon_n0 = fbm(rot2(0.42 + h3 * 0.4) * m_uv * (9.0 + h0 * 5.0) + vec2(2.4, -1.9));
-			float canyon_n1 = fbm(rot2(-0.91 + h2 * 0.5) * m_uv * (16.0 + h2 * 7.0) + vec2(-1.1, 2.7));
-			float canyon_wave = abs((canyon_n0 * 0.68 + canyon_n1 * 0.32) * 2.0 - 1.0);
-			float canyon_trough = pow(clamp(1.0 - canyon_wave, 0.0, 1.0), 4.5);
-			float canyon_rim = pow(clamp(1.0 - canyon_wave, 0.0, 1.0), 2.1) * (1.0 - canyon_trough);
+			// Low-res moon shading budget: evaluate detail on a coarse 100x50 UV grid.
+			vec2 moon_lod = vec2(100.0, 50.0);
+			vec2 m_uv_lod = (floor(m_uv * moon_lod) + vec2(0.5)) / moon_lod;
+			float patch0 = fbm(m_uv_lod * (2.8 + h4 * 1.8) + vec2(1.7, -2.3));
+			float patch1 = fbm(rot2(0.97 + h5 * 0.24) * m_uv_lod * (5.6 + h2 * 2.4) + vec2(-3.7, 2.1));
+			float patch_mix = clamp(patch0 * 0.68 + patch1 * 0.32, 0.0, 1.0);
+			float crater_seed = fbm(rot2(0.73 + h4 * 0.30) * m_uv_lod * (14.0 + h5 * 4.0) + vec2(-4.0, 9.0));
+			float crater_pit = pow(smoothstep(0.72, 0.99, crater_seed), 1.25);
+			float crater_rim = smoothstep(0.50, 0.80, crater_seed) * (1.0 - crater_pit);
 
 			float grey_base = 0.34 + (h3 - 0.5) * 0.30;
 			float albedo = grey_base;
-			albedo *= 0.74 + patch_mix * 0.58;
-			albedo += crater_rim * 0.16;
-			albedo -= crater_pit * 0.22;
-			albedo += canyon_rim * 0.10;
-			albedo -= canyon_trough * 0.12;
-			albedo = clamp(albedo, 0.08, 1.0);
+			albedo *= 0.78 + patch_mix * 0.48;
+			albedo += crater_rim * 0.12;
+			albedo -= crater_pit * 0.18;
+			albedo = clamp(albedo, 0.10, 1.0);
 
 			vec3 tint = vec3(
 				0.92 + (h0 - 0.5) * 0.14,
@@ -990,12 +1140,13 @@ vec3 render_stage2(vec2 uv, float t) {
 			moon_col += vec3(0.10) * crater_rim * (0.28 + moon_ndl * 0.62);
 			moon_col -= vec3(0.10) * crater_pit * 0.48;
 			moon_col = clamp(moon_col, 0.0, 1.0);
-			col = mix(col, moon_col, m_mask);
+			col = mix(col, moon_col, moon_visible_mask);
 			float moon_rim = exp(-abs(mr - m_rad) * 110.0);
-			col += mix(vec3(0.78), tint, tint_amt * 0.7) * moon_rim * 0.05;
+			col += mix(vec3(0.78), tint, tint_amt * 0.7) * moon_rim * 0.05 * moon_visible_mask;
+		}
 		}
 
-		if (PC.intro_phase == INTRO_PHASE_PLANET_PLACE) {
+		if (PC.intro_phase == INTRO_PHASE_PLANET_PLACE && in_planet_window) {
 			float pulse = 0.5 + 0.5 * sin(t * 4.0);
 			float ring = exp(-abs(pr - p_rad * 1.10) * 95.0);
 			col += vec3(1.0, 0.82, 0.35) * ring * (0.18 + 0.12 * pulse);

@@ -178,10 +178,13 @@ void main(){
     float lat_abs = abs(lat_norm) * 2.0;
     // Night floor is the darkest baseline; eclipse shading cannot go below this.
     float night_floor = 0.1;
-    bool opposite_hemisphere = (lat_norm * delta) < 0.0;
-    if (opposite_hemisphere && lat_abs > 0.6 && abs(delta) > radians(15.0)) {
-        night_floor = max(0.05, night_floor * (1.0 - lat_abs * abs(delta) * 1.5));
-    }
+    // Smooth high-latitude winter darkening (avoids hard latitude "scissor" lines).
+    float hemi_dot = lat_norm * delta;
+    float opposite_hemi = 1.0 - smoothstep(-0.02, 0.02, hemi_dot);
+    float polar_weight = smoothstep(0.45, 0.95, lat_abs);
+    float season_weight = smoothstep(radians(10.0), radians(28.0), abs(delta));
+    float winter_darkening = opposite_hemi * polar_weight * season_weight * clamp(lat_abs * abs(delta) * 1.35, 0.0, 1.0);
+    night_floor = mix(0.10, 0.05, winter_darkening);
     
     // Create extremely sharp terminator boundary
     float terminator_threshold = 0.02; // Very thin twilight zone

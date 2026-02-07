@@ -8,12 +8,17 @@
 
 config_version=5
 
+[animation]
+
+compatibility/default_parent_skeleton_in_mesh_instance_3d=true
+
 [application]
 
-config/name="WorldGen-Godot"
-config/description="ASCII/Color world generator with plates, erosion, climate."
+config/name="Apple Pie Simulator"
+config/description="The Universe at your finger tips."
+config/version="0.01"
 run/main_scene="res://scenes/Intro.tscn"
-config/features=PackedStringArray("4.4")
+config/features=PackedStringArray("4.6")
 config/icon="res://icon.svg"
 
 [autoload]
@@ -33,5 +38,6 @@ project/assembly_name="WorldGen-Godot"
 
 [rendering]
 
+textures/vram_compression/import_etc2_astc=true
 environment/defaults/default_clear_color=Color(0, 0, 0, 1)
 vulkan/validation=false

@@ -117,11 +117,11 @@ func trace_rivers_gpu_buffers(
 		uc.add_id(out_river_buf)
 		uniforms_c.append(uc)
 		u_set_c = _rd.uniform_set_create(uniforms_c, _clear_shader, 0)
-		var clc := _rd.compute_list_begin()
-		_rd.compute_list_bind_compute_pipeline(clc, _clear_pipeline)
-		_rd.compute_list_bind_uniform_set(clc, u_set_c, 0)
-		_rd.compute_list_set_push_constant(clc, pc_c, pc_c.size())
-		_rd.compute_list_dispatch(clc, g1d2, 1, 1)
+		var clear_output_list := _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(clear_output_list, _clear_pipeline)
+		_rd.compute_list_bind_uniform_set(clear_output_list, u_set_c, 0)
+		_rd.compute_list_set_push_constant(clear_output_list, pc_c, pc_c.size())
+		_rd.compute_list_dispatch(clear_output_list, g1d2, 1, 1)
 		_rd.compute_list_end()
 		_rd.free_rid(u_set_c)
 	# Seed pass
@@ -164,11 +164,11 @@ func trace_rivers_gpu_buffers(
 	uniforms_c.clear()
 	var uc2 := RDUniform.new(); uc2.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; uc2.binding = 0; uc2.add_id(buf_front_out); uniforms_c.append(uc2)
 	u_set_c = _rd.uniform_set_create(uniforms_c, _clear_shader, 0)
-	var clc := _rd.compute_list_begin()
-	_rd.compute_list_bind_compute_pipeline(clc, _clear_pipeline)
-	_rd.compute_list_bind_uniform_set(clc, u_set_c, 0)
-	_rd.compute_list_set_push_constant(clc, pc_c, pc_c.size())
-	_rd.compute_list_dispatch(clc, g1d2, 1, 1)
+	var clear_frontier_list := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(clear_frontier_list, _clear_pipeline)
+	_rd.compute_list_bind_uniform_set(clear_frontier_list, u_set_c, 0)
+	_rd.compute_list_set_push_constant(clear_frontier_list, pc_c, pc_c.size())
+	_rd.compute_list_dispatch(clear_frontier_list, g1d2, 1, 1)
 	_rd.compute_list_end()
 	_rd.free_rid(u_set_c)
 	var max_iters: int = _river_max_iters(w, h, min_len)
@@ -206,29 +206,24 @@ func trace_rivers_gpu_buffers(
 		if pad_clear > 0:
 			var z_clear3 := PackedByteArray(); z_clear3.resize(pad_clear)
 			pc_c.append_array(z_clear3)
-		clc = _rd.compute_list_begin()
-		_rd.compute_list_bind_compute_pipeline(clc, _clear_pipeline)
-		_rd.compute_list_bind_uniform_set(clc, u_set_c, 0)
-		_rd.compute_list_set_push_constant(clc, pc_c, pc_c.size())
-		_rd.compute_list_dispatch(clc, g1d2, 1, 1)
+		clear_frontier_list = _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(clear_frontier_list, _clear_pipeline)
+		_rd.compute_list_bind_uniform_set(clear_frontier_list, u_set_c, 0)
+		_rd.compute_list_set_push_constant(clear_frontier_list, pc_c, pc_c.size())
+		_rd.compute_list_dispatch(clear_frontier_list, g1d2, 1, 1)
 		_rd.compute_list_end()
 		_rd.free_rid(u_set_c)
 		_rd.free_rid(u_set)
 	# GPU-only: skip CPU pruning in this path
 	return true
 
-func trace_rivers(w: int, h: int, is_land: PackedByteArray, lake_mask: PackedByteArray, flow_dir: PackedInt32Array, flow_accum: PackedFloat32Array, percentile: float, min_len: int, forced_seeds: PackedInt32Array = PackedInt32Array()) -> PackedByteArray:
+func trace_rivers(w: int, h: int, is_land: PackedByteArray, lake_mask: PackedByteArray, flow_dir: PackedInt32Array, flow_accum: PackedFloat32Array, threshold: float, min_len: int, forced_seeds: PackedInt32Array = PackedInt32Array()) -> PackedByteArray:
 	_ensure()
 	if not _seed_pipeline.is_valid() or not _trace_pipeline.is_valid():
 		return PackedByteArray()
 	var size: int = max(0, w * h)
-	# Compute threshold by percentile on CPU (simple sort)
-	var acc_vals: Array = []
-	for i in range(size): if is_land[i] != 0: acc_vals.append(flow_accum[i])
-	acc_vals.sort()
-	var thr_idx: int = clamp(int(floor(float(acc_vals.size() - 1) * percentile)), 0, max(0, acc_vals.size() - 1))
-	var thr: float = 4.0
-	if acc_vals.size() > 0: thr = max(4.0, float(acc_vals[thr_idx]))
+	# GPU-only: caller provides absolute threshold; avoid CPU percentile sort.
+	var thr: float = max(0.0, threshold)
 	# Buffers
 	var buf_acc := _rd.storage_buffer_create(flow_accum.to_byte_array().size(), flow_accum.to_byte_array())
 	# Convert masks to u32 for GLSL
@@ -316,39 +311,18 @@ func trace_rivers(w: int, h: int, is_land: PackedByteArray, lake_mask: PackedByt
 			var z_clear := PackedByteArray(); z_clear.resize(pad_clear)
 			pc_c.append_array(z_clear)
 		var g1d2 := int(ceil(float(size) / 256.0))
-		var clc := _rd.compute_list_begin()
-		_rd.compute_list_bind_compute_pipeline(clc, _clear_pipeline)
-		_rd.compute_list_bind_uniform_set(clc, u_set_c, 0)
-		_rd.compute_list_set_push_constant(clc, pc_c, pc_c.size())
-		_rd.compute_list_dispatch(clc, g1d2, 1, 1)
+		var clear_list := _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(clear_list, _clear_pipeline)
+		_rd.compute_list_bind_uniform_set(clear_list, u_set_c, 0)
+		_rd.compute_list_set_push_constant(clear_list, pc_c, pc_c.size())
+		_rd.compute_list_dispatch(clear_list, g1d2, 1, 1)
 		_rd.compute_list_end(); _rd.free_rid(u_set_c)
 		_rd.free_rid(u_set)
-	# Prune short rivers on CPU (quick pass)
+	# Read back river mask produced by GPU tracing.
 	var river_bytes := _rd.buffer_get_data(buf_river)
 	var river_u32_out := river_bytes.to_int32_array()
 	var river_out := PackedByteArray(); river_out.resize(size)
 	for k in range(size): river_out[k] = 1 if (k < river_u32_out.size() and river_u32_out[k] != 0) else 0
-	if min_len > 1:
-		var visited := PackedByteArray(); visited.resize(size)
-		for i2 in range(size): visited[i2] = 0
-		for start in range(size):
-			if river_out[start] == 0 or visited[start] != 0: continue
-			var comp: Array = []
-			var q: Array = []; q.append(start); visited[start] = 1
-			while q.size() > 0:
-				var cur: int = int(q.pop_front())
-				comp.append(cur)
-				for dy in range(-1, 2):
-					for dx in range(-1, 2):
-						if dx == 0 and dy == 0: continue
-						var nx := (cur % w) + dx
-						var ny := int(floor(float(cur) / float(w))) + dy
-						if nx < 0 or ny < 0 or nx >= w or ny >= h: continue
-						var ni := nx + ny * w
-						if river_out[ni] == 0 or visited[ni] != 0: continue
-						visited[ni] = 1; q.append(ni)
-			if comp.size() < min_len:
-				for p in comp: river_out[int(p)] = 0
 	_rd.free_rid(buf_acc)
 	_rd.free_rid(buf_land)
 	_rd.free_rid(buf_dir)
@@ -366,7 +340,7 @@ func trace_rivers_roi(
 		lake_mask: PackedByteArray,
 		flow_dir: PackedInt32Array,
 		flow_accum: PackedFloat32Array,
-		percentile: float = 0.97,
+		threshold: float = 4.0,
 		min_len: int = 5,
 		roi: Rect2i = Rect2i(0,0,0,0),
 		forced_seeds: PackedInt32Array = PackedInt32Array()
@@ -376,16 +350,8 @@ func trace_rivers_roi(
 		return PackedByteArray()
 	var size: int = max(0, w * h)
 
-	# Compute global threshold by percentile on CPU
-	var acc_vals: Array = []
-	for i in range(size):
-		if is_land[i] != 0:
-			acc_vals.append(flow_accum[i])
-	acc_vals.sort()
-	var thr_idx: int = clamp(int(floor(float(acc_vals.size() - 1) * percentile)), 0, max(0, acc_vals.size() - 1))
-	var thr: float = 4.0
-	if acc_vals.size() > 0:
-		thr = max(4.0, float(acc_vals[thr_idx]))
+	# GPU-only: caller provides absolute threshold; avoid CPU percentile sort.
+	var thr: float = max(0.0, threshold)
 
 	# Buffers: inputs
 	var buf_acc := _rd.storage_buffer_create(flow_accum.to_byte_array().size(), flow_accum.to_byte_array())
@@ -484,11 +450,11 @@ func trace_rivers_roi(
 		var pc_c := PackedByteArray(); pc_c.append_array(PackedInt32Array([size]).to_byte_array())
 		var pad_c := (16 - (pc_c.size() % 16)) % 16
 		if pad_c > 0: var zc := PackedByteArray(); zc.resize(pad_c); pc_c.append_array(zc)
-		var clc := _rd.compute_list_begin()
-		_rd.compute_list_bind_compute_pipeline(clc, _clear_pipeline)
-		_rd.compute_list_bind_uniform_set(clc, u_set_c, 0)
-		_rd.compute_list_set_push_constant(clc, pc_c, pc_c.size())
-		_rd.compute_list_dispatch(clc, g1d, 1, 1)
+		var clear_list := _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(clear_list, _clear_pipeline)
+		_rd.compute_list_bind_uniform_set(clear_list, u_set_c, 0)
+		_rd.compute_list_set_push_constant(clear_list, pc_c, pc_c.size())
+		_rd.compute_list_dispatch(clear_list, g1d, 1, 1)
 		_rd.compute_list_end()
 
 	# Read back rivers

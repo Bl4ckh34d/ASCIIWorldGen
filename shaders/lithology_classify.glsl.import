@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cfcufnhhqv5rv"
+path="res://.godot/imported/lithology_classify.glsl-f08add252e353ddcc4af1ccb557027d4.res"
+
+[deps]
+
+source_file="res://shaders/lithology_classify.glsl"
+dest_files=["res://.godot/imported/lithology_classify.glsl-f08add252e353ddcc4af1ccb557027d4.res"]
+
+[params]
+

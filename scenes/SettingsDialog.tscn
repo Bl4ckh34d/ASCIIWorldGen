@@ -150,11 +150,11 @@ max_value = 0.5
 step = 0.01
 value = 0.12
 
-[node name="GPUAllLabel" type="Label" parent="VBox/Tabs/General/Grid"]
-text = "GPU Compute (All)"
+[node name="BedrockViewLabel" type="Label" parent="VBox/Tabs/General/Grid"]
+text = "Show Bedrock"
 
-[node name="GPUAll" type="CheckBox" parent="VBox/Tabs/General/Grid"]
-button_pressed = true
+[node name="BedrockView" type="CheckBox" parent="VBox/Tabs/General/Grid"]
+button_pressed = false
 text = "Enable"
 
 

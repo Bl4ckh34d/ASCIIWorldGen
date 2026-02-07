@@ -213,9 +213,11 @@ func update_world_data(
 	moisture_data: PackedFloat32Array,
 	light_data: PackedFloat32Array,
 	biome_data: PackedInt32Array,
+	rock_data: PackedInt32Array,
 	is_land_data: PackedByteArray,
 	beach_mask: PackedByteArray,
 	rng_seed: int,
+	use_bedrock_view: bool = false,
 	turquoise_strength: PackedFloat32Array = PackedFloat32Array(),
 	shelf_noise: PackedFloat32Array = PackedFloat32Array(),
 	clouds: PackedFloat32Array = PackedFloat32Array(),
@@ -235,11 +237,12 @@ func update_world_data(
 		# debug removed
 		return
 	
-	# Update texture manager
+	# Always call into texture_manager so lightweight resources (notably the color
+	# palette texture) stay valid in GPU-only mode when base/aux texture packing is skipped.
 	texture_manager.update_world_data(
 		map_width, map_height,
 		height_data, temperature_data, moisture_data, light_data,
-		biome_data, is_land_data, beach_mask, rng_seed,
+		biome_data, rock_data, is_land_data, beach_mask, rng_seed, use_bedrock_view,
 		turquoise_strength, shelf_noise, clouds, plate_boundary_mask,
 		lake_mask, river_mask, lava_mask, pooled_lake_mask, lake_id, sea_level,
 		skip_base_textures, skip_aux_textures
@@ -255,24 +258,21 @@ func update_world_data(
 		var shader_mat = quad_material as ShaderMaterial
 		shader_mat.set_shader_parameter("debug_mode", 0)
 
-func update_light_data_only(light_data: PackedFloat32Array) -> void:
+func update_light_data_only(_light_data: PackedFloat32Array) -> void:
 	"""Fast update for just lighting (day-night cycle)"""
 	if not is_initialized:
 		return
-	
-	texture_manager.update_light_data_only(light_data)
 	_update_light_uniform()
 
 func update_clouds_only(
-	turquoise_strength: PackedFloat32Array,
-	shelf_noise: PackedFloat32Array,
-	clouds: PackedFloat32Array,
-	plate_boundary_mask: PackedByteArray
+	_turquoise_strength: PackedFloat32Array,
+	_shelf_noise: PackedFloat32Array,
+	_clouds: PackedFloat32Array,
+	_plate_boundary_mask: PackedByteArray
 ) -> void:
 	"""Fast update for just clouds/shelf/turquoise data (texture 3)."""
 	if not is_initialized:
 		return
-	texture_manager.update_clouds_only(map_width, map_height, turquoise_strength, shelf_noise, clouds, plate_boundary_mask)
 	_update_cloud_uniforms()
 
 func set_hover_cell(x: int, y: int) -> void:

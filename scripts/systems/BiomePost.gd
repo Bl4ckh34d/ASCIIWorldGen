@@ -3,7 +3,7 @@ extends RefCounted
 
 const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 
-func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperature: PackedFloat32Array, moisture: PackedFloat32Array, biomes: PackedInt32Array, temp_min_c: float, temp_max_c: float, lava_temp_threshold_c: float, lake_mask: PackedByteArray = PackedByteArray(), pooled_lake: PackedByteArray = PackedByteArray()) -> Dictionary:
+func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperature: PackedFloat32Array, moisture: PackedFloat32Array, biomes: PackedInt32Array, temp_min_c: float, temp_max_c: float, lava_temp_threshold_c: float, lake_mask: PackedByteArray = PackedByteArray(), pooled_lake: PackedByteArray = PackedByteArray(), rock_types: PackedInt32Array = PackedInt32Array()) -> Dictionary:
 	var out_biomes := biomes
 	var lava := PackedByteArray()
 	lava.resize(w * h)
@@ -32,15 +32,21 @@ func apply_overrides_and_lava(w: int, h: int, is_land: PackedByteArray, temperat
 				if m < 0.40:
 					var hot: float = clamp((t_norm - 0.60) * 2.4, 0.0, 1.0)
 					var noise_val: float = n.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
-					var sand_prob: float = clamp(0.25 + 0.6 * hot, 0.0, 0.98)
+					var rock: int = rock_types[i] if i < rock_types.size() else 0
+					var sandy_rock: bool = (rock == 2 or rock == 3 or rock == 5)
+					var sand_bias: float = (0.16 if sandy_rock else -0.08) - 0.18 * hot
+					var sand_prob: float = clamp(0.52 + sand_bias, 0.12, 0.92)
 					out_biomes[i] = BiomeClassifier.Biome.DESERT_SAND if noise_val < sand_prob else BiomeClassifier.Biome.WASTELAND
 				else:
-					if b == BiomeClassifier.Biome.MOUNTAINS or b == BiomeClassifier.Biome.ALPINE or b == BiomeClassifier.Biome.HILLS:
+					if m < 0.46 and (b == BiomeClassifier.Biome.RAINFOREST or b == BiomeClassifier.Biome.TROPICAL_FOREST or b == BiomeClassifier.Biome.TEMPERATE_FOREST or b == BiomeClassifier.Biome.CONIFER_FOREST or b == BiomeClassifier.Biome.BOREAL_FOREST or b == BiomeClassifier.Biome.SWAMP):
+						out_biomes[i] = BiomeClassifier.Biome.SAVANNA
+					elif b == BiomeClassifier.Biome.MOUNTAINS or b == BiomeClassifier.Biome.ALPINE or b == BiomeClassifier.Biome.HILLS:
 						if m < 0.35:
 							out_biomes[i] = BiomeClassifier.Biome.WASTELAND
 						# else keep relief biome
 					else:
-						out_biomes[i] = BiomeClassifier.Biome.STEPPE
+						if m < 0.46:
+							out_biomes[i] = BiomeClassifier.Biome.STEPPE
 			# Cold handling: prefer frozen variants of the underlying biome over Ice Desert
 			if t_c <= t_frozen_c:
 				# Keep mountainous glaciers as is

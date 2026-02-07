@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dfqxy2f01en1r"
+path="res://.godot/imported/tectonic_pinhole_cleanup.glsl-e363dd3de00312eee0c1ce2c7f90b5f6.res"
+
+[deps]
+
+source_file="res://shaders/tectonic_pinhole_cleanup.glsl"
+dest_files=["res://.godot/imported/tectonic_pinhole_cleanup.glsl-e363dd3de00312eee0c1ce2c7f90b5f6.res"]
+
+[params]
+

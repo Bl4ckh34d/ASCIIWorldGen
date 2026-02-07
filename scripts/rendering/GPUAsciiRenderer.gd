@@ -8,7 +8,6 @@ extends Control
 # Rendering components
 var quad_renderer: Control
 var is_gpu_rendering_enabled: bool = true
-var fallback_label: RichTextLabel  # Fallback for compatibility
 
 # Performance monitoring
 var last_render_time_ms: float = 0.0
@@ -32,8 +31,7 @@ func initialize_gpu_rendering(font: Font, font_size: int, width: int, height: in
 		is_gpu_rendering_enabled = true
 		return true
 	else:
-		# debug removed
-		_create_fallback_renderer()
+		push_error("GPU ASCII renderer initialization failed; CPU fallback renderer is disabled.")
 		is_gpu_rendering_enabled = false
 		return false
 
@@ -64,16 +62,6 @@ func _create_gpu_renderer(font: Font, font_size: int, width: int, height: int) -
 	
 	return true
 
-func _create_fallback_renderer() -> void:
-	"""Create fallback RichTextLabel renderer"""
-	
-	fallback_label = RichTextLabel.new()
-	fallback_label.bbcode_enabled = true
-	fallback_label.fit_content = false
-	fallback_label.scroll_active = false
-	fallback_label.anchors_preset = Control.PRESET_FULL_RECT
-	add_child(fallback_label)
-
 func update_ascii_display(
 	_width: int,
 	_height: int,
@@ -82,9 +70,11 @@ func update_ascii_display(
 	moisture_data: PackedFloat32Array,
 	light_data: PackedFloat32Array,
 	biome_data: PackedInt32Array,
+	rock_data: PackedInt32Array,
 	is_land_data: PackedByteArray,
 	beach_mask: PackedByteArray,
 	rng_seed: int,
+	use_bedrock_view: bool = false,
 	turquoise_strength: PackedFloat32Array = PackedFloat32Array(),
 	shelf_noise: PackedFloat32Array = PackedFloat32Array(),
 	clouds: PackedFloat32Array = PackedFloat32Array(),
@@ -95,11 +85,11 @@ func update_ascii_display(
 	pooled_lake_mask: PackedByteArray = PackedByteArray(),
 	lake_id: PackedInt32Array = PackedInt32Array(),
 	sea_level: float = 0.0,
-	fallback_ascii_string: String = "",
+	_fallback_ascii_string: String = "",
 	skip_base_textures: bool = false,
 	skip_aux_textures: bool = false
 ) -> void:
-	"""Update the ASCII display using GPU or fallback rendering"""
+	"""Update the ASCII display using GPU rendering."""
 	
 	var start_time = Time.get_ticks_usec()
 	
@@ -109,18 +99,12 @@ func update_ascii_display(
 		# Use GPU rendering
 		quad_renderer.update_world_data(
 			height_data, temperature_data, moisture_data, light_data,
-			biome_data, is_land_data, beach_mask, rng_seed,
+			biome_data, rock_data, is_land_data, beach_mask, rng_seed, use_bedrock_view,
 			turquoise_strength, shelf_noise, clouds, plate_boundary_mask,
 			lake_mask, river_mask, lava_mask, pooled_lake_mask, lake_id, sea_level,
 			skip_base_textures, skip_aux_textures
 		)
 		
-	else:
-		# Use fallback rendering
-		if fallback_label and fallback_ascii_string.length() > 0:
-			fallback_label.clear()
-			fallback_label.append_text(fallback_ascii_string)
-	
 	# Update performance metrics
 	var end_time = Time.get_ticks_usec()
 	last_render_time_ms = float(end_time - start_time) / 1000.0
@@ -267,26 +251,12 @@ func set_world_data_2_override(tex: Texture2D) -> void:
 		quad_renderer.set_world_data_2_override(tex)
 
 func force_fallback_rendering() -> void:
-	"""Force switch to fallback rendering"""
-	
-	if is_gpu_rendering_enabled:
-		
-		if quad_renderer:
-			quad_renderer.queue_free()
-			quad_renderer = null
-		
-		_create_fallback_renderer()
-		is_gpu_rendering_enabled = false
+	"""GPU-only mode: explicit fallback switching is disabled."""
+	push_warning("force_fallback_rendering() ignored: CPU fallback renderer is disabled.")
 
 func toggle_rendering_mode() -> void:
-	"""Toggle between GPU and fallback rendering (for testing)"""
-	
-	if is_gpu_rendering_enabled:
-		force_fallback_rendering()
-	else:
-		# Try to re-enable GPU rendering
-		# Note: Would need to store initialization parameters
-		pass
+	"""GPU-only mode: keep GPU path active."""
+	push_warning("toggle_rendering_mode() ignored: CPU fallback renderer is disabled.")
 
 func save_debug_data(prefix: String) -> void:
 	"""Save debug data for troubleshooting"""
@@ -338,7 +308,3 @@ func _exit_tree() -> void:
 	if quad_renderer:
 		quad_renderer.queue_free()
 		quad_renderer = null
-	
-	if fallback_label:
-		fallback_label.queue_free()
-		fallback_label = null

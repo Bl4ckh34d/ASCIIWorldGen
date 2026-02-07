@@ -82,15 +82,16 @@ func is_gpu_available() -> bool:
 	return _rd != null and _shader.is_valid() and _pipeline.is_valid()
 
 func classify(w: int, h: int,
-	height: PackedFloat32Array,
-	is_land: PackedByteArray,
-	temperature: PackedFloat32Array,
-	moisture: PackedFloat32Array,
-	beach_mask: PackedByteArray,
-	desert_field: PackedFloat32Array,
-	params: Dictionary,
-	lake_mask: PackedByteArray = PackedByteArray(),
-	river_mask: PackedByteArray = PackedByteArray()) -> PackedInt32Array:
+		height: PackedFloat32Array,
+		is_land: PackedByteArray,
+		temperature: PackedFloat32Array,
+		moisture: PackedFloat32Array,
+		beach_mask: PackedByteArray,
+		desert_field: PackedFloat32Array,
+		params: Dictionary,
+		fertility: PackedFloat32Array = PackedFloat32Array(),
+		_lake_mask: PackedByteArray = PackedByteArray(),
+		_river_mask: PackedByteArray = PackedByteArray()) -> PackedInt32Array:
 	_ensure()
 	if not _pipeline.is_valid():
 		return PackedInt32Array()
@@ -115,16 +116,15 @@ func classify(w: int, h: int,
 		# create minimal buffer when not used to satisfy binding
 		var dummy := PackedFloat32Array(); dummy.resize(1)
 		buf_desert = _rd.storage_buffer_create(dummy.to_byte_array().size(), dummy.to_byte_array())
+	var fert_use := fertility
+	if fert_use.size() != size:
+		fert_use = PackedFloat32Array()
+		fert_use.resize(size)
+		fert_use.fill(0.5)
+	var buf_fert := _rd.storage_buffer_create(fert_use.to_byte_array().size(), fert_use.to_byte_array())
 	# Output
 	var out_biomes := PackedInt32Array(); out_biomes.resize(size)
 	var buf_out := _rd.storage_buffer_create(out_biomes.to_byte_array().size(), out_biomes.to_byte_array())
-	# Optional hydro masks (lakes/rivers)
-	var lake_u32 := PackedInt32Array(); lake_u32.resize(size)
-	for i_l in range(size): lake_u32[i_l] = 1 if (i_l < lake_mask.size() and lake_mask[i_l] != 0) else 0
-	var buf_lake := _rd.storage_buffer_create(lake_u32.to_byte_array().size(), lake_u32.to_byte_array())
-	var river_u32 := PackedInt32Array(); river_u32.resize(size)
-	for i_r in range(size): river_u32[i_r] = 1 if (i_r < river_mask.size() and river_mask[i_r] != 0) else 0
-	var buf_river := _rd.storage_buffer_create(river_u32.to_byte_array().size(), river_u32.to_byte_array())
 
 	# Uniform set
 	var uniforms: Array = []
@@ -136,9 +136,11 @@ func classify(w: int, h: int,
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_beach); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(buf_desert); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(buf_out); uniforms.append(u)
-	# New optional inputs
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(buf_lake); uniforms.append(u)
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 8; u.add_id(buf_river); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(buf_fert); uniforms.append(u)
+	# Keep a dummy extra binding for compatibility with older layouts.
+	var dummy := PackedInt32Array(); dummy.resize(1)
+	var dummy_buf := _rd.storage_buffer_create(dummy.to_byte_array().size(), dummy.to_byte_array())
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 8; u.add_id(dummy_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 
 	# Push constants
@@ -279,9 +281,9 @@ func classify(w: int, h: int,
 	_rd.free_rid(buf_m)
 	_rd.free_rid(buf_beach)
 	_rd.free_rid(buf_desert)
+	_rd.free_rid(buf_fert)
 	_rd.free_rid(buf_out)
-	_rd.free_rid(buf_lake)
-	_rd.free_rid(buf_river)
+	_rd.free_rid(dummy_buf)
 
 	return biomes
 
@@ -292,6 +294,7 @@ func classify_to_buffer(w: int, h: int,
 		moist_buf: RID,
 		beach_buf: RID,
 		desert_buf: RID,
+		fertility_buf: RID,
 		params: Dictionary,
 		out_biome_buf: RID) -> bool:
 	_ensure()
@@ -307,6 +310,13 @@ func classify_to_buffer(w: int, h: int,
 	if not use_desert:
 		var dummy_f := PackedFloat32Array(); dummy_f.resize(1)
 		desert_buf_use = _rd.storage_buffer_create(dummy_f.to_byte_array().size(), dummy_f.to_byte_array())
+	var use_fertility: bool = fertility_buf.is_valid()
+	var fertility_buf_use: RID = fertility_buf
+	if not use_fertility:
+		var fert_default := PackedFloat32Array()
+		fert_default.resize(size)
+		fert_default.fill(0.5)
+		fertility_buf_use = _rd.storage_buffer_create(fert_default.to_byte_array().size(), fert_default.to_byte_array())
 	var uniforms: Array = []
 	var u: RDUniform
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(height_buf); uniforms.append(u)
@@ -316,10 +326,10 @@ func classify_to_buffer(w: int, h: int,
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(beach_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(desert_buf_use); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(out_biome_buf); uniforms.append(u)
-	# Bind dummy buffers for unused lake/river slots to satisfy layout (not used in shader)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(fertility_buf_use); uniforms.append(u)
+	# Bind dummy buffer for compatibility with layout slot 8.
 	var dummy := PackedInt32Array(); dummy.resize(1)
 	var dummy_buf := _rd.storage_buffer_create(dummy.to_byte_array().size(), dummy.to_byte_array())
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(dummy_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 8; u.add_id(dummy_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 	var pc := PackedByteArray()
@@ -366,6 +376,8 @@ func classify_to_buffer(w: int, h: int,
 	_rd.free_rid(dummy_buf)
 	if not use_desert:
 		_rd.free_rid(desert_buf_use)
+	if not use_fertility:
+		_rd.free_rid(fertility_buf_use)
 	return true
 
 func reapply_cryosphere_to_buffer(

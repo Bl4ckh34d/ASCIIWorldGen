@@ -86,13 +86,17 @@ void main() {
     // For GPU parity, keep sensitivity smaller to reduce visual jumps.
     float rel_elev = max(0.0, Height.height_data[i] - 0.0);
     float elev_cool = clamp(rel_elev * 0.6, 0.0, 1.0);
-    float zonal = 0.5 + 0.5 * sin(6.28318 * float(y) / float(H) * 3.0);
+    // Keep only a gentle zonal modulation to avoid artificial latitude striping.
+    float zonal = 0.5 + 0.5 * sin(6.28318 * (float(y) / float(H) + 0.11));
     float u = 1.0 - lat;
     float t_lat = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6);
     bool land_px = (IsLand.is_land_data[i] != 0u);
     float lat_amp = land_px ? 1.0 : 0.82; // damp lat gradient over ocean
-    // Build temperature components
-    float t_base = t_lat * 0.82 * lat_amp + zonal * 0.15 - elev_cool * 0.9;
+
+    float local_time_solar = fract(PC.time_of_day + float(x) / float(max(1, W)));
+    // Keep baseline climate zone logic latitude-driven (cold poles / warm equator),
+    // with only limited day/night modulation applied later.
+    float t_base = t_lat * 0.82 * lat_amp + zonal * 0.06 - elev_cool * 0.9;
     float t_noise = 0.18 * TempNoise.temp_noise_data[i];
     float t_raw = t_base + t_noise;
 
@@ -104,15 +108,15 @@ void main() {
     float amp_lat = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat, 1.2));
     float cont_amp = land_px ? (0.2 + 0.8 * dc_norm) : 0.0;
     float amp_cont = mix(PC.season_ocean_damp, 1.0, cont_amp);
-    // Hemispheric inversion: southern hemisphere is +0.5 phase shift
-    float phase_h = PC.season_phase + (lat_norm_signed < 0.0 ? 0.5 : 0.0);
-    phase_h = fract(phase_h);
-    float season = amp_lat * amp_cont * cos(6.28318 * phase_h);
+    // Smooth hemispheric opposition with equatorial fade avoids hard equator cuts.
+    float hemi = clamp(lat_norm_signed * 2.0, -1.0, 1.0);
+    float equator_fade = smoothstep(0.03, 0.20, lat);
+    float season = amp_lat * amp_cont * cos(6.28318 * PC.season_phase) * hemi * equator_fade;
     // Diurnal term: latitude and ocean damped
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat, 1.2));
     float amp_cont_d = land_px ? 1.0 : PC.diurnal_ocean_damp;
-    float local_time = fract(PC.time_of_day + float(x) / float(max(1, W)));
-    float diurnal = amp_lat_d * amp_cont_d * cos(6.28318 * local_time);
+    float local_time = local_time_solar;
+    float diurnal = amp_lat_d * amp_cont_d * cos(6.28318 * local_time) * 0.28;
     t = clamp01(t + season + diurnal);
     // FIXED: Reduce extreme temperature scaling to prevent lava everywhere
     // Apply gentler temperature transformation to avoid extreme artifacts
@@ -141,8 +145,8 @@ void main() {
                         float t_lat2 = 0.65 * pow(u2, 0.8) + 0.35 * pow(u2, 1.6);
                         float rel_elev2 = max(0.0, Height.height_data[j] - PC.sea_level);
                         float elev_cool2 = clamp(rel_elev2 * 1.2, 0.0, 1.0);
-                        float zonal2 = 0.5 + 0.5 * sin(6.28318 * float(ny) / float(H) * 3.0);
-                        float t_base2 = t_lat2 * 0.82 + zonal2 * 0.15 - elev_cool2 * 0.9;
+                        float zonal2 = 0.5 + 0.5 * sin(6.28318 * (float(ny) / float(H) + 0.11));
+                        float t_base2 = t_lat2 * 0.82 + zonal2 * 0.06 - elev_cool2 * 0.9;
                         float t_noise2 = 0.18 * TempNoise.temp_noise_data[j];
                         float t_raw2 = t_base2 + t_noise2;
                         float dc2 = clamp(Dist.dist_data[j] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
@@ -152,9 +156,9 @@ void main() {
                         float cont_amp2 = 1.0; // neighbor is land by construction here
                         float amp_cont2 = mix(PC.season_ocean_damp, 1.0, cont_amp2);
                         float lat_norm_signed2 = 0.5 - (float(ny) / max(1.0, float(H) - 1.0));
-                        float phase_h2 = PC.season_phase + (lat_norm_signed2 < 0.0 ? 0.5 : 0.0);
-                        phase_h2 = fract(phase_h2);
-                        float season2 = amp_lat2 * amp_cont2 * cos(6.28318 * phase_h2);
+                        float hemi2 = clamp(lat_norm_signed2 * 2.0, -1.0, 1.0);
+                        float equator_fade2 = smoothstep(0.03, 0.20, lat2);
+                        float season2 = amp_lat2 * amp_cont2 * cos(6.28318 * PC.season_phase) * hemi2 * equator_fade2;
                         t2 = clamp01(t2 + season2);
                         // Apply same temperature bounds to shore calculations
                         float temp_offset2 = clamp(PC.temp_base_offset, -0.3, 0.3);
@@ -173,7 +177,7 @@ void main() {
         }
     }
 
-    float m_base = 0.5 + 0.3 * sin(6.28318 * float(y) / float(H) * 3.0);
+    float m_base = 0.5 + 0.16 * sin(6.28318 * (float(y) / float(H) * 1.4 + 0.17));
     float m_noise = 0.3 * sample_bilinear_moist(W, H, float(x) * PC.noise_x_scale + 100.0, float(y) * PC.noise_x_scale - 50.0);
     float adv_u = FlowU.flow_u_data[i];
     float adv_v = FlowV.flow_v_data[i];

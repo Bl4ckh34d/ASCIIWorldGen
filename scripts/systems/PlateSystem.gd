@@ -7,19 +7,27 @@ extends RefCounted
 const DistanceTransformCompute = preload("res://scripts/systems/DistanceTransformCompute.gd")
 const ContinentalShelfCompute = preload("res://scripts/systems/ContinentalShelfCompute.gd")
 const PlateUpdateCompute = preload("res://scripts/systems/PlateUpdateCompute.gd")
+const PlateFieldAdvectionCompute = preload("res://scripts/systems/PlateFieldAdvectionCompute.gd")
+const TectonicPinholeCleanupCompute = preload("res://scripts/systems/TectonicPinholeCleanupCompute.gd")
+const CPU_MIRROR_MAX_CELLS: int = 250000
 
 var generator: Object = null
 
 # Configuration
 var num_plates: int = 12
-var uplift_rate_per_day: float = 0.002  # normalized height units per day at convergent boundaries
-var ridge_rate_per_day: float = 0.0008  # divergent ridges (lower than convergent)
-var subsidence_rate_per_day: float = 0.001 # legacy divergence sink
+var uplift_rate_per_day: float = 0.0012  # lower convergent uplift to avoid ridge-dominated worlds
+var ridge_rate_per_day: float = 0.0005  # divergent ridges are secondary to extensional subsidence
+var subsidence_rate_per_day: float = 0.0016 # legacy divergence sink
 var transform_roughness_per_day: float = 0.0004
-var subduction_rate_per_day: float = 0.0016
-var trench_rate_per_day: float = 0.0012
+var subduction_rate_per_day: float = 0.0018
+var trench_rate_per_day: float = 0.0022
 var drift_cells_per_day: float = 0.02
 var boundary_band_cells: int = 3
+var pinhole_cleanup_enabled: bool = true
+var pinhole_min_land_neighbors: int = 8
+var pinhole_min_boundary_neighbors: int = 2
+var pinhole_uplift_amount: float = 0.0035
+var pinhole_max_depth: float = 0.018
 
 # State
 var plate_site_x: PackedInt32Array = PackedInt32Array()
@@ -42,6 +50,9 @@ var _noise: FastNoiseLite
 var _boundary_noise: FastNoiseLite
 var _gpu_update: Object = null
 var _land_mask_compute: Object = null
+var _field_advection_compute: Object = null
+var _pinhole_cleanup_compute: Object = null
+var _cpu_sync_counter: int = 0
 
 func initialize(gen: Object) -> void:
 	generator = gen
@@ -58,6 +69,8 @@ func initialize(gen: Object) -> void:
 	_dtc = DistanceTransformCompute.new()
 	_shelf = ContinentalShelfCompute.new()
 	_land_mask_compute = load("res://scripts/systems/LandMaskCompute.gd").new()
+	_field_advection_compute = PlateFieldAdvectionCompute.new()
+	_pinhole_cleanup_compute = TectonicPinholeCleanupCompute.new()
 
 func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null:
@@ -73,14 +86,17 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	# Prefer GPU update if pipeline available
 	if _gpu_update == null:
 		_gpu_update = PlateUpdateCompute.new()
-	var use_gpu_only: bool = ("config" in generator and generator.config.use_gpu_all)
 	var gpu_ok: bool = false
-	if use_gpu_only and "ensure_persistent_buffers" in generator:
+	if "ensure_persistent_buffers" in generator:
 		generator.ensure_persistent_buffers(false)
 		var height_buf: RID = generator.get_persistent_buffer("height")
 		var height_tmp: RID = generator.get_persistent_buffer("height_tmp")
 		var plate_buf: RID = generator.get_persistent_buffer("plate_id")
 		var boundary_buf: RID = generator.get_persistent_buffer("plate_boundary")
+		var biome_buf: RID = generator.get_persistent_buffer("biome_id")
+		var rock_buf: RID = generator.get_persistent_buffer("rock_type")
+		var field_tmp_buf: RID = generator.get_persistent_buffer("biome_tmp")
+		var lava_buf: RID = generator.get_persistent_buffer("lava")
 		if height_buf.is_valid() and height_tmp.is_valid() and plate_buf.is_valid() and boundary_buf.is_valid():
 			gpu_ok = _gpu_update.apply_gpu_buffers(
 				w, h,
@@ -116,6 +132,65 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 					var land_buf: RID = generator.get_persistent_buffer("is_land")
 					if land_buf.is_valid():
 						_land_mask_compute.update_from_height(w, h, height_buf, generator.config.sea_level, land_buf)
+						if pinhole_cleanup_enabled and lava_buf.is_valid():
+							if _pinhole_cleanup_compute == null:
+								_pinhole_cleanup_compute = TectonicPinholeCleanupCompute.new()
+							var sim_days_seed: int = 0
+							if world != null and "simulation_time_days" in world:
+								sim_days_seed = int(world.simulation_time_days)
+							_pinhole_cleanup_compute.cleanup_gpu_buffers(
+								w,
+								h,
+								height_buf,
+								land_buf,
+								boundary_buf,
+								lava_buf,
+								float(generator.config.sea_level),
+								pinhole_uplift_amount,
+								pinhole_max_depth,
+								pinhole_min_land_neighbors,
+								pinhole_min_boundary_neighbors,
+								int(generator.config.rng_seed) ^ sim_days_seed
+							)
+				# Advect plate-bound categorical fields so biomes/lithology move with plate drift.
+				if field_tmp_buf.is_valid():
+					if _field_advection_compute == null:
+						_field_advection_compute = PlateFieldAdvectionCompute.new()
+					if biome_buf.is_valid() and _field_advection_compute.advect_i32_gpu_buffers(
+						w,
+						h,
+						biome_buf,
+						plate_buf,
+						plate_vel_u,
+						plate_vel_v,
+						dt_days,
+						drift_cells_per_day,
+						field_tmp_buf
+					):
+						generator._flow_compute._dispatch_copy_u32(field_tmp_buf, biome_buf, w * h)
+					if rock_buf.is_valid() and _field_advection_compute.advect_i32_gpu_buffers(
+						w,
+						h,
+						rock_buf,
+						plate_buf,
+						plate_vel_u,
+						plate_vel_v,
+						dt_days,
+						drift_cells_per_day,
+						field_tmp_buf
+					):
+						generator._flow_compute._dispatch_copy_u32(field_tmp_buf, rock_buf, w * h)
+					# Keep CPU mirrors coherent for systems/UI paths that still read arrays.
+					var sync_size: int = w * h
+					if "read_persistent_buffer" in generator and _should_sync_cpu_mirror(world, sync_size):
+						var biome_bytes: PackedByteArray = generator.read_persistent_buffer("biome_id")
+						var biome_i32: PackedInt32Array = biome_bytes.to_int32_array()
+						if biome_i32.size() == sync_size and "last_biomes" in generator:
+							generator.last_biomes = biome_i32
+						var rock_bytes: PackedByteArray = generator.read_persistent_buffer("rock_type")
+						var rock_i32: PackedInt32Array = rock_bytes.to_int32_array()
+						if rock_i32.size() == sync_size and "last_rock_type" in generator:
+							generator.last_rock_type = rock_i32
 	if not gpu_ok:
 		return {}
 	# Expose boundary mask to generator for volcanism coupling
@@ -137,7 +212,29 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			generator.tectonic_stats = {}
 		generator.tectonic_stats["boundary_cells"] = boundary_count
 		generator.tectonic_stats["total_plates"] = num_plates
-	return {"dirty_fields": PackedStringArray(["height", "is_land", "shelf"]), "boundary_count": boundary_count}
+	return {"dirty_fields": PackedStringArray(["height", "is_land", "lava", "shelf", "biome_id", "rock_type"]), "boundary_count": boundary_count}
+
+func _should_sync_cpu_mirror(world: Object, size: int) -> bool:
+	if size <= 0 or size > CPU_MIRROR_MAX_CELLS:
+		return false
+	var ts: float = 1.0
+	if world != null and "time_scale" in world:
+		ts = max(1.0, float(world.time_scale))
+	var interval: int = 1
+	if ts >= 100000.0:
+		interval = 160
+	elif ts >= 10000.0:
+		interval = 80
+	elif ts >= 1000.0:
+		interval = 32
+	elif ts >= 100.0:
+		interval = 12
+	elif ts >= 10.0:
+		interval = 4
+	_cpu_sync_counter += 1
+	if _cpu_sync_counter <= 1:
+		return true
+	return (_cpu_sync_counter % max(1, interval)) == 0
 
 func _build_plates() -> void:
 	if generator == null:
@@ -159,7 +256,7 @@ func _build_plates() -> void:
 	plate_turn_freq_cycles_per_day.resize(n)
 	plate_turn_phase.resize(n)
 	var guaranteed_large_idx: int = rng.randi_range(0, max(0, n - 1))
-	var half_span: int = max(1, int(n / 2))
+	var half_span: int = max(1, int(floor(float(n) * 0.5)))
 	var guaranteed_small_idx: int = (guaranteed_large_idx + half_span) % max(1, n)
 	for p in range(n):
 		plate_site_x[p] = rng.randi_range(0, max(0, w - 1))
@@ -197,17 +294,17 @@ func _build_plates() -> void:
 		plate_vel_u[p] = u
 		plate_vel_v[p] = v
 		# Per-plate drift-direction evolution profile.
-		# Fast outliers change direction noticeably sooner than slow, stable plates.
-		var fast_turner: bool = rng.randf() < 0.22
-		var bias_mag: float = rng.randf_range(4.0e-7, 4.0e-6)
-		var amp_mag: float = rng.randf_range(1.0e-6, 1.2e-5)
+		# Geologic-scale cadence: mostly slow turners, with rare moderate outliers.
+		var fast_turner: bool = rng.randf() < 0.08
+		var bias_mag: float = rng.randf_range(6.0e-10, 7.0e-9)
+		var amp_mag: float = rng.randf_range(1.2e-9, 1.2e-8)
 		if fast_turner:
-			bias_mag *= rng.randf_range(1.6, 3.2)
-			amp_mag *= rng.randf_range(1.7, 3.4)
+			bias_mag *= rng.randf_range(1.4, 2.2)
+			amp_mag *= rng.randf_range(1.5, 2.4)
 		plate_turn_bias_rad_per_day[p] = bias_mag * (-1.0 if rng.randf() < 0.5 else 1.0)
 		plate_turn_amp_rad_per_day[p] = amp_mag * (-1.0 if rng.randf() < 0.5 else 1.0)
-		# Period range: ~35 to ~500 years (in sim-days) with plate-specific phase.
-		plate_turn_freq_cycles_per_day[p] = rng.randf_range(1.0 / 180000.0, 1.0 / 13000.0)
+		# Period range: ~5k to ~50k years (in sim-days) with plate-specific phase.
+		plate_turn_freq_cycles_per_day[p] = rng.randf_range(1.0 / 18250000.0, 1.0 / 1825000.0)
 		plate_turn_phase[p] = rng.randf_range(-PI, PI)
 	cell_plate_id.resize(size)
 	boundary_mask.resize(size)
@@ -217,7 +314,7 @@ func _build_plates() -> void:
 	# GPU Voronoi + boundary mask
 	if _gpu_update == null:
 		_gpu_update = PlateUpdateCompute.new()
-	var seed: int = (int(generator.config.rng_seed) ^ 0x6A09E667)
+	var plate_seed: int = (int(generator.config.rng_seed) ^ 0x6A09E667)
 	# Stronger, multi-scale warp to avoid straight Voronoi-looking plate seams.
 	var warp_strength_cells: float = clamp(float(min(w, h)) * 0.12, 8.0, 28.0)
 	var warp_frequency: float = 0.010
@@ -228,7 +325,7 @@ func _build_plates() -> void:
 		plate_site_x,
 		plate_site_y,
 		plate_site_weight,
-		seed,
+		plate_seed,
 		warp_strength_cells,
 		warp_frequency,
 		lat_anisotropy
@@ -305,7 +402,7 @@ func _update_plate_direction(dt_days: float, world: Object) -> void:
 		var osc0: float = sin(sim_days * freq * tau + phase)
 		var osc1: float = sin(sim_days * freq * tau * 0.47 + phase * 1.83)
 		var turn_rate: float = plate_turn_bias_rad_per_day[p] + plate_turn_amp_rad_per_day[p] * (0.70 * osc0 + 0.30 * osc1)
-		var dtheta: float = clamp(turn_rate * dt_days, -0.28, 0.28)
+		var dtheta: float = clamp(turn_rate * dt_days, -0.05, 0.05)
 		if abs(dtheta) <= 1.0e-9:
 			continue
 		var cs: float = cos(dtheta)
@@ -410,10 +507,12 @@ func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 			var approach: float = -(rel_u * dirx + rel_v * diry) # positive when converging
 			var uplift: float = 0.0
 			if approach > 0.1:
-				uplift = uplift_rate_per_day * dt_days * approach
+				uplift = uplift_rate_per_day * dt_days * approach * 0.72
 			elif approach < -0.1:
-				# divergent: ridge uplift smaller + subsidence around
-				uplift = ridge_rate_per_day * dt_days * (-approach)
+				# divergent: extensional lowering dominates ridge construction
+				var div: float = (-approach) - 0.1
+				uplift = ridge_rate_per_day * dt_days * div * 0.35
+				uplift -= trench_rate_per_day * dt_days * div * 0.75
 			else:
 				# transform shear roughness
 				uplift = transform_roughness_per_day * dt_days * (_noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5 - 0.5)
@@ -451,8 +550,8 @@ func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 			if pid_r != pid2: div_score -= (plate_vel_u[pid2] - plate_vel_u[pid_r])
 			if pid_t != pid2: div_score += (plate_vel_v[pid2] - plate_vel_v[pid_t])
 			if pid_b != pid2: div_score -= (plate_vel_v[pid2] - plate_vel_v[pid_b])
-			if div_score > 0.8:
-				heights[i2] = clamp(heights[i2] - subsidence_rate_per_day * dt_days * min(2.0, div_score), -1.0, 2.0)
+			if div_score > 1.2:
+				heights[i2] = clamp(heights[i2] - subsidence_rate_per_day * dt_days * min(1.6, div_score) * 0.45, -1.0, 2.0)
 	# Commit height changes
 	generator.last_height = heights
 	generator.last_height_final = heights

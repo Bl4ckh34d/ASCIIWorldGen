@@ -44,11 +44,12 @@ func evaluate(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArr
 			# Apply elevation cooling above an anchored baseline (mean land height) to avoid global shifts with sea slider
 			var rel_elev: float = max(0.0, height[i] - _anchored_baseline)
 			var elev_cool: float = clamp(rel_elev * 1.2, 0.0, 1.0)
-			var zonal: float = 0.5 + 0.5 * sin(6.28318 * float(y) / float(h) * 3.0)
+			# Gentle zonal modulation only (avoid hard latitude striping).
+			var zonal: float = 0.5 + 0.5 * sin(6.28318 * (float(y) / float(h) + 0.11))
 			var u: float = 1.0 - lat
 			var t_lat: float = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6)
 			# Build temperature components
-			var t_base: float = t_lat * 0.82 + zonal * 0.15 - elev_cool * 0.9
+			var t_base: float = t_lat * 0.82 + zonal * 0.06 - elev_cool * 0.9
 			var t_noise: float = 0.18 * temp_noise.get_noise_2d(x * xscale, y_scaled)
 			var t_raw: float = t_base + t_noise
 			# Continentality scales deviation around baseline (latitude/elevation/zonal), not global midpoint
@@ -63,10 +64,13 @@ func evaluate(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArr
 			var amp_lat: float = lerp(season_amp_equator, season_amp_pole, pow(lat, 1.2))
 			var cont_amp: float = 0.2 + 0.8 * dc
 			var amp_cont: float = lerp(season_ocean_damp, 1.0, cont_amp)
-			var season: float = amp_lat * amp_cont * cos(6.28318 * season_phase)
+			var lat_signed: float = 0.5 - (float(y) / max(1.0, float(h) - 1.0))
+			var hemi: float = clamp(lat_signed * 2.0, -1.0, 1.0)
+			var equator_fade: float = _smoothstep(0.03, 0.20, lat)
+			var season: float = amp_lat * amp_cont * cos(6.28318 * season_phase) * hemi * equator_fade
 			t = clamp(t + season, 0.0, 1.0)
 			t = clamp((t + temp_base_offset - 0.5) * temp_scale + 0.5, 0.0, 1.0)
-			var m_base: float = 0.5 + 0.3 * sin(6.28318 * float(y) / float(h) * 3.0)
+			var m_base: float = 0.5 + 0.16 * sin(6.28318 * (float(y) / float(h) * 1.4 + 0.17))
 			var m_noise: float = 0.3 * moist_noise.get_noise_2d(x * xscale + 100.0, y_scaled - 50.0)
 			var adv_u: float = flow_u.get_noise_2d(x * 0.5 * xscale, y_scaled * 0.5)
 			var adv_v: float = flow_v.get_noise_2d((x * xscale + 1000.0) * 0.5, (y_scaled - 777.0) * 0.5)

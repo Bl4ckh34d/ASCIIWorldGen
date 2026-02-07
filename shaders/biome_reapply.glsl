@@ -110,10 +110,10 @@ void main(){
     if (!is_land){
         // Ocean: strong seasonal edge motion in temperate belts, persistent ice near poles.
         float freeze_threshold_c = PC.ocean_ice_base_thresh_c + wig_local * PC.ocean_ice_wiggle_amp_c;
-        freeze_threshold_c += temperate * 1.8;
-        freeze_threshold_c += polar * 0.8;
-        freeze_threshold_c -= equator * 9.0;
-        float ocean_hysteresis_c = mix(2.4, 4.2, polar);
+        freeze_threshold_c += temperate * 0.8;
+        freeze_threshold_c += polar * 1.2;
+        freeze_threshold_c -= equator * 3.0;
+        float ocean_hysteresis_c = mix(2.0, 3.6, polar);
         ocean_hysteresis_c = mix(ocean_hysteresis_c, 2.0, temperate);
         float thaw_threshold_c = freeze_threshold_c + ocean_hysteresis_c;
         if (b == BIOME_ICE_SHEET) {
@@ -133,10 +133,10 @@ void main(){
     }
 
     // Land: strongest seasonal glacier movement in temperate-continental regions.
-    float elev_form_c = GLACIER_ELEV_FORM_C + temperate_cont * 1.3 + polar * 0.8 - equator * 6.0;
-    float elev_hold_c = GLACIER_ELEV_HOLD_C - temperate_cont * 1.6 + polar * 0.4 - equator * 7.0;
-    float deep_form_c = GLACIER_DEEP_FORM_C + temperate * 1.5 + polar * 1.0 - equator * 5.0;
-    float deep_hold_c = GLACIER_DEEP_HOLD_C - temperate * 1.2 + polar * 0.5 - equator * 4.0;
+    float elev_form_c = GLACIER_ELEV_FORM_C + temperate_cont * 0.9 + polar * 1.3 - equator * 2.2;
+    float elev_hold_c = GLACIER_ELEV_HOLD_C - temperate_cont * 1.0 + polar * 0.7 - equator * 2.8;
+    float deep_form_c = GLACIER_DEEP_FORM_C + temperate * 1.0 + polar * 1.2 - equator * 2.0;
+    float deep_hold_c = GLACIER_DEEP_HOLD_C - temperate * 0.9 + polar * 0.6 - equator * 1.6;
     float elev_form_m = GLACIER_ELEV_FORM_MOIST + equator * 0.06;
     float elev_hold_m = GLACIER_ELEV_HOLD_MOIST + equator * 0.08 + temperate_cont * 0.02;
     float deep_form_m = GLACIER_DEEP_FORM_MOIST + equator * 0.05;

@@ -61,7 +61,10 @@ func _ensure_texture(w: int, h: int) -> void:
 		_tex.set_texture_rd(_tex_rid)
 	else:
 		_tex = null
-		push_warning("Texture2DRD has no RD texture setter; falling back to CPU textures.")
+		if _tex_rid.is_valid():
+			_rd.free_rid(_tex_rid)
+		_tex_rid = RID()
+		push_error("Texture2DRD has no RD texture setter; GPU-only mode disables CPU texture fallback.")
 
 func update_from_buffers(w: int, h: int, biome_buf: RID, land_buf: RID, beach_buf: RID) -> Texture2D:
 	_ensure_pipeline()

@@ -12,6 +12,7 @@ layout(std430, set = 0, binding = 3) buffer MoistBuf { float moist_norm[]; } Moi
 layout(std430, set = 0, binding = 4) buffer BeachBuf { uint beach_mask[]; } Beach;
 layout(std430, set = 0, binding = 5) buffer DesertFieldBuf { float desert_field[]; } DesertField; // optional (0..1)
 layout(std430, set = 0, binding = 6) buffer OutBiomeBuf { int out_biome[]; } Out;
+layout(std430, set = 0, binding = 7) readonly buffer FertilityBuf { float fertility[]; } Fertility;
 
 layout(push_constant) uniform Params {
     int width;
@@ -78,6 +79,7 @@ void main() {
 
     float t_norm = clamp01(Temp.temp_norm[i]);
     float m = clamp01(Moist.moist_norm[i]);
+    float f = clamp01(Fertility.fertility[i]);
     float elev = Height.height_data[i];
     bool is_land = (IsLand.is_land_data[i] != 0u);
     bool is_beach = (Beach.beach_mask[i] != 0u);
@@ -108,7 +110,12 @@ void main() {
     float m_eff = clamp01(mix(m_j, m_nb, island_mix));
     // reduce moisture at higher elevations to reflect orographic dryness
     m_eff = clamp01(m_eff * (1.0 - PC.moist_elev_dry_factor * clamp01(elev)));
-    m = m_eff;
+    // Fertile substrate improves vegetation retention; infertile substrate dries out quickly.
+    float fert_moist_bonus = (f - 0.5) * 0.26;
+    float fert_hot_penalty = clamp((t_c0 - 28.0) / 24.0, 0.0, 1.0) * clamp((0.55 - f) * 1.8, 0.0, 1.0) * 0.14;
+    m = clamp01(m_eff + fert_moist_bonus - fert_hot_penalty);
+    float wood_penalty = clamp((0.58 - f) * 0.42, 0.0, 0.28);
+    float m_forest = clamp01(m - wood_penalty);
     float elev_m = elev * PC.height_scale_m;
     float t_c_adj = t_c0 - PC.lapse_c_per_km * (elev_m / 1000.0);
 
@@ -148,13 +155,13 @@ void main() {
     if (elev_j >= 0.87) { Out.out_biome[i] = BIOME_FOOTHILLS; return; }       // next ~7% with jittered edges
     if (elev_j >= 0.78) {
         // Forest overrides hills: check forests before returning hills
-        if (t_c0 <= 8.0 && m >= 0.50) { Out.out_biome[i] = BIOME_BOREAL_FOREST; return; }
+        if (t_c0 <= 8.0 && m_forest >= 0.50) { Out.out_biome[i] = BIOME_BOREAL_FOREST; return; }
         if (t_c0 <= 18.0) {
-            if (m >= 0.60) { Out.out_biome[i] = BIOME_TEMPERATE_FOREST; return; }
-            if (m >= 0.45) { Out.out_biome[i] = BIOME_CONIFER_FOREST; return; }
+            if (m_forest >= 0.60) { Out.out_biome[i] = BIOME_TEMPERATE_FOREST; return; }
+            if (m_forest >= 0.45) { Out.out_biome[i] = BIOME_CONIFER_FOREST; return; }
         }
         if (t_c0 <= 30.0) {
-            if (m >= 0.55) { Out.out_biome[i] = BIOME_RAINFOREST; return; }
+            if (m_forest >= 0.55) { Out.out_biome[i] = BIOME_RAINFOREST; return; }
         }
         Out.out_biome[i] = BIOME_HILLS; return;
     }
@@ -169,20 +176,20 @@ void main() {
         return;
     }
     if (t_c0 <= 8.0) {
-        Out.out_biome[i] = (m >= 0.50) ? BIOME_BOREAL_FOREST : BIOME_STEPPE;
+        Out.out_biome[i] = (m_forest >= 0.50) ? BIOME_BOREAL_FOREST : BIOME_STEPPE;
         return;
     }
     if (t_c0 <= 18.0) {
-        if (m >= 0.60) { Out.out_biome[i] = BIOME_TEMPERATE_FOREST; return; }
-        if (m >= 0.45) { Out.out_biome[i] = BIOME_CONIFER_FOREST; return; }
+        if (m_forest >= 0.60) { Out.out_biome[i] = BIOME_TEMPERATE_FOREST; return; }
+        if (m_forest >= 0.45) { Out.out_biome[i] = BIOME_CONIFER_FOREST; return; }
         if (m >= 0.25) { Out.out_biome[i] = BIOME_GRASSLAND; return; }
         if (m >= 0.20) { Out.out_biome[i] = BIOME_STEPPE; return; }
         Out.out_biome[i] = BIOME_WASTELAND;
         return;
     }
     if (t_c0 <= 30.0) {
-        if (m >= 0.70) { Out.out_biome[i] = BIOME_RAINFOREST; return; }
-        if (m >= 0.55) { Out.out_biome[i] = BIOME_TROPICAL_FOREST; return; }
+        if (m_forest >= 0.70) { Out.out_biome[i] = BIOME_RAINFOREST; return; }
+        if (m_forest >= 0.55) { Out.out_biome[i] = BIOME_TROPICAL_FOREST; return; }
         if (m >= 0.40) { Out.out_biome[i] = BIOME_SAVANNA; return; }
         if (m >= 0.30) { Out.out_biome[i] = BIOME_GRASSLAND; return; }
         Out.out_biome[i] = BIOME_WASTELAND;
@@ -190,7 +197,8 @@ void main() {
     }
 
     // t_c0 > 30 C
-    if (m < 0.40) {
+    float infertile_heat = clamp((0.48 - f) * 0.24, -0.08, 0.16);
+    if (m < (0.40 + infertile_heat)) {
         // Desert split: sand vs rock using optional desert_field
         if (PC.has_desert_field == 1) {
             float heat_bias = clamp((t_norm - 0.60) * 2.4, 0.0, 1.0);

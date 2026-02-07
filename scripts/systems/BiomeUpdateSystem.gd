@@ -8,6 +8,8 @@ var _lava_tex: Object = null
 var _blend: Object = null
 var _biome_compute: Object = null
 var _biome_post_compute: Object = null
+var _lithology_compute: Object = null
+var _fertility_compute: Object = null
 var biome_climate_tau_days: float = 1825.0 # ~5 years for slow biome drift
 var biome_transition_tau_days: float = 60.0
 var cryosphere_transition_tau_days: float = 8.0
@@ -16,7 +18,6 @@ var biome_transition_max_step: float = 0.45
 var cryosphere_transition_max_step: float = 0.8
 var ocean_ice_base_thresh_c: float = -9.5
 var ocean_ice_wiggle_amp_c: float = 1.1
-var _last_update_sim_days: float = -1.0
 var _height_min_cache: float = 0.0
 var _height_max_cache: float = 1.0
 var _height_cache_size: int = -1
@@ -24,8 +25,14 @@ var _height_cache_refresh_counter: int = 0
 var _transition_epoch: int = 0
 const HEIGHT_MINMAX_REFRESH_INTERVAL: int = 24
 const CPU_MIRROR_MAX_CELLS: int = 250000
+const TEMPORAL_BLEND_MAX_DT_DAYS: float = 2.0
+const TEMPORAL_BLEND_MAX_TIME_SCALE: float = 1000.0
+const CPU_SYNC_MAX_TIME_SCALE: float = 1000.0
 const BIOME_ICE_SHEET_ID: int = 1
 const BIOME_GLACIER_ID: int = 24
+const FERTILITY_WEATHERING_RATE: float = 0.08
+const FERTILITY_HUMUS_RATE: float = 0.05
+const FERTILITY_FLOW_SCALE: float = 64.0
 
 var run_full_biome: bool = true
 var run_cryosphere: bool = true
@@ -37,6 +44,8 @@ func initialize(gen: Object) -> void:
 	_blend = load("res://scripts/systems/BiomeClimateBlendCompute.gd").new()
 	_biome_compute = load("res://scripts/systems/BiomeCompute.gd").new()
 	_biome_post_compute = load("res://scripts/systems/BiomePostCompute.gd").new()
+	_lithology_compute = load("res://scripts/systems/LithologyCompute.gd").new()
+	_fertility_compute = load("res://scripts/systems/FertilityLithologyCompute.gd").new()
 
 func set_update_modes(full_biome_enabled: bool, cryosphere_enabled: bool) -> void:
 	run_full_biome = bool(full_biome_enabled)
@@ -54,9 +63,6 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		return {}
 	if generator.last_temperature.size() != size or generator.last_moisture.size() != size:
 		return {}
-	var use_gpu_only: bool = ("config" in generator and generator.config.use_gpu_all)
-	if not use_gpu_only:
-		return {}
 	if "ensure_persistent_buffers" in generator:
 		generator.ensure_persistent_buffers(false)
 
@@ -70,6 +76,9 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var cryo_moist_buf: RID = generator.get_persistent_buffer("cryo_moist")
 	var beach_buf: RID = generator.get_persistent_buffer("beach")
 	var desert_buf: RID = generator.get_persistent_buffer("desert_noise")
+	var rock_buf: RID = generator.get_persistent_buffer("rock_type")
+	var flow_buf: RID = generator.get_persistent_buffer("flow_accum")
+	var fertility_buf: RID = generator.get_persistent_buffer("fertility")
 	var biome_buf: RID = generator.get_persistent_buffer("biome_id")
 	var biome_tmp: RID = generator.get_persistent_buffer("biome_tmp")
 	var lake_buf: RID = generator.get_persistent_buffer("lake")
@@ -84,17 +93,25 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		_biome_compute = load("res://scripts/systems/BiomeCompute.gd").new()
 	if _biome_post_compute == null:
 		_biome_post_compute = load("res://scripts/systems/BiomePostCompute.gd").new()
+	if _lithology_compute == null:
+		_lithology_compute = load("res://scripts/systems/LithologyCompute.gd").new()
+	if _fertility_compute == null:
+		_fertility_compute = load("res://scripts/systems/FertilityLithologyCompute.gd").new()
 
 	var dt_sim: float = _compute_sim_dt(world, dt_days)
+	var use_temporal_transition: bool = _should_use_temporal_transition(world, dt_sim, size)
+	var allow_cpu_sync: bool = _allow_cpu_mirror_sync(world, size)
 	var old_biome_bytes: PackedByteArray = PackedByteArray()
 	var old_lava_bytes: PackedByteArray = PackedByteArray()
-	if "read_persistent_buffer" in generator:
+	if use_temporal_transition and "read_persistent_buffer" in generator:
 		old_biome_bytes = generator.read_persistent_buffer("biome_id")
 		if lava_buf.is_valid():
 			old_lava_bytes = generator.read_persistent_buffer("lava")
 
 	var biome_changed: bool = false
 	var lava_changed: bool = false
+	var lithology_changed: bool = false
+	var fertility_changed: bool = false
 	var temp_for_cryosphere: RID = temp_now_buf
 	var moist_for_cryosphere: RID = moist_now_buf
 	# Always keep a smoothed cryosphere climate signal available, even when this
@@ -156,6 +173,46 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		params["min_h"] = _height_min_cache
 		params["max_h"] = _height_max_cache
 
+		if rock_buf.is_valid() and biome_tmp.is_valid() and flow_buf.is_valid() and fertility_buf.is_valid() and lava_buf.is_valid():
+			var lith_params := {
+				"seed": generator.config.rng_seed,
+				"noise_x_scale": generator.config.noise_x_scale,
+				"min_h": _height_min_cache,
+				"max_h": _height_max_cache,
+			}
+			var ok_lith: bool = _lithology_compute.classify_to_buffer(
+				w,
+				h,
+				height_buf,
+				land_buf,
+				temp_for_classify,
+				moist_for_classify,
+				lava_buf,
+				desert_buf,
+				lith_params,
+				biome_tmp
+			)
+			if ok_lith:
+				var ok_fert: bool = _fertility_compute.update_gpu_buffers(
+					w,
+					h,
+					rock_buf,
+					biome_tmp,
+					biome_buf,
+					land_buf,
+					moist_for_classify,
+					flow_buf,
+					lava_buf,
+					fertility_buf,
+					dt_sim,
+					FERTILITY_WEATHERING_RATE,
+					FERTILITY_HUMUS_RATE,
+					FERTILITY_FLOW_SCALE
+				)
+				if ok_fert:
+					lithology_changed = true
+					fertility_changed = true
+
 		var ok_classify: bool = _biome_compute.classify_to_buffer(
 			w,
 			h,
@@ -165,12 +222,13 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			moist_for_classify,
 			beach_buf,
 			desert_buf,
+			fertility_buf,
 			params,
 			biome_buf
 		)
 		if not ok_classify:
 			return {}
-		if not lake_buf.is_valid() or not lava_buf.is_valid():
+		if not lake_buf.is_valid() or not lava_buf.is_valid() or not rock_buf.is_valid():
 			return {}
 		var ok_post: bool = _biome_post_compute.apply_overrides_and_lava_gpu(
 			w,
@@ -180,6 +238,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			moist_for_classify,
 			biome_buf,
 			lake_buf,
+			rock_buf,
 			biome_tmp,
 			lava_buf,
 			generator.config.temp_min_c,
@@ -205,14 +264,18 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		if not ok_reapply:
 			if not _copy_u32_buffer(biome_tmp, biome_buf, size):
 				return {}
-		var biome_step: float = _compute_transition_fraction(dt_sim, biome_transition_tau_days, biome_transition_max_step)
-		biome_changed = _apply_temporal_biome_transition(
-			old_biome_bytes,
-			old_lava_bytes,
-			size,
-			biome_step,
-			lava_changed
-		)
+		if use_temporal_transition:
+			var biome_step: float = _compute_transition_fraction(dt_sim, biome_transition_tau_days, biome_transition_max_step)
+			biome_changed = _apply_temporal_biome_transition(
+				old_biome_bytes,
+				old_lava_bytes,
+				size,
+				biome_step,
+				lava_changed
+			)
+		else:
+			# High-speed path: accept full classify/post result and avoid readback blending.
+			biome_changed = true
 	elif run_cryosphere:
 		# Cryosphere-only path: reapply seasonal ice/glacier masks to current biomes.
 		if not _copy_u32_buffer(biome_buf, biome_tmp, size):
@@ -232,7 +295,10 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				return {}
 		# Do not stochastic-blend cryosphere-only updates at tiny dt steps (1x speed),
 		# otherwise sparse random ice pixels can pop in/out between ticks.
-		biome_changed = _did_biome_buffer_change(old_biome_bytes, size)
+		if old_biome_bytes.size() > 0:
+			biome_changed = _did_biome_buffer_change(old_biome_bytes, size)
+		else:
+			biome_changed = true
 
 	if biome_changed and _biome_tex:
 		var btex: Texture2D = _biome_tex.update_from_buffer(w, h, biome_buf)
@@ -243,28 +309,50 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		if ltex and "set_lava_texture_override" in generator:
 			generator.set_lava_texture_override(ltex)
 	# Keep CPU-side hover/info arrays aligned with the GPU runtime state.
-	if biome_changed:
+	if biome_changed and allow_cpu_sync:
 		_sync_cpu_biomes_from_gpu(size)
-	if lava_changed:
+	if lava_changed and allow_cpu_sync:
 		_sync_cpu_lava_from_gpu(size)
+	if lithology_changed and allow_cpu_sync:
+		_sync_cpu_rocks_from_gpu(size)
+	if fertility_changed and allow_cpu_sync:
+		_sync_cpu_fertility_from_gpu(size)
 
 	var dirty := PackedStringArray()
 	if biome_changed:
 		dirty.append("biome")
 	if lava_changed:
 		dirty.append("lava")
-	if dirty.size() == 0:
-		return {}
-	return {"dirty_fields": dirty}
+	if lithology_changed:
+		dirty.append("rock_type")
+	if fertility_changed:
+		dirty.append("fertility")
+	var out := {"consumed_days": dt_sim}
+	if dirty.size() > 0:
+		out["dirty_fields"] = dirty
+	return out
 
-func _compute_sim_dt(world: Object, dt_days: float) -> float:
-	var dt_sim: float = max(0.0, dt_days)
-	if world != null and "simulation_time_days" in world:
-		var cur_days: float = float(world.simulation_time_days)
-		if _last_update_sim_days >= 0.0:
-			dt_sim = max(0.0, cur_days - _last_update_sim_days)
-		_last_update_sim_days = cur_days
-	return dt_sim
+func _compute_sim_dt(_world: Object, dt_days: float) -> float:
+	return max(0.0, dt_days)
+
+func _world_time_scale(world: Object) -> float:
+	if world != null and "time_scale" in world:
+		return max(1.0, float(world.time_scale))
+	return 1.0
+
+func _should_use_temporal_transition(world: Object, dt_sim: float, size: int) -> bool:
+	if dt_sim <= 0.0 or size <= 0:
+		return false
+	if size > CPU_MIRROR_MAX_CELLS:
+		return false
+	if dt_sim > TEMPORAL_BLEND_MAX_DT_DAYS:
+		return false
+	return _world_time_scale(world) <= TEMPORAL_BLEND_MAX_TIME_SCALE
+
+func _allow_cpu_mirror_sync(world: Object, size: int) -> bool:
+	if size <= 0 or size > CPU_MIRROR_MAX_CELLS:
+		return false
+	return _world_time_scale(world) <= CPU_SYNC_MAX_TIME_SCALE
 
 func _compute_transition_fraction(dt_sim: float, tau_days: float, max_step: float) -> float:
 	if dt_sim <= 0.0:
@@ -298,7 +386,7 @@ func _apply_temporal_biome_transition(
 
 	_transition_epoch += 1
 	var epoch: int = _transition_epoch
-	var seed: int = int(generator.config.rng_seed) ^ 0x6E624EB7
+	var hash_seed: int = int(generator.config.rng_seed) ^ 0x6E624EB7
 	var merged_ids: PackedInt32Array = old_ids.duplicate()
 	var has_target_diff: bool = false
 	var changed_any: bool = false
@@ -314,7 +402,7 @@ func _apply_temporal_biome_transition(
 			has_target_diff = true
 			continue
 		has_target_diff = true
-		if _hash01_temporal(i, epoch, seed) < step_fraction:
+		if _hash01_temporal(i, epoch, hash_seed) < step_fraction:
 			merged_ids[i] = new_id
 			changed_any = true
 
@@ -333,7 +421,7 @@ func _apply_temporal_biome_transition(
 				for li in range(size):
 					if old_ids[li] == new_ids[li]:
 						merged_lava[li] = new_lava[li]
-					elif _hash01_temporal(li, epoch, seed) < step_fraction:
+					elif _hash01_temporal(li, epoch, hash_seed) < step_fraction:
 						merged_lava[li] = new_lava[li]
 				generator.update_persistent_buffer("lava", merged_lava.to_byte_array())
 
@@ -345,8 +433,8 @@ func _apply_temporal_biome_transition(
 		return false
 	return changed_any
 
-func _hash01_temporal(cell_index: int, epoch: int, seed: int) -> float:
-	var n: float = float(cell_index) * 0.61803398875 + float(epoch) * 12.9898 + float(seed) * 0.00137
+func _hash01_temporal(cell_index: int, epoch: int, hash_seed: int) -> float:
+	var n: float = float(cell_index) * 0.61803398875 + float(epoch) * 12.9898 + float(hash_seed) * 0.00137
 	var s: float = sin(n) * 43758.5453
 	return s - floor(s)
 
@@ -440,3 +528,27 @@ func _sync_cpu_lava_from_gpu(size: int) -> void:
 	for i in range(size):
 		lava_cpu[i] = 1 if lava_f32[i] > 0.5 else 0
 	generator.last_lava = lava_cpu
+
+func _sync_cpu_rocks_from_gpu(size: int) -> void:
+	if generator == null or size <= 0 or size > CPU_MIRROR_MAX_CELLS:
+		return
+	if not ("read_persistent_buffer" in generator):
+		return
+	var bytes: PackedByteArray = generator.read_persistent_buffer("rock_type")
+	if bytes.size() <= 0:
+		return
+	var rocks_cpu: PackedInt32Array = bytes.to_int32_array()
+	if rocks_cpu.size() == size:
+		generator.last_rock_type = rocks_cpu
+
+func _sync_cpu_fertility_from_gpu(size: int) -> void:
+	if generator == null or size <= 0 or size > CPU_MIRROR_MAX_CELLS:
+		return
+	if not ("read_persistent_buffer" in generator):
+		return
+	var bytes: PackedByteArray = generator.read_persistent_buffer("fertility")
+	if bytes.size() <= 0:
+		return
+	var fert_cpu: PackedFloat32Array = bytes.to_float32_array()
+	if fert_cpu.size() == size and "last_fertility" in generator:
+		generator.last_fertility = fert_cpu

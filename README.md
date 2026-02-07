@@ -2,7 +2,9 @@
 
 This document is a step-by-step "engineering playbook" to build a **Dwarf Fortress-style world generator** with plate tectonics, orogenesis, erosion, climate, hydrology, biomes, resources, settlements, and time evolution. It is paired with working scripts and a scene so you can run a small but complete simulation **today** and iterate from there.
 
-> TL;DR: Open the project in Godot 4.4, run `Main.tscn`, hit **Play**. Hover the map to inspect a tile; tweak **Settings** and click **Apply** to regenerate; **Pause/Play/Reset** control the simulation. Toggle **ASCII** or **Color** view with the button in the header.
+> TL;DR: Open the project in Godot 4.4 and run the project. The app starts in `res://scenes/Intro.tscn` and transitions to `res://scenes/Main.tscn`. Use **Play/Pause/Reset**, hover the map to inspect a tile, and use **Settings** + **Apply** to regenerate.
+
+**Godot Runtime**: C:\Users\ROG\Desktop\Code_Experiments\Godot_v4.6-stable_mono_win64
 
 ---
 
@@ -13,7 +15,7 @@ This document is a step-by-step "engineering playbook" to build a **Dwarf Fortre
 - **Readable state at every pixel**: hover shows tile state: height, plate, climate, biome, river flow, volcanism, resources, etc.
 - **Time evolution**: day/night & annual cycle, plate drift, erosion, vegetation spread/deforestation, desertification.
 - **Mod-friendly settings**: everything tunable via a Settings panel.
-- **Display**: ASCII **or** color tiles. (Color is default for speed; ASCII uses a simple built-in font. Drop a monospace TTF into `res://assets/` and point the `ascii_font_path` in settings if you want perfect alignment.)
+- **Display**: GPU-only renderer. CPU/ASCII fallback paths are legacy and are being removed.
 
 ---
 
@@ -122,7 +124,7 @@ We store each field on a 2D grid `W x H`, flattened to 1D for speed (index `i = 
 - **Play/Pause/Reset**: control simulation tick.
 - **Settings**: all exported config variables are surfaced; click **Apply** to re-generate with new seed & parameters.
 - **Inspect (mouseover)**: shows everything about the tile under cursor.
-- **View**: toggle ASCII vs Color; zoom with mouse wheel (simple scaling).
+- **View**: GPU-rendered map with cursor hover inspection.
 
 ---
 
@@ -132,7 +134,7 @@ We store each field on a 2D grid `W x H`, flattened to 1D for speed (index `i = 
 - Use **double buffers** for fields you advect/update each tick.
 - Avoid per-frame allocations; reuse arrays.
 - Expensive recomputations (e.g., full rivers) can run every N frames.
-- Draw via an **ImageTexture** (fast); ASCII mode uses a single `RichTextLabel` -- fine at small sizes.
+- Rendering is GPU-first; simulation and display are tuned for that path.
 
 ---
 
@@ -151,8 +153,8 @@ We store each field on a 2D grid `W x H`, flattened to 1D for speed (index `i = 
 
 1. Open Godot 4.4.
 2. Open this project folder.
-3. Open and run `res://scenes/Main.tscn`.
-4. Use the top bar to **Play/Pause**, **Reset**, **Settings**, **ASCII/Color**.
+3. Run the project (`F5`) so it starts at `res://scenes/Intro.tscn`.
+4. Use the top bar in `res://scenes/Main.tscn` to **Play/Pause**, **Reset**, and **Settings**.
 5. Hover the map to inspect a tile. Change settings -> **Apply** to regenerate.
 
 Happy world building!

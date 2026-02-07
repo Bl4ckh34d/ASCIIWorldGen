@@ -3,8 +3,8 @@
 // File: res://shaders/plate_update.glsl
 // Plate update with stylized but more realistic tectonic behavior:
 // - Slow plate drift (advection-like lateral transport)
-// - Convergent boundaries: uplift/mountain building (no deep trench carving)
-// - Divergent boundaries: ridges + extensional lowering
+// - Convergent boundaries: overriding-plate uplift + subducting-plate trench carving
+// - Divergent boundaries: rifts are net extensional lowering where appropriate
 // - Transform boundaries: shear roughness
 // All done in a single GPU pass.
 
@@ -143,31 +143,34 @@ void main() {
         bool self_subducts = (b_self + 0.03 < b_other);
         bool other_subducts = (b_other + 0.03 < b_self);
         float buoy_contrast = abs(b_self - b_other);
-        float uplift_gain = (0.65 + 0.85 * buoy_contrast);
+        float uplift_gain = (0.50 + 0.75 * buoy_contrast);
+        float trench_gain = (0.72 + 1.05 * buoy_contrast);
         if (self_subducts) {
-            // Convergent boundaries should build relief, not carve adjacent deep canyons.
-            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain * 0.55;
+            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain * 0.18;
+            delta_h -= PC.subduction_rate_per_day * PC.dt_days * conv * trench_gain;
+            delta_h -= PC.trench_rate_per_day * PC.dt_days * conv * trench_gain * 0.58;
         } else if (other_subducts) {
-            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain;
+            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain * 0.88;
+            delta_h -= PC.trench_rate_per_day * PC.dt_days * conv * trench_gain * 0.16;
         } else {
-            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * 0.75;
+            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * 0.58;
+            delta_h -= PC.trench_rate_per_day * PC.dt_days * conv * 0.08;
         }
     } else if (approach < div_thresh) {
         float div = (-approach) - (-div_thresh);
-        // Keep divergent seams thin and avoid unrealistically deep continental rifts.
-        boundary_w = pow(belt_w, 1.75);
+        boundary_w = pow(belt_w, 1.65);
         float land_factor = smoothstep(PC.sea_level - 0.02, PC.sea_level + 0.35, h_base);
-        float ridge_gain = mix(0.92, 0.62, land_factor);
-        float sink_gain = mix(0.09, 0.02, land_factor);
+        float ridge_gain = mix(0.58, 0.20, land_factor);
+        float sink_gain = mix(0.82, 1.24, land_factor);
         delta_h += PC.ridge_rate_per_day * PC.dt_days * div * ridge_gain;
         delta_h -= PC.trench_rate_per_day * PC.dt_days * div * sink_gain;
-        // Magma infill drives the split toward a shallow target depth.
-        float rift_target = mix(PC.sea_level - 0.12, PC.sea_level + 0.02, land_factor);
+        // Magma infill is limited so active rifts retain relief.
+        float rift_target = mix(PC.sea_level - 0.20, PC.sea_level - 0.10, land_factor);
         float to_target = rift_target - (h_base + delta_h);
-        float infill_rate = PC.ridge_rate_per_day * PC.dt_days * div * mix(1.25, 1.45, land_factor);
-        delta_h += clamp(to_target, -infill_rate * 0.35, infill_rate);
-        if (land_factor > 0.5) {
-            float min_land_rift = PC.sea_level - 0.04;
+        float infill_rate = PC.ridge_rate_per_day * PC.dt_days * div * mix(0.48, 0.32, land_factor);
+        delta_h += clamp(to_target, -infill_rate * 0.22, infill_rate);
+        if (land_factor > 0.55) {
+            float min_land_rift = PC.sea_level - 0.14;
             float proposed = h_base + delta_h;
             if (proposed < min_land_rift) {
                 delta_h += (min_land_rift - proposed);

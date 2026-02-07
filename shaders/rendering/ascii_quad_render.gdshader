@@ -45,7 +45,8 @@ const float BIOME_ICE_SHEET = 1.0;
 
 const vec3 BEACH_COLOR = vec3(1.0, 0.98, 0.90);
 const vec3 ICE_COLOR = vec3(0.85, 0.90, 0.95);
-const vec3 LAVA_COLOR = vec3(1.0, 0.2, 0.0);
+// Dark basalt-like lava field appearance (cool crust), not bright red.
+const vec3 LAVA_COLOR = vec3(0.14, 0.13, 0.12);
 
 vec2 get_atlas_uv(float char_index, vec2 char_uv) {
     // Calculate grid position from character index
@@ -63,8 +64,8 @@ vec2 get_atlas_uv(float char_index, vec2 char_uv) {
 
 vec3 sample_biome_color(float biome_id) {
     // Sample color from palette texture
-    float palette_u = biome_id / 255.0;
-    return texture(color_palette, vec2(palette_u, 0.0)).rgb;
+    float palette_u = clamp((biome_id + 0.5) / 256.0, 0.0, 1.0);
+    return texture(color_palette, vec2(palette_u, 0.5)).rgb;
 }
 
 vec3 water_color_from_height(float height_raw, float sea_level_val, float turq_strength, float shelf_val) {
@@ -287,15 +288,17 @@ void fragment() {
 
     vec3 lit_color = base_color * light;
     
-    // Apply hover overlay (mix red tint over the hovered cell)
+    // Apply hover overlay as a 7-tile crosshair (center + 3 tiles each side),
+    // inverting the underlying tile color for high contrast without fixed tint.
     bool hover_active = (hover_cell.x >= 0.0 && hover_cell.y >= 0.0);
     if (hover_active) {
-        if (abs(world_cell.x - hover_cell.x) < 0.5 && abs(world_cell.y - hover_cell.y) < 0.5) {
-            // Optional border emphasis using character-local UV
-            float edge = 0.05;
-            bool is_border = (char_uv.x < edge) || (char_uv.x > 1.0 - edge) || (char_uv.y < edge) || (char_uv.y > 1.0 - edge);
-            vec3 overlay = is_border ? vec3(1.0, 0.2, 0.2) : vec3(1.0, 0.0, 0.0);
-            lit_color = mix(lit_color, overlay, 0.65);
+        float dx_raw = abs(world_cell.x - hover_cell.x);
+        float dx_wrap = min(dx_raw, map_dimensions.x - dx_raw); // horizontal world wrap
+        float dy = abs(world_cell.y - hover_cell.y);
+        bool on_vertical = (dx_wrap < 0.5) && (dy <= 3.0);
+        bool on_horizontal = (dy < 0.5) && (dx_wrap <= 3.0);
+        if (on_vertical || on_horizontal) {
+            lit_color = vec3(1.0) - lit_color;
         }
     }
 

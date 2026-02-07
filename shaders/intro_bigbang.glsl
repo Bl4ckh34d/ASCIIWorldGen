@@ -252,8 +252,9 @@ vec3 render_bigbang(vec2 uv, float t) {
 	float spread = mix(0.018, 2.30, expand_accel) + 0.95 * late_tail_pow;
 	float edge_noise = fbm(q * 6.4 + vec2(t * 0.31, -t * 0.27));
 	float edge_irregular = (edge_noise - 0.5) * 0.20 + (my_edge_density - 0.5) * 0.42;
-	float pattern_on = step(0.18, PC.phase_time);
-	float pattern_visible = 0.0;
+	float pattern_on = smoothstep(0.12, 0.46, PC.phase_time);
+	// Keep the mycelium layer active after a short intro ramp-in.
+	float pattern_visible = smoothstep(0.02, 0.20, timeline);
 	float edge_gate = pattern_on * (1.0 - smoothstep(1.55, 2.35, progress_raw));
 	float local_spread = max(0.006, spread * (1.0 + edge_irregular * edge_gate));
 	float envelope = smoothstep(local_spread + 0.10, local_spread - 0.018, r);
@@ -327,36 +328,58 @@ vec3 render_bigbang(vec2 uv, float t) {
 	float my_morph_noise1 = fbm(rot2(1.13) * qn * 8.1 + vec2(-t * 0.52, t * 0.57) + my_morph_noise0 * 2.4 + 21.7);
 	float my_morph_noise2 = fbm(qn * 12.0 + vec2(my_morph_noise0, -my_morph_noise1) * 2.8 + vec2(t * 0.94, t * 0.83) - 17.3);
 	float my_struct = clamp(my_morph_noise0 * 0.35 + my_morph_noise1 * 0.40 + my_morph_noise2 * 0.45, 0.0, 1.0);
-	float my_density = clamp(my_density_raw * (0.52 + 1.05 * my_struct) + (my_morph_noise2 - 0.5) * 0.18, 0.0, 1.0);
+	// Keep psychedelic modulation tied to simulated density so empty regions stay dark.
+	float my_density = clamp(
+		my_density_raw * (0.48 + 1.12 * my_struct + (my_morph_noise2 - 0.5) * 0.26),
+		0.0,
+		1.0
+	);
 	float psy_noise = fbm(qn * 3.6 + vec2(t * 0.42, -t * 0.37));
 	float psy_noise2 = fbm(rot2(0.57) * qn * 6.2 + vec2(-t * 0.35, t * 0.31) + psy_noise * 2.0 + 8.7);
 	float psy_phase = t * 1.05 + (psy_noise * 2.0 - 1.0) * 2.4 + (psy_noise2 * 2.0 - 1.0) * 1.9;
 	float hue_wobble = 0.22 * sin(psy_phase * 1.2) + 0.16 * sin(psy_phase * 2.1 + 1.7);
 	float my_hue = fract(my_state.w + hue_wobble);
-	float my_reveal = pattern_on * pattern_visible * (1.0 - smoothstep(1.08, 2.25, progress_raw));
+	// Enforce center-out reveal envelope for mycelium contribution.
+	float my_envelope = smoothstep(local_spread + 0.14, local_spread - 0.022, r);
+	float my_reveal = pattern_on * pattern_visible * my_envelope * (1.0 - smoothstep(1.08, 2.25, progress_raw));
 	float my_shell_boost = exp(-abs(rn - shell_r) * mix(22.0, 10.0, expand));
 	float swirl = 0.5 + 0.5 * sin(psy_phase * 1.6 + my_density * 5.0);
-	vec3 my_base = hsv2rgb(vec3(fract(my_hue + 0.10 + 0.08 * sin(psy_phase * 0.8)), 0.78, 1.0));
+	vec3 my_base = hsv2rgb(vec3(fract(my_hue + 0.10 + 0.08 * sin(psy_phase * 0.8)), 0.90, 1.0));
 	vec3 my_trail = hsv2rgb(vec3(fract(my_hue + 0.34 * swirl), 0.98, 1.0));
-	vec3 my_alt = hsv2rgb(vec3(fract(my_hue + 0.62 - 0.20 * swirl), 0.90, 1.0));
+	vec3 my_alt = hsv2rgb(vec3(fract(my_hue + 0.62 - 0.20 * swirl), 0.98, 1.0));
 	vec3 my_col = mix(my_base, my_trail, clamp(my_density * 0.95, 0.0, 1.0));
 	my_col = mix(my_col, my_alt, 0.32 + 0.24 * sin(psy_phase * 1.3));
-	my_col += vec3(1.0, 0.86, 0.58) * my_shell_boost * my_density * 0.24;
+	vec3 neon_cyan = vec3(0.14, 1.00, 0.94);
+	vec3 neon_magenta = vec3(1.00, 0.18, 0.96);
+	float neon_mix = 0.5 + 0.5 * sin(psy_phase * 0.92 + rn * 8.0 + my_density * 4.2);
+	vec3 neon_col = mix(neon_cyan, neon_magenta, neon_mix);
+	my_col = mix(my_col, neon_col, clamp(my_density * 0.62 + my_shell_boost * 0.26, 0.0, 1.0));
+	vec3 my_luma = vec3(dot(my_col, vec3(0.2126, 0.7152, 0.0722)));
+	my_col = mix(my_luma, my_col, 1.36) * 1.22;
+	my_col += vec3(1.0, 0.86, 0.58) * my_shell_boost * my_density * 0.34;
 	float my_alpha = my_density * my_reveal * plasma_alpha * (1.0 - PC.fade_alpha * 0.55);
-	col = col * 0.82 + my_col * (my_alpha * 2.35);
+	col = col * 0.78 + my_col * (my_alpha * 2.95);
+	float my_bloom_shell = exp(-abs(rn - shell_r) * 6.2);
+	float my_bloom_body = smoothstep(0.20, 0.96, my_density) * exp(-rn * 0.86);
+	float my_bloom = (my_bloom_shell * 0.58 + my_bloom_body * 0.74) * my_reveal;
+	col += neon_col * (my_bloom * my_alpha * 1.20);
 
-	float my_fringe = smoothstep(0.10, 0.85, my_density) * edge_gate * pattern_visible;
+	float my_fringe = smoothstep(0.10, 0.85, my_density) * edge_gate * pattern_visible * my_envelope;
 	float envelope_mix = clamp(envelope + my_fringe * 0.35, 0.0, 1.0);
 	col *= envelope_mix;
 	col = 1.0 - exp(-col * 1.55);
+	float post_neon_bloom = my_bloom * (0.26 + 0.72 * my_density) * (1.0 - PC.fade_alpha * 0.65);
+	col += neon_col * post_neon_bloom * 0.24;
 	col *= (1.0 - clamp(PC.fade_alpha, 0.0, 1.0));
 
 	// Fade the big-bang core first while it expands, revealing stars behind it.
 	float core_clear_n = clamp((progress_raw - 0.14) / max(0.0001, 1.30 - 0.14), 0.0, 1.0);
-	// Accelerating growth: edge speed increases as the mask expands.
-	float core_clear_t = core_clear_n * 0.25 + pow(core_clear_n, 2.15) * 0.75;
-	float core_clear_edge = mix(0.05, 0.70, core_clear_t);
-	float core_clear_feather = mix(0.048, 0.11, core_clear_t);
+	// End-weighted acceleration so corners clear sooner instead of lingering.
+	float core_clear_t = core_clear_n * 0.15 + pow(core_clear_n, 2.40) * 0.85;
+	// Extend final radius enough to catch screen corners at typical aspect ratios.
+	float core_clear_edge = mix(0.05, 1.18, core_clear_t);
+	// Keep transition sharper near the end so remaining corners don't wear off slowly.
+	float core_clear_feather = mix(0.040, 0.070, core_clear_t);
 	float core_clear = (1.0 - smoothstep(
 		core_clear_edge - core_clear_feather,
 		core_clear_edge + core_clear_feather,

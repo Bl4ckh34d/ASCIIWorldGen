@@ -29,6 +29,28 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 			break
 	return file.get_spirv(chosen_version)
 
+func _compute_stage_error_text(spirv: RDShaderSPIRV) -> String:
+	if spirv == null:
+		return "null spirv"
+	if spirv.has_method("get_stage_compile_error"):
+		return str(spirv.get_stage_compile_error(RenderingDevice.SHADER_STAGE_COMPUTE)).strip_edges()
+	if "compute_stage_compile_error" in spirv:
+		return str(spirv.compute_stage_compile_error).strip_edges()
+	return ""
+
+func _compute_stage_bytecode_size(spirv: RDShaderSPIRV) -> int:
+	if spirv == null:
+		return 0
+	if spirv.has_method("get_stage_bytecode"):
+		var bc = spirv.get_stage_bytecode(RenderingDevice.SHADER_STAGE_COMPUTE)
+		if typeof(bc) == TYPE_PACKED_BYTE_ARRAY:
+			return bc.size()
+	if "compute_stage_bytecode" in spirv:
+		var bc2 = spirv.compute_stage_bytecode
+		if typeof(bc2) == TYPE_PACKED_BYTE_ARRAY:
+			return bc2.size()
+	return -1
+
 func _ensure_device_and_pipeline() -> void:
 	if _rd == null:
 		# Use main rendering device to avoid version mismatch with imported SPIR-V
@@ -37,8 +59,20 @@ func _ensure_device_and_pipeline() -> void:
 		# Ensure shader import resource exists and has compute entry
 		var spirv: RDShaderSPIRV = _get_spirv(CLIMATE_SHADER_FILE)
 		if spirv == null:
+			push_error("ClimateAdjustCompute: failed to load SPIR-V for res://shaders/climate_adjust.glsl")
+			return
+		var compile_err: String = _compute_stage_error_text(spirv)
+		if not compile_err.is_empty():
+			push_error("ClimateAdjustCompute: climate_adjust compute compile error: %s" % compile_err)
+			return
+		var bc_size: int = _compute_stage_bytecode_size(spirv)
+		if bc_size == 0:
+			push_error("ClimateAdjustCompute: climate_adjust compute bytecode is empty")
 			return
 		_shader = _rd.shader_create_from_spirv(spirv)
+		if not _shader.is_valid():
+			push_error("ClimateAdjustCompute: shader_create_from_spirv failed for res://shaders/climate_adjust.glsl")
+			return
 	if not _pipeline.is_valid() and _shader.is_valid():
 		_pipeline = _rd.compute_pipeline_create(_shader)
 	if not _cycle_shader.is_valid():
@@ -194,7 +228,7 @@ func _compute_noise_fields(w: int, h: int, base: Dictionary, xscale: float) -> D
 func evaluate(w: int, h: int,
 		height: PackedFloat32Array,
 		is_land: PackedByteArray,
-		base: Dictionary,
+		_base: Dictionary,
 		params: Dictionary,
 		distance_to_coast: PackedFloat32Array,
 		ocean_frac: float) -> Dictionary:

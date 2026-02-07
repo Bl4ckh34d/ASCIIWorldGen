@@ -63,18 +63,18 @@ func color_for_biome(biome: int, is_beach: bool) -> Color:
 			return Color(0.88, 0.92, 0.96)
 		# Scorched variants
 		BiomeClassifier.Biome.SCORCHED_GRASSLAND:
-			return Color(0.60, 0.52, 0.30)
+			return Color(0.72, 0.62, 0.34)
 		BiomeClassifier.Biome.SCORCHED_STEPPE:
-			return Color(0.62, 0.54, 0.34)
+			return Color(0.74, 0.64, 0.37)
 		# Scorched Meadow/Prairie merged into Scorched Grassland
 		BiomeClassifier.Biome.SCORCHED_SAVANNA:
-			return Color(0.64, 0.58, 0.36)
+			return Color(0.78, 0.69, 0.40)
 		BiomeClassifier.Biome.SCORCHED_HILLS:
-			return Color(0.55, 0.50, 0.35)
+			return Color(0.66, 0.57, 0.36)
+		BiomeClassifier.Biome.LAVA_FIELD:
+			return Color(0.14, 0.13, 0.12)
 		BiomeClassifier.Biome.SALT_DESERT:
 			# Bright saline crust: white with slight cyan hint
 			return Color(0.95, 0.97, 1.0)
 		_:
 			return Color(0.30, 0.70, 0.25)
-
-

@@ -3,7 +3,7 @@ extends Node
 
 class_name Simulation
 
-var systems: Array = [] # Array of dictionaries {instance, cadence, tiles_per_tick, avg_cost_ms, use_time_debt, debt_days, force_next_run, max_catchup_days}
+var systems: Array = [] # Array of dictionaries {instance, cadence, tiles_per_tick, avg_cost_ms, use_time_debt, debt_days, force_next_run, max_catchup_days, max_runs_per_tick}
 var tick_counter: int = 0
 var max_systems_per_tick: int = 3
 var max_tick_time_ms: float = 6.0
@@ -14,10 +14,13 @@ var _total_tick_time_ms: float = 0.0
 var _skipped_systems_count: int = 0
 var _stats_window_size: int = 100
 var _tick_time_history: Array = []
+var max_runs_per_system_tick: int = 8
+var _round_robin_start: int = 0
 
 const _SMOOTH_ALPHA := 0.3
+const _EPSILON_DAYS := 1e-6
 
-func register_system(instance: Object, cadence: int = 1, tiles_per_tick: int = 0, use_time_debt: bool = true, max_catchup_days: float = 30.0) -> void:
+func register_system(instance: Object, cadence: int = 1, tiles_per_tick: int = 0, use_time_debt: bool = true, max_catchup_days: float = 30.0, max_runs_per_tick: int = 8) -> void:
 	systems.append({
 		"instance": instance,
 		"cadence": max(1, cadence),
@@ -28,11 +31,13 @@ func register_system(instance: Object, cadence: int = 1, tiles_per_tick: int = 0
 		"debt_days": 0.0,
 		"force_next_run": false,
 		"max_catchup_days": max(1e-6, float(max_catchup_days)),
+		"max_runs_per_tick": max(1, int(max_runs_per_tick)),
 	})
 
 func clear() -> void:
 	systems.clear()
 	tick_counter = 0
+	_round_robin_start = 0
 
 func accumulate_debt(dt_days: float) -> void:
 	var dt: float = max(0.0, float(dt_days))
@@ -55,6 +60,29 @@ func set_system_catchup_max_days(instance: Object, max_days: float) -> void:
 			s["max_catchup_days"] = max(1e-6, float(max_days))
 			break
 
+func set_system_max_runs_per_tick(instance: Object, max_runs: int) -> void:
+	for s in systems:
+		if s.get("instance", null) == instance:
+			s["max_runs_per_tick"] = max(1, int(max_runs))
+			break
+
+func _extract_consumed_days(ret: Variant, dt_for_system: float, use_time_debt: bool) -> float:
+	var consumed_days: float = dt_for_system if not use_time_debt else 0.0
+	if typeof(ret) == TYPE_DICTIONARY:
+		if ret.has("consumed_days"):
+			consumed_days = clamp(float(ret["consumed_days"]), 0.0, dt_for_system)
+		elif ret.has("consumed_dt"):
+			consumed_days = dt_for_system if bool(ret["consumed_dt"]) else 0.0
+		elif use_time_debt and (ret as Dictionary).is_empty():
+			# Empty result means no progress (common early-return failure path).
+			consumed_days = 0.0
+		else:
+			# Non-empty dictionary is treated as successful progress unless overridden.
+			consumed_days = dt_for_system
+	elif not use_time_debt:
+		consumed_days = dt_for_system
+	return max(0.0, min(consumed_days, dt_for_system))
+
 func request_catchup(instance: Object = null) -> void:
 	for s in systems:
 		if instance == null or s.get("instance", null) == instance:
@@ -70,38 +98,60 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 	var start_us: int = Time.get_ticks_usec()
 	_last_tick_start_us = start_us
 	var dirty_set := {}
-	for s in systems:
+	var total_systems: int = systems.size()
+	if total_systems <= 0:
+		return
+	var budget_exhausted: bool = false
+	for offset in range(total_systems):
+		if budget_exhausted:
+			break
+		var idx: int = (_round_robin_start + offset) % total_systems
+		var s = systems[idx]
 		var cadence: int = int(s["cadence"])
 		var use_time_debt: bool = bool(s.get("use_time_debt", true))
 		var force_due: bool = bool(s.get("force_next_run", false))
 		var cadence_due: bool = (tick_counter % cadence == 0)
 		if not cadence_due and not force_due:
 			continue
-		var dt_for_system: float = max(0.0, float(dt_days))
+		var runs: int = 0
+		var consumed_this_tick: float = 0.0
+		var base_runs_cap: int = max(1, int(s.get("max_runs_per_tick", max_runs_per_system_tick)))
+		var catchup_max: float = max(1e-6, float(s.get("max_catchup_days", 30.0)))
+		var dt_incoming: float = max(0.0, float(dt_days))
+		var min_runs_to_keep_up: int = 1
 		if use_time_debt:
-			var debt_days: float = max(0.0, float(s.get("debt_days", 0.0)))
-			var catchup_max: float = max(1e-6, float(s.get("max_catchup_days", 30.0)))
-			dt_for_system = min(debt_days, catchup_max)
-			if dt_for_system <= 0.0:
-				s["force_next_run"] = false
-				continue
-		# Budget check (time or count)
-		if budget_mode_time_ms:
-			var now_us: int = Time.get_ticks_usec()
-			var elapsed_ms: float = float(now_us - start_us) / 1000.0
-			var predicted_ms: float = float(s.get("avg_cost_ms", 0.0))
-			if elapsed_ms + predicted_ms > max(0.0, max_tick_time_ms):
-				# Starvation guard:
-				# 1) Always allow one due system to run each tick.
-				# 2) Mark skipped systems for immediate retry on the next tick.
-				if executed > 0:
-					_skipped_systems_count += 1
-					s["force_next_run"] = true
-					continue
-		else:
-			if executed >= max(1, max_systems_per_tick):
+			min_runs_to_keep_up = int(ceil(dt_incoming / catchup_max))
+		var runs_cap: int = clamp(max(base_runs_cap, min_runs_to_keep_up), 1, 128)
+		while true:
+			if budget_exhausted:
 				break
-		if "tick" in s["instance"]:
+			var dt_for_system: float = max(0.0, float(dt_days))
+			if use_time_debt:
+				var debt_days: float = max(0.0, float(s.get("debt_days", 0.0)))
+				dt_for_system = min(debt_days, catchup_max)
+				if dt_for_system <= _EPSILON_DAYS:
+					s["force_next_run"] = false
+					break
+			# Budget check (time or count)
+			if budget_mode_time_ms:
+				var now_us: int = Time.get_ticks_usec()
+				var elapsed_ms: float = float(now_us - start_us) / 1000.0
+				var predicted_ms: float = float(s.get("avg_cost_ms", 0.0))
+				if elapsed_ms + predicted_ms > max(0.0, max_tick_time_ms):
+					# Starvation guard:
+					# 1) Always allow one due system to run each tick.
+					# 2) Mark skipped systems for immediate retry on the next tick.
+					if executed > 0:
+						_skipped_systems_count += 1
+						s["force_next_run"] = true
+						break
+			else:
+				if executed >= max(1, max_systems_per_tick):
+					budget_exhausted = true
+					break
+			if "tick" not in s["instance"]:
+				s["force_next_run"] = false
+				break
 			var st_us: int = Time.get_ticks_usec()
 			var ret: Variant = s["instance"].tick(dt_for_system, world, gpu_ctx)
 			var en_us: int = Time.get_ticks_usec()
@@ -109,15 +159,17 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 			# Update EMA cost
 			var prev: float = float(s.get("avg_cost_ms", 0.0))
 			s["avg_cost_ms"] = (1.0 - _SMOOTH_ALPHA) * prev + _SMOOTH_ALPHA * cost_ms
-			var consumed_dt: bool = true
-			if typeof(ret) == TYPE_DICTIONARY and ret.has("consumed_dt"):
-				consumed_dt = bool(ret["consumed_dt"])
 			if use_time_debt:
-				var remaining: float = max(0.0, float(s.get("debt_days", 0.0)))
-				if consumed_dt:
-					remaining = max(0.0, remaining - dt_for_system)
+				var consumed_days: float = _extract_consumed_days(ret, dt_for_system, use_time_debt)
+				var remaining: float = max(0.0, float(s.get("debt_days", 0.0)) - consumed_days)
 				s["debt_days"] = remaining
-				s["force_next_run"] = remaining > 1e-6
+				s["force_next_run"] = remaining > _EPSILON_DAYS
+				consumed_this_tick += consumed_days
+				# Avoid infinite loops if a system made no progress.
+				if consumed_days <= _EPSILON_DAYS:
+					s["force_next_run"] = true
+					# Ensure other systems still get a chance this tick.
+					break
 			else:
 				s["force_next_run"] = false
 			# Collect dirty fields if system reported any
@@ -126,6 +178,15 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 				for f in df:
 					dirty_set[f] = true
 			executed += 1
+			runs += 1
+			if not use_time_debt:
+				break
+			if runs >= runs_cap:
+				break
+			# After paying for at least one incoming tick worth of debt, move on for fairness.
+			if consumed_this_tick + _EPSILON_DAYS >= dt_incoming:
+				break
+	_round_robin_start = (_round_robin_start + 1) % max(1, total_systems)
 	# Broadcast aggregated dirty fields to systems that opt-in via on_dirty
 	var agg := PackedStringArray()
 	for k in dirty_set.keys():

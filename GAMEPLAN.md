@@ -4,7 +4,7 @@
 We are pivoting from the `/ProceduralGame` Python/terminal idea to the existing Godot worldgen project located at:
 `C:\Users\ROG\Desktop\Code_Experiments\GodotExperiment\worldgentest`
 
-Goal: turn the existing world generator into the foundation of a full game. Keep the world map generation and visuals (especially ocean depth coloring + climate zones) but remove or disable heavy simulations (erosion, plate tectonics, water cycle, GPU compute) for now.
+Goal: turn the existing world generator into the foundation of a full game. Keep the world map generation and visuals (especially ocean depth coloring + climate zones) while staying on the GPU-first runtime path.
 
 ## Key Decisions (Locked In)
 - Engine: Godot 4.4 (project config shows `config/features=4.4`).
@@ -18,8 +18,8 @@ Goal: turn the existing world generator into the foundation of a full game. Keep
 - Target platform: Windows only (initially).
 
 ## Immediate Scope (Now)
-- Keep the world map generator and ASCII/color rendering.
-- Strip out or bypass costly systems (erosion, plates, water cycle, compute shaders) to keep generation fast and understandable.
+- Keep the world map generator and GPU rendering path.
+- Strip out or bypass costly simulation paths only where needed, without reintroducing CPU-render fallback complexity.
 - Ensure ocean depth coloring and shelf/turquoise visuals still look good.
 - Make the map view stable and interactive.
 
@@ -47,14 +47,13 @@ These are the core scripts we’ll likely keep and adapt:
 - `scripts/style/AsciiStyler.gd` – ASCII rendering with colors
 - `scripts/systems/ContinentalShelf.gd` – shallow water + beach masks
 
-Potential heavy systems to disable or bypass for now:
-- `scripts/systems/*Compute.gd` (GPU compute paths)
-- `scripts/systems/FlowErosionSystem.gd`
-- plate tectonics systems
-- water cycle / hydrology simulation beyond basic coast/shallow water
+Current runtime direction:
+- Keep the GPU compute pipeline as the primary runtime path.
+- Remove legacy CPU/GPU switching code paths.
+- Optimize heavy systems via cadence/budget controls, not by reintroducing CPU fallbacks.
 
 ## Plan
-### Phase 1 – Worldgen “Lite” Pass
+### Phase 1 – Worldgen Core Pass
 - Identify the minimal path in `WorldGenerator.gd` to generate:
   - height map
   - land mask
@@ -63,7 +62,7 @@ Potential heavy systems to disable or bypass for now:
   - biome IDs
 - Remove or skip the erosion/plates/water-cycle systems.
 - Keep ocean depth coloring and shelf/turquoise blend.
-- Ensure the map renders at the existing resolution without GPU compute.
+- Ensure the map renders reliably at the existing resolution on the GPU runtime path.
 
 ### Phase 2 – World Map Gameplay Layer
 - Add a player entity on the world map.

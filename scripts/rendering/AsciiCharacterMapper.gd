@@ -31,16 +31,27 @@ var mountain_variants: PackedInt32Array = PackedInt32Array([77, 94, 35, 65])  # 
 var hill_variants: PackedInt32Array = PackedInt32Array([43, 126, 126, 61])  # +, ~, ~, =
 var desert_variants: PackedInt32Array = PackedInt32Array([58, 46, 111, 46])  # :, ., o, .
 var grass_variants: PackedInt32Array = PackedInt32Array([44, 39, 96, 46])  # ,, ', `, .
+var basalt_variants: PackedInt32Array = PackedInt32Array([35, 43, 61, 37])  # #, +, =, %
+var granite_variants: PackedInt32Array = PackedInt32Array([65, 94, 77, 35])  # A, ^, M, #
+var clastic_variants: PackedInt32Array = PackedInt32Array([58, 59, 46, 111])  # :, ;, ., o
+var limestone_variants: PackedInt32Array = PackedInt32Array([61, 45, 95, 58])  # =, -, _, :
+var metamorphic_variants: PackedInt32Array = PackedInt32Array([94, 47, 92, 88])  # ^, /, \, X
+var ash_variants: PackedInt32Array = PackedInt32Array([42, 46, 58, 39])  # *, ., :, '
 
-func get_character_index(x: int, y: int, is_land: bool, biome_id: int, is_beach: bool, rng_seed: int) -> int:
+func get_character_index(x: int, y: int, is_land: bool, biome_id: int, is_beach: bool, rng_seed: int, use_bedrock_view: bool = false) -> int:
 	"""Get character index (0-94) for atlas lookup"""
 	
 	if not is_land:
 		return _ascii_to_atlas_index(CHAR_OCEAN)
 	
 	# Beach override
-	if is_beach:
+	if is_beach and not use_bedrock_view:
 		return _ascii_to_atlas_index(CHAR_BEACH)
+
+	if use_bedrock_view:
+		var rock_char: int = _get_base_character_for_rock(biome_id)
+		var rock_var: int = _apply_rock_variation(rock_char, biome_id, x, y, rng_seed)
+		return _ascii_to_atlas_index(rock_var)
 	
 	# Get base character for biome
 	var base_char = _get_base_character_for_biome(biome_id)
@@ -97,6 +108,41 @@ func _apply_character_variation(base_char: int, biome_id: int, x: int, y: int, r
 			return desert_variants[glyph_hash % desert_variants.size()]
 		BiomeClassifier.Biome.GRASSLAND:
 			return grass_variants[glyph_hash % grass_variants.size()]
+		_:
+			return base_char
+
+func _get_base_character_for_rock(rock_id: int) -> int:
+	match rock_id:
+		0: # Basaltic
+			return 35 # #
+		1: # Granitic
+			return 65 # A
+		2: # Sedimentary clastic
+			return 58 # :
+		3: # Limestone
+			return 61 # =
+		4: # Metamorphic
+			return 94 # ^
+		5: # Volcanic ash
+			return 42 # *
+		_:
+			return CHAR_DEFAULT
+
+func _apply_rock_variation(base_char: int, rock_id: int, x: int, y: int, rng_seed: int) -> int:
+	var glyph_hash = _hash2(x, y, rng_seed)
+	match rock_id:
+		0:
+			return basalt_variants[glyph_hash % basalt_variants.size()]
+		1:
+			return granite_variants[glyph_hash % granite_variants.size()]
+		2:
+			return clastic_variants[glyph_hash % clastic_variants.size()]
+		3:
+			return limestone_variants[glyph_hash % limestone_variants.size()]
+		4:
+			return metamorphic_variants[glyph_hash % metamorphic_variants.size()]
+		5:
+			return ash_variants[glyph_hash % ash_variants.size()]
 		_:
 			return base_char
 

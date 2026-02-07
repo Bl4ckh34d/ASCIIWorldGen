@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://j3wjqv6q4gir"
+path="res://.godot/imported/plate_field_advection_i32.glsl-5f730ff2047bf6fa526f9af15155dfb2.res"
+
+[deps]
+
+source_file="res://shaders/plate_field_advection_i32.glsl"
+dest_files=["res://.godot/imported/plate_field_advection_i32.glsl-5f730ff2047bf6fa526f9af15155dfb2.res"]
+
+[params]
+

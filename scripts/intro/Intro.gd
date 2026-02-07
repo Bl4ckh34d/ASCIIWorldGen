@@ -96,8 +96,8 @@ const INTRO_QUOTES := [
 		"author": "- Doug Dillon"
 	}
 ]
-const STAR_PROMPT_TEXT := "Then there was light and this goddess of life had a name: "
-const PLANET_PROMPT_TEXT := "A new world was born and her\nname was: "
+const STAR_PROMPT_TEXT := "Space, time and gravity gave birth to %s \nand she in turn gave life to a tiny world."
+const PLANET_PROMPT_TEXT := "This world was called %s by its inhabitants."
 const MAX_NAME_LENGTH: int = 48
 
 const PROMPT_NONE := 0
@@ -130,12 +130,18 @@ const BIG_BANG_SHAKE_START_DELAY_SEC := 0.30
 const BIG_BANG_SHAKE_RISE_SEC := 0.50
 const BIG_BANG_SHAKE_DECAY_SEC := 3.00
 const STAR_PROMPT_FADE_IN_SEC := 1.20
+const STAR_PROMPT_HOLD_SEC := 3.00
 const STAR_PROMPT_FADE_OUT_SEC := 0.95
 const SPACE_REVEAL_SEC := 4.80
 const CAMERA_PAN_SEC := 5.10
 const PLANET_PROMPT_FADE_IN_SEC := 0.95
 const PLANET_PROMPT_FADE_OUT_SEC := 0.95
+const PLANET_STORY_HOLD_SEC := 2.20
+const MOON_STORY_FADE_IN_SEC := 0.90
+const MOON_STORY_HOLD_SEC := 2.40
+const MOON_STORY_FADE_OUT_SEC := 0.95
 const HABITABLE_ZONE_LABEL_FADE_IN_SEC := 0.80
+const SKIP_TO_PLANET_FADE_SEC := 0.75
 const PLANET_ZOOM_SEC := 1.95
 const TRANSITION_SEC := 0.18
 const SUN_PROMPT_PAN_PROGRESS := 0.45
@@ -150,24 +156,18 @@ const GOLDILOCK_BAND_MIN_WIDTH_PX := 360.0
 const MAX_MOONS := 3
 
 const FANTASY_SINGLE_NAMES := [
-	"Bel", "Trus", "Ash", "Keth", "Nyr", "Vorn", "Lun", "Tal", "Syr", "Ril",
-	"Karn", "Myr", "Zel", "Orn", "Thal", "Brin", "Cyr", "Drus", "Fen", "Ith",
-	"Jor", "Kyr", "Lor", "Morn", "Nesh", "Oth", "Prax", "Quor", "Ryn", "Sarn",
-	"Tor", "Ulm", "Vesh", "Wren", "Xal", "Yor", "Zhin", "Ael", "Bael", "Cael",
-	"Daen", "Eld", "Fael", "Grax", "Heth", "Ivar", "Jask", "Loth", "Khar", "Vor",
-	"Ashk", "Bren", "Cald", "Dren", "Evor", "Fyrn", "Ghal", "Harn", "Irel", "Jurn",
-	"Kest", "Lyrn", "Mesk", "Norn", "Oryn", "Phel", "Qarn", "Rusk", "Seth", "Tarn",
-	"Ulth", "Varn", "Wyst", "Xern", "Yvyr", "Zarn", "Arix", "Bast", "Corth", "Dask",
-	"Elyn", "Fask", "Grun", "Hyrn", "Inor", "Jyss", "Kroth", "Lask", "Myrk", "Nol",
-	"Orr", "Pyrn", "Qeth", "Rhov", "Syth", "Tusk", "Urn", "Vesk", "Wor", "Xyr",
-	"Yast", "Zeth", "Aurn", "Bryl", "Cask", "Dorn", "Erix", "Frin", "Gesk", "Hov",
-	"Ixar", "Jarn", "Keld", "Lorn", "Malk", "Neth", "Osk", "Pran", "Qor", "Rald",
-	"Siv", "Tov", "Urik", "Vyx", "Wesk", "Xarn", "Yorn", "Zyr", "Astrix", "Borth",
-	"Cren", "Dyth", "Eskar", "Forn", "Gyr", "Hest", "Ilth", "Jorv", "Krail", "Lusk",
-	"Morv", "Nyrn", "Orv", "Pesk", "Qirn", "Rask", "Surn", "Tyr", "Uven", "Vryk",
-	"Warn", "Xoss", "Ysel", "Zorn", "Avar", "Brenk", "Cyrn", "Drel", "Fyr", "Gorn",
-	"Hyr", "Istr", "Jeth", "Krys", "Lyr", "Morr", "Nysk", "Orel", "Pyr", "Quarn",
-	"Reth", "Skar", "Thyr", "Uth", "Veld", "Wyr", "Xeth", "Yrik", "Zhul"
+	"Bel", "Ash", "Keth", "Vorn", "Lun", "Tal", "Ril", "Karn", "Orn", "Thal",
+	"Brin", "Drus", "Fen", "Ith", "Jor", "Lor", "Morn", "Nesh", "Oth", "Ryn",
+	"Sarn", "Tor", "Ulm", "Vesh", "Wren", "Ael", "Bael", "Cael", "Daen", "Eld",
+	"Fael", "Heth", "Ivar", "Jask", "Loth", "Khar", "Vor", "Ashk", "Bren", "Cald",
+	"Dren", "Evor", "Ghal", "Harn", "Irel", "Jurn", "Kest", "Mesk", "Norn", "Oryn",
+	"Phel", "Rusk", "Seth", "Tarn", "Ulth", "Varn", "Aurn", "Bryl", "Cask", "Dorn",
+	"Frin", "Gesk", "Hov", "Jarn", "Keld", "Lorn", "Malk", "Neth", "Osk", "Pran",
+	"Rald", "Siv", "Tov", "Urik", "Wesk", "Aster", "Borth", "Cren", "Eskar", "Forn",
+	"Hest", "Ilth", "Jorv", "Krail", "Lusk", "Morv", "Orv", "Pesk", "Rask", "Surn",
+	"Uven", "Warn", "Zorn", "Avar", "Brenk", "Cyrn", "Drel", "Gorn", "Istr", "Jeth",
+	"Krys", "Morr", "Orel", "Reth", "Skar", "Uth", "Veld", "Zhul", "Bjorn", "Eirik",
+	"Leif", "Sten", "Hald", "Gunn", "Rurik", "Hakon", "Alrik", "Soren"
 ]
 
 const FANTASY_CURATED_NAMES := [
@@ -187,85 +187,76 @@ const FANTASY_CURATED_NAMES := [
 
 const FANTASY_PREFIXES := [
 	"ash", "bal", "cor", "dar", "el", "fen", "gal", "har", "isk", "jor",
-	"kel", "lor", "mor", "nar", "or", "pra", "quel", "ryn", "sar", "tor",
-	"ur", "vor", "wyn", "xan", "yor", "zar", "drav", "khal", "loth", "myr",
-	"neth", "thar", "varn", "bryn", "cald", "dren", "glyn", "hest", "jast", "krand",
-	"asha", "aria", "bela", "cora", "dara", "elya", "fara", "gala", "hira", "iona",
-	"jora", "kora", "lira", "mera", "nora", "oria", "pela", "qira", "rhea", "sora",
-	"tala", "uria", "vela", "wira", "xera", "yara", "zora", "lyra", "nyra", "seva",
+	"kel", "lor", "mor", "nar", "or", "pra", "rin", "sar", "tor", "ur",
+	"vor", "zar", "drav", "khal", "loth", "myr", "neth", "thar", "varn", "bryn",
+	"cald", "dren", "glyn", "hest", "jast", "krand", "asha", "aria", "bela", "cora",
+	"dara", "elya", "fara", "gala", "hira", "iona", "jora", "kora", "lira", "mera",
+	"nora", "oria", "pela", "rhea", "sora", "tala", "uria", "vela", "zora", "seva",
 	"aeth", "ael", "aura", "avor", "azel", "baryn", "belor", "berin", "brava", "brin",
 	"cael", "calen", "cair", "caren", "ceryn", "ceth", "cyra", "dair", "dalen", "davor",
 	"deira", "delor", "dera", "dorin", "drava", "drin", "elyr", "enor", "eris", "felyn",
 	"fera", "fira", "fora", "gael", "galen", "garon", "gora", "halen", "havor", "helor",
 	"hera", "hyra", "iber", "idra", "ilar", "iren", "isra", "jalen", "jaro", "jovar",
-	"kael", "kavor", "kera", "kiran", "korae", "krya", "laer", "larin", "lavor", "leira",
-	"lenor", "lera", "maer", "mavor", "melor", "mira", "navor", "nelor", "nera", "nira",
-	"oira", "orin", "ovar", "pael", "parin", "pera", "qalen", "qora", "rael", "ravyn",
-	"relin", "riven", "savor", "selor", "sira", "tavor", "teira", "thora", "ulor", "uryn",
-	"vael", "velor", "vera", "voryn", "wavor", "welor", "wirae", "xavor", "xelor", "xira",
-	"yael", "yavor", "yelor", "zira", "zorin", "zoral"
+	"kael", "kavor", "kera", "kiran", "laer", "larin", "lavor", "leira", "lenor", "lera",
+	"maer", "mavor", "melor", "mira", "navor", "nelor", "nera", "nira", "oira", "orin",
+	"ovar", "pael", "parin", "pera", "rael", "relin", "riven", "savor", "selor", "sira",
+	"tavor", "teira", "thora", "ulor", "uryn", "vael", "velor", "vera", "voryn", "wavor",
+	"welor", "wira", "zorin", "zoral"
 ]
 
 const FANTASY_MIDDLE_VOWEL := [
 	"a", "ae", "ia", "io", "oa", "ui", "ara", "eri", "ila", "ora",
-	"une", "yri", "eon", "ula", "ira", "aya", "iri", "orae", "e", "i",
-	"o", "u", "ai", "ao", "au", "ea", "ei", "eo", "eu", "ie",
-	"iu", "oe", "oi", "oo", "ou", "ua", "ue", "uo", "aen", "ain",
-	"aor", "eor", "iar", "ior", "iur", "oen", "oir", "our", "uar", "uer",
-	"uin", "uor", "yth", "alia", "aria", "avia", "elia", "eria", "ilia", "inia",
-	"iova", "olia", "onia", "oria", "ovia", "udia", "ulia", "unia", "uria", "ylia",
-	"yria", "yora", "yuna", "aeo", "aio", "eio", "ioa", "oia", "uai", "eua",
-	"iau", "oui", "aei"
+	"une", "eon", "ula", "ira", "aya", "iri", "orae", "e", "i", "o",
+	"u", "ai", "ao", "au", "ea", "ei", "eo", "eu", "ie", "iu",
+	"oe", "oi", "oo", "ou", "ua", "ue", "uo", "aen", "ain", "aor",
+	"eor", "iar", "ior", "iur", "oen", "oir", "our", "uar", "uer", "uin",
+	"uor", "alia", "aria", "avia", "elia", "eria", "ilia", "inia", "iova", "olia",
+	"onia", "oria", "ovia", "udia", "ulia", "unia", "uria", "aeo", "aio", "eio",
+	"ioa", "oia", "uai", "eua", "iau", "oui", "aei"
 ]
 
 const FANTASY_MIDDLE_CONSONANT := [
 	"bar", "dar", "kar", "lor", "mir", "neth", "syl", "tor", "vash", "zen",
 	"thal", "drin", "khar", "loth", "myr", "rend", "sarn", "tov", "wyr", "zhar",
-	"bel", "cor", "dun", "fen", "gorn", "hyl", "jor", "kyr", "lax", "mond",
-	"br", "dr", "gr", "kr", "pr", "tr", "vr", "zr", "st", "sk",
-	"sp", "sm", "sn", "sl", "sr", "sh", "th", "kh", "gh", "ch",
-	"ph", "xh", "nd", "nt", "ld", "lm", "ln", "rn", "rk", "rd",
-	"rt", "rz", "lth", "rth", "nth", "mth", "vyr", "zyr", "ksh", "dsh",
-	"gth", "phr", "xth", "ryn", "lorn", "morn", "drel", "dron", "grel", "gren",
-	"kren", "krel", "brin", "bryn", "cryn", "dral", "dren", "fryn", "gral", "hrin",
-	"jren", "larn", "lryn", "marn", "narn", "pryn", "qryn", "rald", "rask", "seld",
-	"tarn", "vorn", "wryn", "xarn", "zarn", "besh", "desh", "gesh", "kesh", "lesh",
-	"mesh", "nesh", "resh", "tesh", "veth", "weth", "xeth", "zeth", "cairn", "dairn",
-	"fald", "gald", "hald", "jald", "kald", "lald", "mald", "nald", "pald", "qald",
-	"raln", "sald", "tald", "vald", "wald", "xald", "yald", "zald"
+	"bel", "cor", "dun", "fen", "gorn", "hyl", "jor", "kyr", "mond", "br",
+	"dr", "gr", "kr", "pr", "tr", "vr", "st", "sk", "sp", "sm",
+	"sn", "sl", "sh", "th", "kh", "gh", "ch", "ph", "nd", "nt",
+	"ld", "lm", "ln", "rn", "rk", "rd", "rt", "rz", "lth", "rth",
+	"nth", "mth", "ksh", "dsh", "gth", "ryn", "lorn", "morn", "drel", "dron",
+	"grel", "gren", "kren", "krel", "brin", "bryn", "dral", "dren", "fryn", "gral",
+	"hrin", "larn", "marn", "narn", "pryn", "rald", "rask", "seld", "tarn", "vorn",
+	"besh", "desh", "gesh", "kesh", "lesh", "mesh", "nesh", "resh", "tesh", "veth",
+	"weth", "zeth", "cairn", "dairn", "fald", "gald", "hald", "jald", "kald", "lald",
+	"mald", "nald", "pald", "raln", "sald", "tald", "vald", "wald"
 ]
 
 const FANTASY_SUFFIX_VOWEL := [
 	"a", "ae", "ia", "ara", "ora", "ira", "ena", "ona", "una", "elia",
-	"iora", "itha", "orae", "yra", "eon", "uin", "aya", "irae", "ula", "eris",
-	"ana", "ava", "ayae", "eia", "ela", "enae", "eria", "essa", "eva", "iae",
-	"ila", "ilia", "ina", "iona", "iraa", "isa", "iva", "iya", "oae", "olia",
-	"onae", "oraa", "oria", "osa", "ova", "oya", "uae", "ulae", "unae", "uria",
-	"usa", "uva", "uya", "yla", "yria", "yrae", "yuna", "zea", "zora", "zuna",
-	"arae", "eriae", "ulea", "anea", "ariel", "oriel", "uriel", "avel", "anel", "orra",
-	"erra", "ilra", "ulra", "eya", "oyae", "iea", "uea", "alia", "arua", "elua",
-	"irua", "orua", "urua", "ynia", "yriae", "yorae"
+	"iora", "itha", "orae", "eon", "uin", "aya", "irae", "ula", "eris", "ana",
+	"ava", "ayae", "eia", "ela", "enae", "eria", "essa", "eva", "iae", "ila",
+	"ilia", "ina", "iona", "iraa", "isa", "iva", "iya", "oae", "olia", "onae",
+	"oraa", "oria", "osa", "ova", "oya", "uae", "ulae", "unae", "uria", "usa",
+	"uva", "zea", "zora", "zuna", "arae", "eriae", "ulea", "anea", "ariel", "oriel",
+	"uriel", "avel", "anel", "orra", "erra", "ilra", "ulra", "eya", "oyae", "iea",
+	"uea", "alia", "arua", "elua", "irua", "orua", "urua"
 ]
 
 const FANTASY_SUFFIX_CONSONANT := [
 	"desh", "veth", "kash", "rion", "thar", "dros", "mora", "lune", "var", "garde",
 	"neth", "dris", "vorn", "taris", "bel", "kora", "vash", "thos", "zhar", "myr",
-	"dran", "vyr", "lith", "nor", "rath", "shan", "glen", "dun", "rune", "xis",
-	"qir", "brin", "dell", "gor", "hal", "jor", "kyr", "mond", "nox", "phar",
-	"besh", "cresh", "fesh", "gesh", "hesh", "kesh", "lesh", "mesh", "pesh", "qesh",
-	"resh", "sesh", "tesh", "wesh", "xesh", "yesh", "zesh", "bard", "card", "dard",
-	"fard", "gard", "hard", "kard", "lard", "mard", "nard", "pard", "qard", "rard",
-	"sard", "tard", "vard", "ward", "xard", "yard", "zard", "bryn", "cryn", "dryn",
-	"fryn", "gryn", "hryn", "kryn", "lryn", "mryn", "nryn", "pryn", "qryn", "rryn",
-	"sryn", "tryn", "vryn", "wryn", "xryn", "yryn", "zryn", "brol", "crol", "drol",
-	"frol", "grol", "hrol", "krol", "lrol", "mrol", "nrol", "prol", "qrol", "rrol",
-	"srol", "trol", "vrol", "wrol", "xrol", "yrol", "zrol", "bane", "dane", "fane",
-	"gane", "hane", "kane", "lane", "mane", "nane", "pane", "rane", "sane", "tane",
-	"vane", "wane", "xane", "yane", "zane", "bion", "cion", "dion", "fion", "gion",
-	"hion", "kion", "lion", "mion", "nion", "pion", "sion", "tion", "vion", "wion",
-	"xion", "yion", "zion", "bras", "cras", "dras", "fras", "gras", "kras", "lras",
-	"mras", "nras", "pras", "qras", "rras", "sras", "tras", "vras", "wras", "xras",
-	"yras", "zras"
+	"dran", "vyr", "lith", "nor", "rath", "shan", "glen", "dun", "rune", "brin",
+	"dell", "gor", "hal", "jor", "kyr", "mond", "phar", "besh", "cresh", "fesh",
+	"gesh", "hesh", "kesh", "lesh", "mesh", "pesh", "resh", "sesh", "tesh", "wesh",
+	"bard", "card", "dard", "fard", "gard", "hard", "kard", "lard", "mard", "nard",
+	"pard", "rard", "sard", "tard", "vard", "ward", "bryn", "cryn", "dryn", "fryn",
+	"gryn", "hryn", "kryn", "lryn", "mryn", "nryn", "pryn", "rryn", "sryn", "tryn",
+	"vryn", "wryn", "brol", "crol", "drol", "frol", "grol", "hrol", "krol", "lrol",
+	"mrol", "nrol", "prol", "rrol", "srol", "trol", "vrol", "wrol", "bane", "dane",
+	"fane", "gane", "hane", "kane", "lane", "mane", "nane", "pane", "rane", "sane",
+	"tane", "vane", "wane", "bion", "cion", "dion", "fion", "gion", "hion", "kion",
+	"lion", "mion", "nion", "pion", "sion", "tion", "vion", "wion", "bras", "cras",
+	"dras", "fras", "gras", "kras", "lras", "mras", "nras", "pras", "rras", "sras",
+	"tras", "vras", "wras"
 ]
 
 var _phase: int = PHASE_QUOTE
@@ -303,6 +294,9 @@ var _main_scene_packed: PackedScene = null
 
 var _bigbang_compute: RefCounted = null
 var _bg_texture: Texture2D = null
+var _skip_to_planet_fade_alpha: float = 0.0
+var _skip_to_planet_fade_time: float = 0.0
+var _skip_to_planet_fade_active: bool = false
 
 var _quote_label: Label
 var _quote_author_label: Label
@@ -366,6 +360,13 @@ func _process(delta: float) -> void:
 	var dt: float = max(0.0, delta)
 	_phase_time += dt
 	_intro_total_time += dt
+	if _skip_to_planet_fade_active:
+		_skip_to_planet_fade_time += dt
+		var fade_n: float = clamp(_skip_to_planet_fade_time / max(0.0001, SKIP_TO_PLANET_FADE_SEC), 0.0, 1.0)
+		_skip_to_planet_fade_alpha = 1.0 - _ease_in_out(fade_n)
+		if fade_n >= 1.0:
+			_skip_to_planet_fade_active = false
+			_skip_to_planet_fade_alpha = 0.0
 	_poll_main_scene_preload()
 
 	match _phase:
@@ -375,21 +376,21 @@ func _process(delta: float) -> void:
 		PHASE_BIG_BANG:
 			if _phase_time >= _bigbang_total_sec():
 				_set_phase(PHASE_SPACE_REVEAL)
-		PHASE_STAR_PROMPT_FADE_IN:
-			if _phase_time >= STAR_PROMPT_FADE_IN_SEC:
-				_set_phase(PHASE_STAR_PROMPT_INPUT)
-		PHASE_STAR_PROMPT_FADE_OUT:
-			if _phase_time >= STAR_PROMPT_FADE_OUT_SEC:
-				_set_phase(PHASE_CAMERA_PAN)
 		PHASE_SPACE_REVEAL:
 			if _phase_time >= _space_reveal_duration:
-				_set_phase(PHASE_STAR_PROMPT_FADE_IN)
+				_set_phase(PHASE_CAMERA_PAN)
 		PHASE_CAMERA_PAN:
 			if _phase_time >= _camera_pan_duration:
 				_set_phase(PHASE_PLANET_PLACE)
 		PHASE_PLANET_PROMPT_FADE_IN:
-			if _phase_time >= PLANET_PROMPT_FADE_IN_SEC:
-				_set_phase(PHASE_PLANET_PROMPT_INPUT)
+			if _phase_time >= _planet_story_primary_total_sec():
+				if _moon_count > 0:
+					_set_phase(PHASE_PLANET_PROMPT_INPUT)
+				else:
+					_set_phase(PHASE_PLANET_ZOOM)
+		PHASE_PLANET_PROMPT_INPUT:
+			if _phase_time >= _moon_story_total_sec():
+				_set_phase(PHASE_PLANET_ZOOM)
 		PHASE_PLANET_PROMPT_FADE_OUT:
 			if _phase_time >= PLANET_PROMPT_FADE_OUT_SEC:
 				_set_phase(PHASE_PLANET_ZOOM)
@@ -432,7 +433,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if key.keycode == KEY_ESCAPE:
 		if _phase == PHASE_QUOTE or _phase == PHASE_BIG_BANG:
-			_set_phase(PHASE_STAR_PROMPT_FADE_IN)
+			_skip_to_planet_place()
 			return
 		if _phase == PHASE_PLANET_PLACE:
 			_confirm_planet_position()
@@ -457,6 +458,8 @@ func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.0, fade), true)
 	elif _phase == PHASE_TRANSITION:
 		draw_rect(Rect2(Vector2.ZERO, size), Color.BLACK, true)
+	if _skip_to_planet_fade_alpha > 0.001:
+		draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.0, _skip_to_planet_fade_alpha), true)
 
 func _configure_pixel_viewport() -> void:
 	var viewport_node := get_viewport()
@@ -492,18 +495,18 @@ func _create_ui() -> void:
 	add_child(_quote_author_label)
 
 	_terminal_label = Label.new()
-	_terminal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_terminal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_terminal_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_terminal_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_terminal_label.add_theme_font_size_override("font_size", 32)
-	_terminal_label.add_theme_color_override("font_color", Color(0.99, 0.97, 0.90, 1.0))
+	_terminal_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 1.0))
 	add_child(_terminal_label)
 
 	_planet_hint_label = Label.new()
 	_planet_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_planet_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_planet_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_planet_hint_label.add_theme_font_size_override("font_size", 18)
+	_planet_hint_label.add_theme_font_size_override("font_size", 32)
 	_planet_hint_label.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0, 1.0))
 	add_child(_planet_hint_label)
 
@@ -527,11 +530,11 @@ func _update_layout() -> void:
 		_quote_author_label.position = Vector2(w * 0.60, h * 0.54)
 		_quote_author_label.size = Vector2(w * 0.40, h * 0.08)
 	if _terminal_label != null:
-		_terminal_label.position = Vector2(w * 0.16, h * 0.28)
-		_terminal_label.size = Vector2(w * 0.74, h * 0.36)
+		_terminal_label.position = Vector2(w * 0.08, h * 0.20)
+		_terminal_label.size = Vector2(w * 0.84, h * 0.24)
 	if _planet_hint_label != null:
-		_planet_hint_label.position = Vector2(w * 0.08, h * 0.78)
-		_planet_hint_label.size = Vector2(w * 0.84, h * 0.18)
+		_planet_hint_label.position = Vector2(w * 0.08, h * 0.58)
+		_planet_hint_label.size = Vector2(w * 0.84, h * 0.20)
 	if _habitable_zone_label != null:
 		_habitable_zone_label.size = Vector2(w * 0.30, h * 0.08)
 
@@ -595,24 +598,19 @@ func _set_phase(new_phase: int) -> void:
 	_phase_time = 0.0
 	_active_prompt_kind = PROMPT_NONE
 	match new_phase:
-		PHASE_STAR_PROMPT_FADE_IN, PHASE_STAR_PROMPT_INPUT, PHASE_STAR_PROMPT_FADE_OUT:
+		PHASE_STAR_PROMPT_FADE_IN, PHASE_STAR_PROMPT_INPUT, PHASE_STAR_PROMPT_FADE_OUT, PHASE_SPACE_REVEAL, PHASE_CAMERA_PAN:
 			_active_prompt_kind = PROMPT_STAR
-			if _star_name.is_empty():
-				_input_buffer = ""
-			else:
-				_input_buffer = _star_name
+			_ensure_star_name_generated()
+			_input_buffer = _star_name
+			if new_phase == PHASE_CAMERA_PAN:
+				_roll_planetary_setup()
 		PHASE_PLANET_PROMPT_FADE_IN, PHASE_PLANET_PROMPT_INPUT, PHASE_PLANET_PROMPT_FADE_OUT:
 			_active_prompt_kind = PROMPT_PLANET
-			if _planet_name.is_empty():
-				if _planet_name_suggestion.is_empty():
-					_planet_name_suggestion = _generate_planet_name(_name_rng)
-				_input_buffer = _planet_name_suggestion
-			else:
-				_input_buffer = _planet_name
+			_ensure_planet_name_generated()
+			_input_buffer = _planet_name
 		PHASE_PLANET_PLACE:
 			if _planet_preview_x < _orbit_x_min or _planet_preview_x > _orbit_x_max:
 				_planet_preview_x = lerp(_orbit_x_min, _orbit_x_max, 0.5)
-			_roll_planetary_setup()
 		_:
 			pass
 
@@ -620,6 +618,16 @@ func _set_phase(new_phase: int) -> void:
 	if _phase != PHASE_TRANSITION:
 		_update_background_gpu()
 	queue_redraw()
+
+func _skip_to_planet_place() -> void:
+	# Preserve startup consistency normally established by camera-pan.
+	_ensure_star_name_generated()
+	_roll_planetary_setup()
+	_planet_has_position = false
+	_set_phase(PHASE_PLANET_PLACE)
+	_skip_to_planet_fade_active = true
+	_skip_to_planet_fade_time = 0.0
+	_skip_to_planet_fade_alpha = 1.0
 
 func _update_ui_state() -> void:
 	_update_habitable_zone_label_position()
@@ -633,15 +641,29 @@ func _update_ui_state() -> void:
 		_quote_label.modulate = Color(pulse, pulse, pulse, q_alpha)
 		_quote_author_label.modulate = Color(0.90, 0.92, 1.0, q_alpha * 0.95)
 
-	var terminal_visible: bool = _is_prompt_visible_phase()
-	_terminal_label.visible = terminal_visible
-	if terminal_visible:
-		var p_alpha: float = _get_prompt_alpha()
-		_terminal_label.text = _build_prompt_display_text()
-		_terminal_label.modulate = Color(1.0, 0.97, 0.90, p_alpha)
-
+	_terminal_label.visible = false
 	_planet_hint_label.visible = false
 	_planet_hint_label.text = ""
+
+	var star_text_visible: bool = (_phase == PHASE_SPACE_REVEAL or _phase == PHASE_CAMERA_PAN)
+	if star_text_visible:
+		var star_alpha: float = _get_prompt_alpha()
+		_terminal_label.visible = star_alpha > 0.001
+		if _terminal_label.visible:
+			_terminal_label.text = _build_prompt_display_text()
+			_terminal_label.modulate = Color(1.0, 1.0, 1.0, star_alpha)
+	elif _phase == PHASE_PLANET_PROMPT_FADE_IN:
+		var primary_alpha: float = _get_prompt_alpha()
+		_terminal_label.visible = primary_alpha > 0.001
+		if _terminal_label.visible:
+			_terminal_label.text = _build_planet_story_primary_line()
+			_terminal_label.modulate = Color(1.0, 0.97, 0.90, primary_alpha)
+	elif _phase == PHASE_PLANET_PROMPT_INPUT and _moon_count > 0:
+		var secondary_alpha: float = _get_prompt_alpha()
+		_planet_hint_label.visible = secondary_alpha > 0.001
+		if _planet_hint_label.visible:
+			_planet_hint_label.text = _build_planet_story_secondary_line()
+			_planet_hint_label.modulate = Color(0.96, 0.96, 1.0, secondary_alpha)
 	var zone_label_visible: bool = (
 		_phase == PHASE_PLANET_PLACE
 		or _phase == PHASE_PLANET_PROMPT_FADE_IN
@@ -682,52 +704,45 @@ func _update_habitable_zone_label_position() -> void:
 
 func _is_prompt_visible_phase() -> bool:
 	return (
-		_phase == PHASE_STAR_PROMPT_FADE_IN
-		or _phase == PHASE_STAR_PROMPT_INPUT
-		or _phase == PHASE_STAR_PROMPT_FADE_OUT
+		_phase == PHASE_SPACE_REVEAL
+		or _phase == PHASE_CAMERA_PAN
 		or _phase == PHASE_PLANET_PROMPT_FADE_IN
 		or _phase == PHASE_PLANET_PROMPT_INPUT
 		or _phase == PHASE_PLANET_PROMPT_FADE_OUT
 	)
 
 func _is_prompt_input_phase() -> bool:
-	return _phase == PHASE_STAR_PROMPT_INPUT or _phase == PHASE_PLANET_PROMPT_INPUT
+	return false
 
 func _get_prompt_alpha() -> float:
 	match _phase:
-		PHASE_STAR_PROMPT_FADE_IN:
-			return clamp(_phase_time / STAR_PROMPT_FADE_IN_SEC, 0.0, 1.0)
-		PHASE_STAR_PROMPT_INPUT:
-			return 1.0
-		PHASE_STAR_PROMPT_FADE_OUT:
-			return clamp(1.0 - (_phase_time / STAR_PROMPT_FADE_OUT_SEC), 0.0, 1.0)
+		PHASE_SPACE_REVEAL:
+			if _active_prompt_kind == PROMPT_STAR:
+				return _get_star_prompt_alpha_by_pan(_get_pan_progress())
+			return 0.0
+		PHASE_CAMERA_PAN:
+			if _active_prompt_kind == PROMPT_STAR:
+				return _get_star_prompt_alpha_by_pan(_get_pan_progress())
+			return 0.0
 		PHASE_PLANET_PROMPT_FADE_IN:
-			return clamp(_phase_time / PLANET_PROMPT_FADE_IN_SEC, 0.0, 1.0)
+			return _story_alpha(_phase_time, PLANET_PROMPT_FADE_IN_SEC, PLANET_STORY_HOLD_SEC, PLANET_PROMPT_FADE_OUT_SEC)
 		PHASE_PLANET_PROMPT_INPUT:
-			return 1.0
+			return _story_alpha(_phase_time, MOON_STORY_FADE_IN_SEC, MOON_STORY_HOLD_SEC, MOON_STORY_FADE_OUT_SEC)
 		PHASE_PLANET_PROMPT_FADE_OUT:
 			return clamp(1.0 - (_phase_time / PLANET_PROMPT_FADE_OUT_SEC), 0.0, 1.0)
 		_:
 			return 0.0
 
 func _build_prompt_display_text() -> String:
-	var prompt: String = ""
-	match _active_prompt_kind:
-		PROMPT_STAR:
-			prompt = STAR_PROMPT_TEXT
-		PROMPT_PLANET:
-			prompt = PLANET_PROMPT_TEXT
-		_:
-			return ""
-
-	var value: String = _input_buffer
-	var cursor: String = ""
-	if _is_prompt_input_phase() and _cursor_visible():
-		cursor = "_"
-	var text: String = prompt + value + cursor
+	if _active_prompt_kind == PROMPT_STAR:
+		_ensure_star_name_generated()
+		return STAR_PROMPT_TEXT % [_star_name]
 	if _active_prompt_kind == PROMPT_PLANET:
-		text += "\n\n" + _build_moon_prompt_line()
-	return text
+		if _phase == PHASE_PLANET_PROMPT_FADE_IN:
+			return _build_planet_story_primary_line()
+		if _phase == PHASE_PLANET_PROMPT_INPUT:
+			return _build_planet_story_secondary_line()
+	return ""
 
 func _cursor_visible() -> bool:
 	return int(floor(_intro_total_time * 2.0)) % 2 == 0
@@ -751,17 +766,7 @@ func _handle_prompt_key(key: InputEventKey) -> void:
 			queue_redraw()
 
 func _commit_prompt_input() -> void:
-	var cleaned: String = _input_buffer.strip_edges()
-	if cleaned.is_empty():
-		return
-	if _phase == PHASE_STAR_PROMPT_INPUT:
-		_star_name = _sanitize_name(cleaned, "Unnamed Star")
-		_input_buffer = _star_name
-		_set_phase(PHASE_STAR_PROMPT_FADE_OUT)
-	elif _phase == PHASE_PLANET_PROMPT_INPUT:
-		_planet_name = _sanitize_name(cleaned, "Unnamed World")
-		_input_buffer = _planet_name
-		_set_phase(PHASE_PLANET_PROMPT_FADE_OUT)
+	return
 
 func _sanitize_name(value: String, fallback_name: String) -> String:
 	var cleaned: String = value.strip_edges()
@@ -913,16 +918,46 @@ func _get_space_alpha() -> float:
 
 func _get_pan_progress() -> float:
 	if _phase == PHASE_SPACE_REVEAL:
-		var t: float = _ease_in_out(clamp(_phase_time / max(0.0001, _space_reveal_duration), 0.0, 1.0))
+		# Ease out into the sun: fast-ish start, gentle slowdown while sun enters frame.
+		var tn: float = clamp(_phase_time / max(0.0001, _space_reveal_duration), 0.0, 1.0)
+		var t: float = 1.0 - pow(1.0 - tn, 2.30)
 		return lerp(0.0, _sun_prompt_pan_progress, t)
-	if _phase == PHASE_STAR_PROMPT_FADE_IN or _phase == PHASE_STAR_PROMPT_INPUT or _phase == PHASE_STAR_PROMPT_FADE_OUT:
-		return _sun_prompt_pan_progress
 	if _phase == PHASE_CAMERA_PAN:
-		var t: float = _ease_in_out(clamp(_phase_time / max(0.0001, _camera_pan_duration), 0.0, 1.0))
-		return lerp(_sun_prompt_pan_progress, 1.0, t)
+		# Start slow after crossing the sun, accelerate, then ease out near habitable zone.
+		var t: float = clamp(_phase_time / max(0.0001, _camera_pan_duration), 0.0, 1.0)
+		var s: float = t * t * t * (t * (t * 6.0 - 15.0) + 10.0) # smootherstep
+		return lerp(_sun_prompt_pan_progress, 1.0, s)
 	if _phase >= PHASE_PLANET_PLACE:
 		return 1.0
 	return 0.0
+
+func _get_star_prompt_alpha_by_pan(pan_progress: float) -> float:
+	# Fade in while the sun comes into view, fade out shortly before habitable zone centers.
+	var p: float = clamp(pan_progress, 0.0, 1.0)
+	var fade_in_start: float = max(0.0, _sun_prompt_pan_progress - 0.10)
+	var fade_in_end: float = min(1.0, _sun_prompt_pan_progress + 0.05)
+	var fade_out_start: float = 0.80
+	var fade_out_end: float = 0.94
+	var in_a: float = smoothstep(fade_in_start, fade_in_end, p)
+	var out_a: float = 1.0 - smoothstep(fade_out_start, fade_out_end, p)
+	return clamp(in_a * out_a, 0.0, 1.0)
+
+func _planet_story_primary_total_sec() -> float:
+	return PLANET_PROMPT_FADE_IN_SEC + PLANET_STORY_HOLD_SEC + PLANET_PROMPT_FADE_OUT_SEC
+
+func _moon_story_total_sec() -> float:
+	return MOON_STORY_FADE_IN_SEC + MOON_STORY_HOLD_SEC + MOON_STORY_FADE_OUT_SEC
+
+func _story_alpha(time_sec: float, fade_in_sec: float, hold_sec: float, fade_out_sec: float) -> float:
+	if time_sec <= 0.0:
+		return 0.0
+	if time_sec < fade_in_sec:
+		return clamp(time_sec / max(0.0001, fade_in_sec), 0.0, 1.0)
+	var hold_end: float = fade_in_sec + hold_sec
+	if time_sec < hold_end:
+		return 1.0
+	var fade_out_t: float = time_sec - hold_end
+	return clamp(1.0 - fade_out_t / max(0.0001, fade_out_sec), 0.0, 1.0)
 
 func _get_zoom_scale() -> float:
 	if _phase != PHASE_PLANET_ZOOM:
@@ -950,6 +985,7 @@ func _confirm_planet_position() -> void:
 		return
 	_planet_x = _planet_preview_x
 	_planet_has_position = true
+	_ensure_planet_name_generated()
 	_prepare_startup_world_config()
 	_request_main_scene_preload()
 	_set_phase(PHASE_PLANET_PROMPT_FADE_IN)
@@ -981,6 +1017,7 @@ func _roll_planetary_setup() -> void:
 	_moon_seed = _name_rng.randf_range(1.0, 10000.0)
 	_moon_names = _generate_unique_moon_names(_moon_count, _name_rng)
 	_planet_name_suggestion = _generate_planet_name(_name_rng)
+	_planet_name = _planet_name_suggestion
 
 func _roll_moon_count(rng: RandomNumberGenerator) -> int:
 	var roll: float = rng.randf()
@@ -1001,6 +1038,51 @@ func _build_moon_prompt_line() -> String:
 	var joined: String = ", ".join(parts)
 	var suffix: String = "" if _moon_count == 1 else "s"
 	return "Moon%s: %s" % [suffix, joined]
+
+func _build_planet_story_primary_line() -> String:
+	_ensure_planet_name_generated()
+	return PLANET_PROMPT_TEXT % [_planet_name]
+
+func _build_planet_story_secondary_line() -> String:
+	if _moon_count <= 0:
+		return ""
+	_ensure_planet_name_generated()
+	var count_word: String = _number_to_word(_moon_count)
+	var noun: String = "moon" if _moon_count == 1 else "moons"
+	var moon_names: Array[String] = []
+	for moon_name in _moon_names:
+		moon_names.append(String(moon_name))
+	var joined_names: String = _join_with_and(moon_names)
+	return "%s was circled by %s %s named %s." % [_planet_name, count_word, noun, joined_names]
+
+func _join_with_and(items: Array[String]) -> String:
+	if items.is_empty():
+		return ""
+	if items.size() == 1:
+		return String(items[0])
+	if items.size() == 2:
+		return "%s and %s" % [items[0], items[1]]
+	var all_but_last: Array[String] = []
+	for i in range(items.size() - 1):
+		all_but_last.append(String(items[i]))
+	return "%s and %s" % [", ".join(all_but_last), items[items.size() - 1]]
+
+func _number_to_word(value: int) -> String:
+	match value:
+		0:
+			return "zero"
+		1:
+			return "one"
+		2:
+			return "two"
+		3:
+			return "three"
+		4:
+			return "four"
+		5:
+			return "five"
+		_:
+			return str(value)
 
 func _generate_unique_moon_names(count: int, rng: RandomNumberGenerator) -> Array[String]:
 	var target: int = int(clamp(count, 0, MAX_MOONS))
@@ -1024,11 +1106,31 @@ func _generate_planet_name(rng: RandomNumberGenerator) -> String:
 func _generate_moon_name(rng: RandomNumberGenerator) -> String:
 	return _generate_fantasy_name(rng, _roll_name_syllable_count(rng))
 
+func _generate_sun_name(rng: RandomNumberGenerator) -> String:
+	return _generate_fantasy_name(rng, _roll_sun_syllable_count(rng))
+
+func _roll_sun_syllable_count(rng: RandomNumberGenerator) -> int:
+	if rng.randf() < 0.70:
+		return 1
+	return 2
+
+func _ensure_star_name_generated() -> void:
+	if not _star_name.strip_edges().is_empty():
+		return
+	_star_name = _generate_sun_name(_name_rng)
+
+func _ensure_planet_name_generated() -> void:
+	if not _planet_name.strip_edges().is_empty():
+		return
+	if _planet_name_suggestion.strip_edges().is_empty():
+		_planet_name_suggestion = _generate_planet_name(_name_rng)
+	_planet_name = _planet_name_suggestion
+
 func _roll_name_syllable_count(rng: RandomNumberGenerator) -> int:
 	var roll: float = rng.randf()
-	if roll < 0.50:
+	if roll < 0.55:
 		return 1
-	if roll < 0.85:
+	if roll < 0.95:
 		return 2
 	return 3
 
@@ -1071,8 +1173,7 @@ func _capitalize_name(value: String) -> String:
 	return value.substr(0, 1).to_upper() + value.substr(1).to_lower()
 
 func _finalize_intro_selection() -> void:
-	if _star_name.strip_edges().is_empty():
-		_star_name = "Unnamed Star"
+	_ensure_star_name_generated()
 	if _planet_name.strip_edges().is_empty():
 		if _planet_name_suggestion.is_empty():
 			_planet_name_suggestion = _generate_planet_name(_name_rng)
@@ -1097,9 +1198,8 @@ func _prepare_startup_world_config() -> void:
 		return
 	if not ("prepare_intro_world_config" in startup_state):
 		return
+	_ensure_star_name_generated()
 	var prepared_star_name: String = _star_name.strip_edges()
-	if prepared_star_name.is_empty():
-		prepared_star_name = "Unnamed Star"
 	startup_state.prepare_intro_world_config(prepared_star_name, _current_orbit_norm(), _moon_count, _moon_seed)
 
 func _request_main_scene_preload() -> void:

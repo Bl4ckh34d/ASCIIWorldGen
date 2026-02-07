@@ -13,6 +13,7 @@ var data_texture_2: ImageTexture  # biome_id, is_land, character_index, special_
 var data_texture_3: ImageTexture  # turquoise_strength, shelf_noise, clouds, plate_boundary
 var data_texture_4: ImageTexture  # lake, river, lava, lake_level_norm
 var color_palette_texture: ImageTexture  # Pre-computed biome colors
+var render_bedrock_view: bool = false
 
 # Current data dimensions
 var current_width: int = 0
@@ -33,9 +34,11 @@ func update_world_data(
 	moisture_data: PackedFloat32Array,
 	light_data: PackedFloat32Array,
 	biome_data: PackedInt32Array,
+	rock_data: PackedInt32Array,
 	is_land_data: PackedByteArray,
 	beach_mask: PackedByteArray,
 	rng_seed: int,
+	use_bedrock_view: bool = false,
 	turquoise_strength: PackedFloat32Array = PackedFloat32Array(),
 	shelf_noise: PackedFloat32Array = PackedFloat32Array(),
 	clouds: PackedFloat32Array = PackedFloat32Array(),
@@ -55,15 +58,16 @@ func update_world_data(
 	
 	current_width = width
 	current_height = height
+	render_bedrock_view = use_bedrock_view
 	
 	# Update data textures
 	if not skip_base_textures:
 		_update_data_texture_1(width, height, height_data, temperature_data, moisture_data, light_data)
-		_update_data_texture_2(width, height, biome_data, is_land_data, beach_mask, rng_seed)
-	if not skip_aux_textures or data_texture_3 == null or data_texture_4 == null:
+		_update_data_texture_2(width, height, biome_data, rock_data, is_land_data, beach_mask, rng_seed, use_bedrock_view)
+	if not skip_aux_textures:
 		_update_data_texture_3(width, height, turquoise_strength, shelf_noise, clouds, plate_boundary_mask)
 		_update_data_texture_4(width, height, height_data, lake_mask, river_mask, lava_mask, pooled_lake_mask, lake_id, sea_level)
-	_update_color_palette_texture()
+	_update_color_palette_texture(use_bedrock_view)
 
 func update_clouds_only(
 	width: int,
@@ -119,9 +123,11 @@ func _update_data_texture_2(
 	width: int,
 	height: int,
 	biome_data: PackedInt32Array,
+	rock_data: PackedInt32Array,
 	is_land_data: PackedByteArray,
 	beach_mask: PackedByteArray,
-	rng_seed: int
+	rng_seed: int,
+	use_bedrock_view: bool
 ) -> void:
 	"""Update texture 2: biome_id, is_land, character_index, special_flags (RGBAF)"""
 	
@@ -134,17 +140,21 @@ func _update_data_texture_2(
 			
 			# Sample data arrays safely
 			var biome_id = biome_data[i] if i < biome_data.size() else 0
+			var rock_id = rock_data[i] if i < rock_data.size() else 0
 			var is_land = is_land_data[i] if i < is_land_data.size() else 0
 			var is_beach = beach_mask[i] if i < beach_mask.size() else 0
+			var surface_id: int = biome_id
+			if use_bedrock_view and is_land != 0:
+				surface_id = rock_id
 			
 			# Get character index for this cell
-			var char_index = character_mapper.get_character_index(x, y, is_land == 1, biome_id, is_beach == 1, rng_seed)
+			var char_index = character_mapper.get_character_index(x, y, is_land == 1, surface_id, is_beach == 1, rng_seed, use_bedrock_view)
 			
 			# Pack data into RGBA channels (0..1 range)
-			var biome_normalized = clamp(float(biome_id) / 255.0, 0.0, 1.0)
+			var biome_normalized = clamp(float(surface_id) / 255.0, 0.0, 1.0)
 			var land_normalized = 1.0 if is_land != 0 else 0.0
 			var char_normalized = clamp(float(char_index) / 255.0, 0.0, 1.0)
-			var flags_normalized = 1.0 if is_beach != 0 else 0.0  # Could pack more flags here
+			var flags_normalized = 1.0 if (is_beach != 0 and not use_bedrock_view) else 0.0  # Could pack more flags here
 			
 			image.set_pixel(x, y, Color(biome_normalized, land_normalized, char_normalized, flags_normalized))
 	
@@ -261,7 +271,7 @@ func _update_data_texture_4(
 		data_texture_4 = ImageTexture.new()
 	data_texture_4.set_image(image)
 
-func _update_color_palette_texture() -> void:
+func _update_color_palette_texture(use_bedrock_view: bool = false) -> void:
 	"""Create color palette texture for biome colors"""
 	
 	# Create palette with 256 colors (one row)
@@ -270,10 +280,14 @@ func _update_color_palette_texture() -> void:
 	
 	var BiomePaletteClass = load("res://scripts/style/BiomePalette.gd")
 	var biome_palette = BiomePaletteClass.new()
+	var RockPaletteClass = load("res://scripts/style/RockPalette.gd")
+	var rock_palette = RockPaletteClass.new()
 	
 	# Generate colors for each biome ID
 	for biome_id in range(palette_size):
 		var color = biome_palette.color_for_biome(biome_id, false)
+		if use_bedrock_view:
+			color = rock_palette.color_for_rock(biome_id, false)
 		image.set_pixel(biome_id, 0, color)
 	
 	# Create texture
