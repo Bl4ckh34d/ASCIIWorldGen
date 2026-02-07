@@ -415,8 +415,17 @@ vec3 render_bigbang(vec2 uv, float t) {
 	vec3 base_sky = 1.0 - exp(-intro_star_sky(uv, star_twinkle_t, 0.0, 1.0) * 1.20);
 	vec3 burst_sky = 1.0 - exp(-intro_star_sky(uv_burst, star_twinkle_t, 0.0, 1.18) * 1.25);
 	vec3 stars_mix = mix(burst_sky, base_sky, drift_blend);
+	// The persistent layer also starts compact, then eases to the stable starfield.
 	float persistent_reveal = smoothstep(1.20, 1.90, progress_raw);
-	col += (base_sky * persistent_reveal * 1.12 + stars_mix * burst_weight * 1.05) * star_gate;
+	float persistent_settle_n = clamp((progress_raw - 1.08) / max(0.0001, 3.25 - 1.08), 0.0, 1.0);
+	float persistent_settle_log = log2(1.0 + 15.0 * persistent_settle_n) / log2(16.0);
+	float persistent_settle = persistent_settle_log * persistent_settle_log * persistent_settle_log;
+	persistent_settle *= (persistent_settle_log * (persistent_settle_log * 6.0 - 15.0) + 10.0);
+	// Start with a compact (small) starfield and expand into the stable final state.
+	float persistent_zoom = mix(0.42, 1.0, persistent_settle);
+	vec2 uv_persistent = 0.5 + (uv - 0.5) / max(0.0001, persistent_zoom);
+	vec3 persistent_sky = 1.0 - exp(-intro_star_sky(uv_persistent, star_twinkle_t, 0.0, 1.0) * 1.20);
+	col += (persistent_sky * persistent_reveal * 1.12 + stars_mix * burst_weight * 1.05) * star_gate;
 
 	return col;
 }

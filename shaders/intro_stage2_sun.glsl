@@ -672,9 +672,8 @@ vec3 render_stage2(vec2 uv, float t) {
 	vec2 rel = (uvw - sun_uv) * aspect;
 	float r = length(rel);
 	float sun_r = PC.sun_radius / max(1.0, float(PC.height));
-	// Reveal the sun early in the starfield->sun move so it doesn't look like
-	// a late opacity fade while the camera is already panning.
-	float sun_reveal = space * smoothstep(0.00, 0.12, pan);
+	// Scene-2 should spawn the sun immediately at load (no fade-in).
+	float sun_reveal = space;
 	float sun_dist = r / max(0.0001, sun_r);
 	// Back-glow bridge from limb to corona: keep it thin and softly tapered.
 	float glow_out = max(0.0, sun_dist - 1.0);

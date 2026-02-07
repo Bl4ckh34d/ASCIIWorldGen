@@ -134,9 +134,13 @@ const SPACE_REVEAL_SEC := 4.80
 const CAMERA_PAN_SEC := 5.10
 const PLANET_PROMPT_FADE_IN_SEC := 0.95
 const PLANET_PROMPT_FADE_OUT_SEC := 0.95
+const HABITABLE_ZONE_LABEL_FADE_IN_SEC := 0.80
 const PLANET_ZOOM_SEC := 1.95
 const TRANSITION_SEC := 0.18
 const SUN_PROMPT_PAN_PROGRESS := 0.45
+const SUN_START_X_FACTOR := 2.05
+const SUN_REFERENCE_START_X_FACTOR := 1.38
+const SUN_REST_SCREEN_X_FACTOR := 0.50
 const GOLDILOCK_REFERENCE_SCALE := 2.35
 const GOLDILOCK_DISTANCE_SCALE := GOLDILOCK_REFERENCE_SCALE * 2.0
 const GOLDILOCK_SCREEN_CENTER_X := 0.50
@@ -267,6 +271,7 @@ var _phase: int = PHASE_QUOTE
 var _phase_time: float = 0.0
 var _intro_total_time: float = 0.0
 var _sun_prompt_pan_progress: float = SUN_PROMPT_PAN_PROGRESS
+var _space_reveal_duration: float = SPACE_REVEAL_SEC
 var _camera_pan_duration: float = CAMERA_PAN_SEC
 
 var _star_name: String = ""
@@ -300,6 +305,7 @@ var _quote_label: Label
 var _quote_author_label: Label
 var _terminal_label: Label
 var _planet_hint_label: Label
+var _habitable_zone_label: Label
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -372,7 +378,7 @@ func _process(delta: float) -> void:
 			if _phase_time >= STAR_PROMPT_FADE_OUT_SEC:
 				_set_phase(PHASE_CAMERA_PAN)
 		PHASE_SPACE_REVEAL:
-			if _phase_time >= SPACE_REVEAL_SEC:
+			if _phase_time >= _space_reveal_duration:
 				_set_phase(PHASE_STAR_PROMPT_FADE_IN)
 		PHASE_CAMERA_PAN:
 			if _phase_time >= _camera_pan_duration:
@@ -494,6 +500,15 @@ func _create_ui() -> void:
 	_planet_hint_label.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0, 1.0))
 	add_child(_planet_hint_label)
 
+	_habitable_zone_label = Label.new()
+	_habitable_zone_label.text = "HABITABLE ZONE"
+	_habitable_zone_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_habitable_zone_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_habitable_zone_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_habitable_zone_label.add_theme_font_size_override("font_size", 34)
+	_habitable_zone_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.58, 1.0))
+	add_child(_habitable_zone_label)
+
 func _update_layout() -> void:
 	var w: float = max(1.0, size.x)
 	var h: float = max(1.0, size.y)
@@ -510,8 +525,10 @@ func _update_layout() -> void:
 	if _planet_hint_label != null:
 		_planet_hint_label.position = Vector2(w * 0.08, h * 0.78)
 		_planet_hint_label.size = Vector2(w * 0.84, h * 0.18)
+	if _habitable_zone_label != null:
+		_habitable_zone_label.size = Vector2(w * 0.30, h * 0.08)
 
-	_sun_start_center = Vector2(w * 1.38, h * 0.50)
+	_sun_start_center = Vector2(w * SUN_START_X_FACTOR, h * 0.50)
 	_sun_end_center = Vector2.ZERO
 	_sun_radius = h * 0.95
 	var base_inner: float = w * 1.08
@@ -526,22 +543,27 @@ func _update_layout() -> void:
 	zone_mid_radius = (_zone_inner_radius + _zone_outer_radius) * 0.5
 	_sun_end_center = Vector2(w * GOLDILOCK_SCREEN_CENTER_X - zone_mid_radius, h * 0.50)
 	var pan_denom: float = _sun_end_center.x - _sun_start_center.x
+	var sun_rest_x: float = w * SUN_REST_SCREEN_X_FACTOR
 	if absf(pan_denom) > 0.0001:
-		_sun_prompt_pan_progress = clamp((w * 0.5 - _sun_start_center.x) / pan_denom, 0.0, 1.0)
+		_sun_prompt_pan_progress = clamp((sun_rest_x - _sun_start_center.x) / pan_denom, 0.0, 1.0)
 	else:
 		_sun_prompt_pan_progress = SUN_PROMPT_PAN_PROGRESS
+	var cur_to_sun: float = absf(sun_rest_x - _sun_start_center.x)
+	var ref_to_sun: float = absf(sun_rest_x - w * SUN_REFERENCE_START_X_FACTOR)
+	_space_reveal_duration = SPACE_REVEAL_SEC * clamp(cur_to_sun / max(1.0, ref_to_sun), 1.0, 3.5)
 	var ref_mid_radius: float = _sun_radius + base_mid_gap * GOLDILOCK_REFERENCE_SCALE
 	var ref_end_x: float = w * GOLDILOCK_SCREEN_CENTER_X - ref_mid_radius
 	var ref_denom: float = ref_end_x - _sun_start_center.x
 	var ref_prompt_pan: float = SUN_PROMPT_PAN_PROGRESS
 	if absf(ref_denom) > 0.0001:
-		ref_prompt_pan = clamp((w * 0.5 - _sun_start_center.x) / ref_denom, 0.0, 1.0)
+		ref_prompt_pan = clamp((sun_rest_x - _sun_start_center.x) / ref_denom, 0.0, 1.0)
 	var ref_remaining: float = absf(ref_denom) * max(0.0, 1.0 - ref_prompt_pan)
 	var cur_remaining: float = absf(pan_denom) * max(0.0, 1.0 - _sun_prompt_pan_progress)
 	var pan_ratio: float = cur_remaining / max(1.0, ref_remaining)
 	_camera_pan_duration = CAMERA_PAN_SEC * clamp(pan_ratio, 1.0, 3.5)
 	_orbit_y = h * 0.50
 	_update_orbit_bounds()
+	_update_habitable_zone_label_position()
 
 func _update_orbit_bounds() -> void:
 	var inner_x: float = _circle_positive_x_at(_zone_inner_radius, _orbit_y, _sun_end_center)
@@ -593,6 +615,8 @@ func _set_phase(new_phase: int) -> void:
 	queue_redraw()
 
 func _update_ui_state() -> void:
+	_update_habitable_zone_label_position()
+
 	var quote_visible: bool = (_phase == PHASE_QUOTE)
 	_quote_label.visible = quote_visible
 	_quote_author_label.visible = quote_visible
@@ -611,6 +635,43 @@ func _update_ui_state() -> void:
 
 	_planet_hint_label.visible = false
 	_planet_hint_label.text = ""
+	var zone_label_visible: bool = (
+		_phase == PHASE_PLANET_PLACE
+		or _phase == PHASE_PLANET_PROMPT_FADE_IN
+		or _phase == PHASE_PLANET_PROMPT_INPUT
+		or _phase == PHASE_PLANET_PROMPT_FADE_OUT
+	)
+	var zone_label_alpha: float = 0.0
+	if zone_label_visible:
+		if _phase == PHASE_PLANET_PLACE:
+			zone_label_alpha = clamp(_phase_time / max(0.0001, HABITABLE_ZONE_LABEL_FADE_IN_SEC), 0.0, 1.0)
+		else:
+			zone_label_alpha = 1.0
+	_habitable_zone_label.visible = zone_label_alpha > 0.001
+	if zone_label_alpha > 0.001:
+		_habitable_zone_label.modulate = Color(1.0, 0.95, 0.74, 0.95 * zone_label_alpha)
+
+func _update_habitable_zone_label_position() -> void:
+	if _habitable_zone_label == null:
+		return
+	var sun_center: Vector2 = _sun_end_center
+	var inner: float = _zone_inner_radius
+	var outer: float = _zone_outer_radius
+	var radial_x: float = (inner + outer) * 0.5
+	var zone_label_x: float = sun_center.x + radial_x
+	var outer_inside: float = outer * outer - radial_x * radial_x
+	var inner_inside: float = inner * inner - radial_x * radial_x
+	var outer_top_y: float = sun_center.y - sqrt(max(0.0, outer_inside))
+	var zone_label_y: float = outer_top_y + max(1.0, outer - inner) * 0.30
+	if inner_inside > 0.0:
+		var inner_top_y: float = sun_center.y - sqrt(max(0.0, inner_inside))
+		zone_label_y = lerp(outer_top_y, inner_top_y, 0.30)
+	zone_label_x = clamp(zone_label_x, size.x * 0.04, size.x * 0.96)
+	zone_label_y = clamp(zone_label_y, size.y * 0.04, size.y * 0.90)
+	_habitable_zone_label.position = Vector2(
+		zone_label_x - _habitable_zone_label.size.x * 0.5,
+		zone_label_y - _habitable_zone_label.size.y * 0.5
+	)
 
 func _is_prompt_visible_phase() -> bool:
 	return (
@@ -845,7 +906,7 @@ func _get_space_alpha() -> float:
 
 func _get_pan_progress() -> float:
 	if _phase == PHASE_SPACE_REVEAL:
-		var t: float = _ease_in_out(clamp(_phase_time / SPACE_REVEAL_SEC, 0.0, 1.0))
+		var t: float = _ease_in_out(clamp(_phase_time / max(0.0001, _space_reveal_duration), 0.0, 1.0))
 		return lerp(0.0, _sun_prompt_pan_progress, t)
 	if _phase == PHASE_STAR_PROMPT_FADE_IN or _phase == PHASE_STAR_PROMPT_INPUT or _phase == PHASE_STAR_PROMPT_FADE_OUT:
 		return _sun_prompt_pan_progress

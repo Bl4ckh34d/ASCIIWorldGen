@@ -65,30 +65,40 @@ func _sanitize_planet_name(raw_value: String) -> String:
 	return cleaned
 
 func _derive_world_config(orbit: float) -> Dictionary:
+	var orbit_n: float = clamp(orbit, 0.0, 1.0)
 	# Left side of the habitable band is hotter, right side is colder.
-	var heat: float = 1.0 - clamp(orbit, 0.0, 1.0)
+	var heat: float = 1.0 - orbit_n
+	var cold: float = orbit_n
 	# Center of band is most temperate; edges are harsher.
-	var habitability: float = 1.0 - abs(orbit - 0.5) * 2.0
-	habitability = clamp(habitability, 0.0, 1.0)
+	var edge: float = clamp(abs(orbit_n - 0.5) * 2.0, 0.0, 1.0)
+	var habitability: float = 1.0 - edge
+	var hot_extreme: float = pow(heat, 1.35)
+	var cold_extreme: float = pow(cold, 1.35)
+	var harshness: float = pow(edge, 1.20)
 
-	var temp_min_c: float = lerp(-78.0, -8.0, heat)
-	var temp_max_c: float = lerp(22.0, 92.0, heat)
-	var sea_level: float = lerp(-0.20, 0.06, habitability)
-	var polar_cap_frac: float = lerp(0.30, 0.04, heat)
-	var moist_base_offset: float = lerp(0.03, 0.20, heat)
-	var moist_scale: float = lerp(0.85, 1.25, heat)
-	var season_amp_equator: float = lerp(0.07, 0.13, 1.0 - habitability)
-	var season_amp_pole: float = lerp(0.18, 0.40, 1.0 - habitability)
-	var diurnal_amp_equator: float = lerp(0.10, 0.19, heat)
-	var diurnal_amp_pole: float = lerp(0.05, 0.11, heat)
-	var min_ocean_fraction: float = lerp(0.03, 0.10, habitability)
-	var lake_fill_ocean_ref: float = lerp(0.55, 1.00, habitability)
+	# Stronger directional climate split so left/right zone edges feel clearly different.
+	var temp_min_c: float = lerp(-118.0, 18.0, heat)
+	var temp_max_c: float = lerp(4.0, 112.0, heat)
+
+	# Keep very-low oceans on the hot edge; allow somewhat more water on cold edge.
+	var sea_level: float = 0.10 - harshness * 0.42 - hot_extreme * 0.24 + cold_extreme * 0.12
+	sea_level = clamp(sea_level, -0.72, 0.22)
+
+	var polar_cap_frac: float = clamp(0.03 + cold_extreme * 0.55 + harshness * 0.06, 0.02, 0.62)
+	var moist_base_offset: float = 0.02 + habitability * 0.16 - hot_extreme * 0.34 - cold_extreme * 0.10
+	var moist_scale: float = clamp(0.74 + habitability * 0.34 - hot_extreme * 0.18, 0.58, 1.22)
+	var season_amp_equator: float = lerp(0.05, 0.18, harshness)
+	var season_amp_pole: float = lerp(0.15, 0.52, harshness)
+	var diurnal_amp_equator: float = lerp(0.07, 0.24, hot_extreme)
+	var diurnal_amp_pole: float = lerp(0.03, 0.14, hot_extreme)
+	var min_ocean_fraction: float = clamp(0.015 + habitability * 0.11 + cold_extreme * 0.05 - hot_extreme * 0.01, 0.01, 0.20)
+	var lake_fill_ocean_ref: float = clamp(0.40 + habitability * 0.75 + cold_extreme * 0.10 - hot_extreme * 0.18, 0.25, 1.10)
 
 	return {
 		"temp_min_c": temp_min_c,
 		"temp_max_c": temp_max_c,
-		"temp_base_offset": lerp(-0.32, 0.38, heat),
-		"temp_scale": lerp(0.86, 1.28, heat),
+		"temp_base_offset": lerp(-0.55, 0.62, heat),
+		"temp_scale": lerp(0.64, 1.46, heat),
 		"sea_level": sea_level,
 		"polar_cap_frac": polar_cap_frac,
 		"moist_base_offset": moist_base_offset,
@@ -97,8 +107,8 @@ func _derive_world_config(orbit: float) -> Dictionary:
 		"season_amp_pole": season_amp_pole,
 		"diurnal_amp_equator": diurnal_amp_equator,
 		"diurnal_amp_pole": diurnal_amp_pole,
-		"season_ocean_damp": lerp(0.50, 0.72, 1.0 - heat),
-		"continentality_scale": lerp(1.05, 1.45, 1.0 - habitability),
+		"season_ocean_damp": lerp(0.44, 0.82, cold_extreme),
+		"continentality_scale": lerp(1.10, 1.68, harshness),
 		"min_ocean_fraction": min_ocean_fraction,
 		"lake_fill_ocean_ref": lake_fill_ocean_ref,
 	}
