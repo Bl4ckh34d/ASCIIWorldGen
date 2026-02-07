@@ -31,6 +31,7 @@ layout(push_constant) uniform Params {
     float trench_rate_per_day;
     float drift_cells_per_day;
     float seed_phase;
+    float sea_level;
 } PC;
 
 uint idx(int x, int y) { return uint(x + y * PC.width); }
@@ -131,6 +132,7 @@ void main() {
     float approach = -(rel_u * dirx + rel_v * diry);
     float belt_w = 1.0 - smoothstep(1.0, float(band) + 0.6, nearest_d);
     belt_w = clamp(belt_w, 0.0, 1.0);
+    float boundary_w = belt_w;
     float organic = 0.72 + 0.56 * fract(sin(dot(vec2(float(x), float(y)) + vec2(float(pid), float(p_other)) * 0.37 + vec2(PC.seed_phase), vec2(27.19, 91.07))) * 13758.5453);
 
     float delta_h = 0.0;
@@ -152,8 +154,25 @@ void main() {
         }
     } else if (approach < div_thresh) {
         float div = (-approach) - (-div_thresh);
-        delta_h += PC.ridge_rate_per_day * PC.dt_days * div * 0.95;
-        delta_h -= PC.trench_rate_per_day * PC.dt_days * div * 0.30;
+        // Keep divergent seams thin and avoid unrealistically deep continental rifts.
+        boundary_w = pow(belt_w, 1.75);
+        float land_factor = smoothstep(PC.sea_level - 0.02, PC.sea_level + 0.35, h_base);
+        float ridge_gain = mix(0.92, 0.62, land_factor);
+        float sink_gain = mix(0.09, 0.02, land_factor);
+        delta_h += PC.ridge_rate_per_day * PC.dt_days * div * ridge_gain;
+        delta_h -= PC.trench_rate_per_day * PC.dt_days * div * sink_gain;
+        // Magma infill drives the split toward a shallow target depth.
+        float rift_target = mix(PC.sea_level - 0.12, PC.sea_level + 0.02, land_factor);
+        float to_target = rift_target - (h_base + delta_h);
+        float infill_rate = PC.ridge_rate_per_day * PC.dt_days * div * mix(1.25, 1.45, land_factor);
+        delta_h += clamp(to_target, -infill_rate * 0.35, infill_rate);
+        if (land_factor > 0.5) {
+            float min_land_rift = PC.sea_level - 0.04;
+            float proposed = h_base + delta_h;
+            if (proposed < min_land_rift) {
+                delta_h += (min_land_rift - proposed);
+            }
+        }
     } else {
         // cheap hash noise based on coordinates
         float n = fract(sin(dot(vec2(float(x), float(y)) + vec2(PC.seed_phase), vec2(12.9898,78.233))) * 43758.5453);
@@ -166,7 +185,7 @@ void main() {
         delta_h += PC.transform_roughness_per_day * PC.dt_days * shear * ((n2 - 0.5) * 1.8);
     }
 
-    delta_h *= belt_w * organic;
+    delta_h *= boundary_w * organic;
     float h_out = clamp(h_base + delta_h, -1.0, 2.0);
     HOut.height_out[i] = h_out;
 }

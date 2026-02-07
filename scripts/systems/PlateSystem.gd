@@ -98,6 +98,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 					"subduction_rate_per_day": subduction_rate_per_day,
 					"trench_rate_per_day": trench_rate_per_day,
 					"drift_cells_per_day": drift_cells_per_day,
+					"sea_level": float(generator.config.sea_level),
 				},
 				boundary_band_cells,
 				float(Time.get_ticks_msec() % 100000) / 100000.0,

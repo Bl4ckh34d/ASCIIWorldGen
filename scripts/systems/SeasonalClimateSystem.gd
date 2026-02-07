@@ -13,6 +13,16 @@ var climate_update_interval_ticks: int = 6
 var light_update_interval_ticks: int = 1
 var _light_tex: Object = null
 var _cpu_climate_mirror_counter: int = 0
+var _paleo_initialized: bool = false
+var _paleo_base_offset: float = 0.25
+var _paleo_last_applied_offset: float = 0.25
+const TAU: float = 6.28318530718
+const PALEO_PRIMARY_PERIOD_DAYS: float = 15330000.0   # ~42k years
+const PALEO_SECONDARY_PERIOD_DAYS: float = 4015000.0  # ~11k years
+const PALEO_DRIFT_PERIOD_DAYS: float = 2555000.0      # ~7k years
+const PALEO_PRIMARY_AMP_C: float = 3.6
+const PALEO_SECONDARY_AMP_C: float = 1.8
+const PALEO_DRIFT_AMP_C: float = 1.2
 const CPU_CLIMATE_MIRROR_INTERVAL_TICKS: int = 30
 
 func initialize(gen: Object, time_sys: Object = null) -> void:
@@ -35,11 +45,14 @@ func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		season_phase = fposmod(sim_days / days_per_year, 1.0)
 	# Update seasonal and diurnal phases/amps
 	var time_of_day: float = 0.0
+	var sim_days: float = 0.0
 	if world != null and "tick_days" in world and "simulation_time_days" in world:
 		time_of_day = fposmod(float(world.simulation_time_days), 1.0)
+		sim_days = float(world.simulation_time_days)
 	if "config" in generator:
 		generator.config.season_phase = season_phase
 		generator.config.time_of_day = time_of_day
+		_apply_paleoclimate(sim_days)
 	# Climate refresh every tick (GPU-only); biomes handled by separate cadence system
 	if world != null:
 		var do_climate_update: bool = (_climate_update_counter <= 1) or (_climate_update_counter % max(1, climate_update_interval_ticks) == 0)
@@ -64,6 +77,45 @@ func request_full_resync() -> void:
 	_climate_update_counter = 0
 	_light_update_counter = 0
 	_cpu_climate_mirror_counter = 0
+	_paleo_initialized = false
+
+func _apply_paleoclimate(sim_days: float) -> void:
+	if generator == null or not ("config" in generator):
+		return
+	var cfg = generator.config
+	var current_offset: float = float(cfg.temp_base_offset)
+	if not _paleo_initialized:
+		_paleo_initialized = true
+		_paleo_base_offset = current_offset
+		_paleo_last_applied_offset = current_offset
+	else:
+		# Respect user/runtime edits to base temp offset (slider, presets, etc.).
+		if abs(current_offset - _paleo_last_applied_offset) > 0.0001:
+			_paleo_base_offset = current_offset
+	var seed: int = int(cfg.rng_seed) if "rng_seed" in cfg else 0
+	var phase0: float = _hash11(float(seed) * 0.137 + 11.7) * TAU
+	var phase1: float = _hash11(float(seed) * 0.173 + 23.4) * TAU
+	var phase2: float = _hash11(float(seed) * 0.211 + 37.9) * TAU
+	var cyc0: float = sin(sim_days / PALEO_PRIMARY_PERIOD_DAYS * TAU + phase0) * PALEO_PRIMARY_AMP_C
+	var cyc1: float = sin(sim_days / PALEO_SECONDARY_PERIOD_DAYS * TAU + phase1) * PALEO_SECONDARY_AMP_C
+	var drift_n: float = _value_noise_1d(sim_days / PALEO_DRIFT_PERIOD_DAYS + phase2 * 0.15) * 2.0 - 1.0
+	var drift_c: float = drift_n * PALEO_DRIFT_AMP_C
+	var offset_c: float = clamp(cyc0 + cyc1 + drift_c, -6.5, 5.5)
+	var temp_span_c: float = max(1.0, float(cfg.temp_max_c - cfg.temp_min_c))
+	var offset_norm: float = offset_c / temp_span_c
+	var out_offset: float = clamp(_paleo_base_offset + offset_norm, -0.45, 0.45)
+	cfg.temp_base_offset = out_offset
+	_paleo_last_applied_offset = out_offset
+
+func _hash11(x: float) -> float:
+	return fract(sin(x * 127.1 + 311.7) * 43758.5453123)
+
+func _value_noise_1d(x: float) -> float:
+	var i0: float = floor(x)
+	var i1: float = i0 + 1.0
+	var f: float = fract(x)
+	var u: float = f * f * (3.0 - 2.0 * f)
+	return lerp(_hash11(i0), _hash11(i1), u)
 
 func _update_light_field(world: Object) -> void:
 	"""Update the day-night light field using GPU compute"""
