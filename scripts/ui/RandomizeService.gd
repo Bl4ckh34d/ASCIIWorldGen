@@ -1,7 +1,8 @@
 # File: res://scripts/ui/RandomizeService.gd
 extends RefCounted
 
-## Centralized jitter for terrain/climate/sea-level based on current config.
+## Centralized jitter for random-play mode.
+## Keep climate/geomorphology internals seed-driven; avoid overriding hidden physical knobs.
 
 func jitter_config(current_cfg: Object, now_usec: int) -> Dictionary:
     var jitter := RandomNumberGenerator.new()
@@ -13,12 +14,6 @@ func jitter_config(current_cfg: Object, now_usec: int) -> Dictionary:
     cfg2["warp"] = max(0.0, current_cfg.warp * (0.75 + 0.5 * jitter.randf()))
     # Sea level range is -1..1; randomize within [-0.35, 0.35]
     cfg2["sea_level"] = -0.35 + 0.70 * jitter.randf()
-    # Climate baseline jitter
-    cfg2["temp_base_offset"] = (jitter.randf() - 0.5) * 0.10
-    cfg2["temp_scale"] = 0.95 + 0.1 * jitter.randf()
-    cfg2["moist_base_offset"] = (jitter.randf() - 0.5) * 0.10
-    cfg2["moist_scale"] = 0.95 + 0.1 * jitter.randf()
-    cfg2["continentality_scale"] = 0.9 + 0.3 * jitter.randf()
     # Slight shift/expand of per-seed extreme temperatures
     var tmin: float = float(current_cfg.temp_min_c)
     var tmax: float = float(current_cfg.temp_max_c)

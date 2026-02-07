@@ -7,7 +7,7 @@ layout(std430, set = 0, binding = 0) buffer LandBuf { uint is_land[]; } Land;
 layout(std430, set = 0, binding = 1) buffer DistInBuf { float dist_in[]; } DistIn;
 layout(std430, set = 0, binding = 2) buffer DistOutBuf { float dist_out[]; } DistOut;
 
-layout(push_constant) uniform Params { int width; int height; int wrap_x; int mode; } PC; // mode: 0 fwd, 1 bwd
+layout(push_constant) uniform Params { int width; int height; int wrap_x; int mode; } PC; // mode: 0 fwd, 1 bwd, 2 seed
 
 int idx(int x, int y) { return x + y * PC.width; }
 
@@ -19,6 +19,11 @@ void main() {
     uint y = gl_GlobalInvocationID.y;
     if (x >= uint(PC.width) || y >= uint(PC.height)) return;
     int W = PC.width; int H = PC.height; int i = int(x) + int(y) * W;
+
+    if (PC.mode == 2) {
+        DistOut.dist_out[i] = (Land.is_land[i] != 0u) ? 0.0 : 1e9;
+        return;
+    }
 
     // Always keep land at 0
     if (Land.is_land[i] != 0u) {

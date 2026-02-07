@@ -123,8 +123,8 @@ float _river_line_mask(vec2 cell, vec2 char_uv) {
     float diag1 = max(rUL, rDR); // "\"
     float diag2 = max(rUR, rDL); // "/"
 
-    float thickness = 0.12;
-    float soft = 0.06;
+    float thickness = 0.09;
+    float soft = 0.04;
     float line_h = 1.0 - smoothstep(thickness, thickness + soft, abs(char_uv.y - 0.5));
     float line_v = 1.0 - smoothstep(thickness, thickness + soft, abs(char_uv.x - 0.5));
     float line_d1 = 1.0 - smoothstep(thickness, thickness + soft, abs(char_uv.x - char_uv.y));
@@ -140,7 +140,12 @@ float _river_line_mask(vec2 cell, vec2 char_uv) {
     } else if (diag2 > 0.5 && diag1 < 0.5 && horiz < 0.5 && vert < 0.5) {
         line = line_d2;
     } else {
-        line = max(max(line_h, line_v), max(line_d1, line_d2)) * 0.9;
+        // At junctions/mixed neighborhoods, only draw segments backed by neighbors.
+        float seg_h = line_h * horiz;
+        float seg_v = line_v * vert;
+        float seg_d1 = line_d1 * diag1;
+        float seg_d2 = line_d2 * diag2;
+        line = max(max(seg_h, seg_v), max(seg_d1, seg_d2));
     }
 
     if (line <= 0.0) {
@@ -262,7 +267,6 @@ void fragment() {
         float river_line = _river_line_mask(world_cell, char_uv);
         vec3 river_col = vec3(0.12, 0.62, 0.92);
         base_color = mix(base_color, river_col, river_line * 0.85);
-        out_char_index = CHAR_IDX_TILDE;
     }
 
     if (!bedrock_mode && lava_here) {

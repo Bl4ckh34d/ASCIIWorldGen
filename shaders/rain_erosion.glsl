@@ -16,6 +16,7 @@ layout(std430, set = 0, binding = 5) readonly buffer LavaBuf { float lava[]; } L
 layout(std430, set = 0, binding = 6) readonly buffer BiomeBuf { int biome_id[]; } Biome;
 layout(std430, set = 0, binding = 7) writeonly buffer HeightOutBuf { float height_out[]; } HeightOut;
 layout(std430, set = 0, binding = 8) readonly buffer RockBuf { int rock_type[]; } Rock;
+layout(std430, set = 0, binding = 9) readonly buffer FlowDirBuf { int flow_dir[]; } FlowDir;
 
 layout(push_constant) uniform Params {
 	int width;
@@ -102,6 +103,7 @@ void main() {
 	int ocean_neighbors = 0;
 	int land_neighbors = 0;
 	float sediment_src = 0.0;
+	float mouth_src = 0.0;
 	for (int oy = -1; oy <= 1; oy++) {
 		for (int ox = -1; ox <= 1; ox++) {
 			if (ox == 0 && oy == 0) {
@@ -132,20 +134,25 @@ void main() {
 			}
 
 			// Ocean-cell sediment intake proxy from adjacent land.
-			if (!is_land_px && !n_lake && n_land) {
-				float moist_n = clamp(Moisture.moisture[j], 0.0, 1.0);
-				float flow_n = max(0.0, Flow.flow_accum[j]);
-				float flow_drive_n = flow_n / (flow_n + 64.0);
-				float src_elev = max(0.0, hn - PC.sea_level);
-				float shore_drop = max(0.0, hn - h0);
-				float transport_n = rock_transportability(Rock.rock_type[j]);
-				float src = moist_n * 0.55 + flow_drive_n * 0.25 + clamp(shore_drop / 0.16, 0.0, 1.0) * 0.20;
-				src *= clamp(src_elev / 0.6, 0.0, 1.0);
-				src *= transport_n;
-				sediment_src += src;
+				if (!is_land_px && !n_lake && n_land) {
+					float moist_n = clamp(Moisture.moisture[j], 0.0, 1.0);
+					float flow_n = max(0.0, Flow.flow_accum[j]);
+					float flow_drive_n = flow_n / (flow_n + 64.0);
+					float src_elev = max(0.0, hn - PC.sea_level);
+					float shore_drop = max(0.0, hn - h0);
+					float transport_n = rock_transportability(Rock.rock_type[j]);
+					bool drains_here = (FlowDir.flow_dir[j] == i);
+					float src = moist_n * 0.55 + flow_drive_n * 0.25 + clamp(shore_drop / 0.16, 0.0, 1.0) * 0.20;
+					src *= clamp(src_elev / 0.6, 0.0, 1.0);
+					src *= transport_n;
+					sediment_src += src;
+					if (drains_here) {
+						// Emphasize true river mouths so deltas nucleate at outlet cells.
+						mouth_src += src * (0.65 + 1.65 * flow_drive_n);
+					}
+				}
 			}
 		}
-	}
 
 	float shape_noise = 0.82 + 0.36 * hash12(vec2(float(x), float(y)) + vec2(PC.noise_phase, PC.noise_phase * 0.37));
 	float neighbor_mean = h0;
@@ -166,10 +173,20 @@ void main() {
 			return;
 		}
 		float sediment_drive = sediment_src / float(max(1, land_neighbors));
-		float deposit = PC.dt_days * PC.base_rate_per_day * sediment_drive * nearshore * (0.55 + 0.45 * shape_noise);
-		float deposit_cap = min(PC.max_rate_per_day * PC.dt_days * 0.28, depth * 0.22 + 0.0008);
+		float mouth_drive = mouth_src / float(max(1, land_neighbors));
+		float channel_focus = clamp(mouth_drive / (mouth_drive + 0.08), 0.0, 1.0);
+		float deposit = PC.dt_days * PC.base_rate_per_day * sediment_drive * nearshore * (0.50 + 0.50 * shape_noise);
+		deposit += PC.dt_days * PC.base_rate_per_day * mouth_drive * nearshore * (0.45 + 0.55 * shape_noise);
+		float deposit_cap = min(PC.max_rate_per_day * PC.dt_days * (0.26 + 0.20 * channel_focus), depth * (0.20 + 0.10 * channel_focus) + 0.0008);
 		deposit = min(deposit, deposit_cap);
-		float h_out_water = min(h0 + deposit, PC.sea_level - 0.006);
+		float h_after_deposit = min(h0 + deposit, PC.sea_level - 0.006);
+		// Subaqueous slope relaxation: spread fresh mouth deposits downslope to form
+		// gently descending delta fronts instead of vertical stacking.
+		float local_drop = max(0.0, h_after_deposit - neighbor_mean);
+		float relax_drive = clamp(local_drop / 0.08, 0.0, 1.0);
+		float relax = PC.dt_days * PC.base_rate_per_day * relax_drive * (0.22 + 0.68 * nearshore) * (0.70 + 0.60 * channel_focus);
+		relax = min(relax, local_drop * 0.55);
+		float h_out_water = h_after_deposit - relax;
 		HeightOut.height_out[i] = clamp(h_out_water, -1.0, 2.0);
 		return;
 	}

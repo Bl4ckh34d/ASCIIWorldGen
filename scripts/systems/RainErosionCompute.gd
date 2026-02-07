@@ -18,6 +18,8 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 		if String(v) == "vulkan":
 			chosen_version = v
 			break
+	if chosen_version == null:
+		return null
 	return file.get_spirv(chosen_version)
 
 func _ensure() -> void:
@@ -37,6 +39,7 @@ func apply_gpu_buffers(
 	height_in_buf: RID,
 	moisture_buf: RID,
 	flow_accum_buf: RID,
+	flow_dir_buf: RID,
 	land_buf: RID,
 	lake_buf: RID,
 	lava_buf: RID,
@@ -58,7 +61,7 @@ func apply_gpu_buffers(
 	_ensure()
 	if not _pipeline.is_valid():
 		return false
-	if not height_in_buf.is_valid() or not moisture_buf.is_valid() or not flow_accum_buf.is_valid():
+	if not height_in_buf.is_valid() or not moisture_buf.is_valid() or not flow_accum_buf.is_valid() or not flow_dir_buf.is_valid():
 		return false
 	if not land_buf.is_valid() or not lake_buf.is_valid() or not lava_buf.is_valid() or not biome_buf.is_valid():
 		return false
@@ -80,6 +83,7 @@ func apply_gpu_buffers(
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(biome_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(height_out_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 8; u.add_id(rock_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 9; u.add_id(flow_dir_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 
 	var pc := PackedByteArray()

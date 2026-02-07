@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dayaanvly7arf"
+path="res://.godot/imported/lake_label_seed_from_mask.glsl-af9a70ae8caeec84980792f8ab913500.res"
+
+[deps]
+
+source_file="res://shaders/lake_label_seed_from_mask.glsl"
+dest_files=["res://.godot/imported/lake_label_seed_from_mask.glsl-af9a70ae8caeec84980792f8ab913500.res"]
+
+[params]
+

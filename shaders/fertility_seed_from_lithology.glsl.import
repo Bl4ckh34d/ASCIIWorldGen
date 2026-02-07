@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bp0f2yyu2w7e1"
+path="res://.godot/imported/fertility_seed_from_lithology.glsl-ef1a1b03232b49dc01ed51cb45e447af.res"
+
+[deps]
+
+source_file="res://shaders/fertility_seed_from_lithology.glsl"
+dest_files=["res://.godot/imported/fertility_seed_from_lithology.glsl-ef1a1b03232b49dc01ed51cb45e447af.res"]
+
+[params]
+

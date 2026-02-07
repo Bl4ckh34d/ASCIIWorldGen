@@ -27,7 +27,8 @@ const SPEED_LOD_BIOME_MAX_SIM_DAYS: float = 45.0
 const SPEED_LOD_CRYOSPHERE_MAX_SIM_DAYS: float = 20.0
 const SPEED_LOD_VOLCANISM_MAX_SIM_DAYS: float = 30.0
 const SPEED_LOD_PLATES_MAX_SIM_DAYS: float = 365.0
-const HYDRO_CATCHUP_MAX_DAYS: float = 4.0
+const HYDRO_CATCHUP_MAX_DAYS: float = 0.5
+const EROSION_CATCHUP_MAX_DAYS: float = 0.5
 const HYDRO_CATCHUP_EXTRA_RUN_MARGIN: int = 2
 const HIGH_SPEED_VALIDATION_MIN_SCALE: float = 1000.0
 const HIGH_SPEED_VALIDATION_INTERVAL_TICKS: int = 30
@@ -262,8 +263,10 @@ func _setup_all_tabs() -> void:
 	_setup_terrain_tab()
 	_setup_climate_tab()
 	_setup_hydro_tab()
-	_setup_simulation_tab()
-	_setup_systems_tab()
+	if simulation_vbox:
+		_add_label(simulation_vbox, "Simulation tuning moved to automatic profiles.")
+	if systems_vbox:
+		_add_label(systems_vbox, "System internals are auto-managed for realism/performance.")
 
 func _setup_generation_tab() -> void:
 	"""Setup Generation tab - world creation parameters"""
@@ -282,14 +285,7 @@ func _setup_generation_tab() -> void:
 	tiles_across_spin = _add_label_with_spinbox(generation_vbox, "Tiles Across:", 8, 1024, 1, 275, func(v): _on_tiles_across_changed(v))
 	tiles_down_spin = _add_label_with_spinbox(generation_vbox, "Tiles Down:", 8, 1024, 1, 62, func(v): _on_tiles_down_changed(v))
 	lock_aspect_check = _add_checkbox(generation_vbox, "Lock Aspect Ratio", true, func(v): _on_lock_aspect_toggled(v))
-
-	# Terrain noise controls (require full regenerate)
-	_add_section_header(generation_vbox, "Terrain Noise (Regenerate)")
-	noise_octaves_spin = _add_label_with_spinbox(generation_vbox, "Octaves:", 1, 10, 1, 5, func(_v): _on_noise_settings_changed())
-	noise_frequency_spin = _add_label_with_spinbox(generation_vbox, "Frequency:", 0.001, 0.2, 0.001, 0.02, func(_v): _on_noise_settings_changed())
-	noise_lacunarity_spin = _add_label_with_spinbox(generation_vbox, "Lacunarity:", 1.1, 4.0, 0.05, 2.0, func(_v): _on_noise_settings_changed())
-	noise_gain_spin = _add_label_with_spinbox(generation_vbox, "Gain:", 0.1, 1.0, 0.05, 0.5, func(_v): _on_noise_settings_changed())
-	noise_warp_spin = _add_label_with_spinbox(generation_vbox, "Warp:", 0.0, 80.0, 1.0, 24.0, func(_v): _on_noise_settings_changed())
+	_add_label(generation_vbox, "Geomorphology + climate parameters are auto-derived per seed.")
 
 func _setup_terrain_tab() -> void:
 	"""Setup Terrain tab - elevation, continents, sea level"""
@@ -309,62 +305,12 @@ func _setup_terrain_tab() -> void:
 		if not sea_slider.is_connected("drag_ended", cb):
 			sea_slider.connect("drag_ended", cb)
 	
-	# Continental parameters
-	_add_section_header(terrain_vbox, "Continental Shape")
-	var cont_result = _add_label_with_slider(terrain_vbox, "Continentality:", 0.0, 3.0, 0.01, 1.2, func(v): _on_cont_changed(v))
-	cont_slider = cont_result.slider
-	cont_value_label = cont_result.value_label
-	
-	# Temperature
-	_add_section_header(terrain_vbox, "Temperature")
-	var temp_result = _add_label_with_slider(terrain_vbox, "Temperature:", 0.0, 1.0, 0.001, 0.5, func(v): _on_temp_changed(v))
-	temp_slider = temp_result.slider
-	temp_value_label = temp_result.value_label
-
-	# Coastline shaping (can be recomputed without full regenerate)
-	_add_section_header(terrain_vbox, "Coastline (Quick Rebuild)")
-	shallow_threshold_spin = _add_label_with_spinbox(terrain_vbox, "Shallow Thresh:", 0.05, 0.6, 0.01, 0.20, func(_v): _on_shoreline_settings_changed())
-	shore_band_spin = _add_label_with_spinbox(terrain_vbox, "Shore Band:", 1.0, 20.0, 0.5, 6.0, func(_v): _on_shoreline_settings_changed())
-	shore_noise_mult_spin = _add_label_with_spinbox(terrain_vbox, "Shore Noise:", 0.1, 20.0, 0.1, 4.0, func(_v): _on_shoreline_settings_changed())
+	_add_label(terrain_vbox, "Terrain shape controls are seed-driven for realism.")
 
 func _setup_climate_tab() -> void:
 	"""Setup Climate tab - weather, precipitation, seasons"""
 	if not climate_vbox: return
-	
-	# Seasonal controls
-	_add_section_header(climate_vbox, "Seasonal Effects")
-	var season_result = _add_label_with_slider(climate_vbox, "Season Strength:", 0.0, 1.0, 0.01, 0.0, func(v): _on_season_strength_changed(v))
-	season_slider = season_result.slider
-	season_value_label = season_result.value_label
-
-	# Baseline cryosphere shape from poles (runtime quick climate/biome update)
-	_add_section_header(climate_vbox, "Polar Caps (Runtime)")
-	var polar_result = _add_label_with_slider(climate_vbox, "Polar Cap Frac:", 0.0, 0.5, 0.01, 0.12, func(v): _on_polar_cap_frac_changed(v))
-	polar_cap_frac_slider = polar_result.slider
-	polar_cap_frac_value_label = polar_result.value_label
-	
-	# Precipitation
-	_add_section_header(climate_vbox, "Precipitation")
-	cloud_coupling_check = _add_checkbox(climate_vbox, "Couple Clouds/Rain", true, func(v): _on_cloud_coupling_changed(v))
-	var rain_result = _add_label_with_slider(climate_vbox, "Rain Strength:", 0.0, 0.2, 0.005, 0.08, func(v): _on_rain_strength_changed(v))
-	rain_strength_slider = rain_result.slider
-	var evap_result = _add_label_with_slider(climate_vbox, "Evaporation:", 0.0, 0.2, 0.005, 0.06, func(v): _on_evap_strength_changed(v))
-	evap_strength_slider = evap_result.slider
-	
-	# Climate cycles
-	_add_section_header(climate_vbox, "Climate Cycles")
-	var diurnal_result = _add_label_with_slider(climate_vbox, "Diurnal Mod:", 0.0, 2.0, 0.05, 0.5, Callable())
-	var seasonal_result = _add_label_with_slider(climate_vbox, "Seasonal Mod:", 0.0, 2.0, 0.05, 0.5, Callable())
-	
-	# Connect cycle modulation
-	diurnal_result.slider.value_changed.connect(func(_v): _update_cycle_modulation(diurnal_result.slider, seasonal_result.slider))
-	seasonal_result.slider.value_changed.connect(func(_v): _update_cycle_modulation(diurnal_result.slider, seasonal_result.slider))
-	
-	# Ocean damping
-	_add_section_header(climate_vbox, "Ocean Effects")
-	var ocean_result = _add_label_with_slider(climate_vbox, "Ocean Damping:", 0.0, 1.0, 0.01, 0.6, func(v): _on_ocean_damp_changed(v))
-	ocean_damp_slider = ocean_result.slider
-	ocean_damp_value_label = ocean_result.value_label
+	_add_label(climate_vbox, "Climate is auto-parameterized from seed and world geometry.")
 
 func _setup_hydro_tab() -> void:
 	"""Setup Hydro tab - rivers, lakes, water flow"""
@@ -373,9 +319,7 @@ func _setup_hydro_tab() -> void:
 	_add_section_header(hydro_vbox, "Hydrology Generation")
 	rivers_enabled_check = _add_checkbox(hydro_vbox, "Enable Rivers", true, func(_v): _on_hydro_generation_settings_changed())
 	lakes_enabled_check = _add_checkbox(hydro_vbox, "Enable Lakes", true, func(_v): _on_hydro_generation_settings_changed())
-	river_threshold_spin = _add_label_with_spinbox(hydro_vbox, "River Threshold Factor:", 0.1, 5.0, 0.05, 1.0, func(_v): _on_hydro_generation_settings_changed())
-	river_delta_widening_check = _add_checkbox(hydro_vbox, "Delta Widening", true, func(_v): _on_hydro_generation_settings_changed())
-	_add_label(hydro_vbox, "Removed obsolete CPU-era knobs: droplets, erosion, min start height, polar cutoff.")
+	_add_label(hydro_vbox, "River thresholds and delta behavior are auto-managed.")
 
 func _setup_simulation_tab() -> void:
 	"""Setup Simulation tab - time, checkpoints, GPU rendering"""
@@ -1248,7 +1192,9 @@ func _register_hydro_system() -> void:
 		_hydro_sys.initialize(generator)
 		_hydro_sys.tiles_per_tick = 1
 	if "register_system" in simulation:
-		simulation.register_system(_hydro_sys, 30, 0, false, 20.0)
+		var ts: float = float(time_system.time_scale) if time_system and "time_scale" in time_system else 1.0
+		var hydro_cad_init: int = _cadence_ticks_for_sim_days(float(WorldConstants.CADENCE_HYDRO), ts)
+		simulation.register_system(_hydro_sys, hydro_cad_init, 0, false, HYDRO_CATCHUP_MAX_DAYS)
 
 func _register_erosion_system() -> void:
 	if not ENABLE_EROSION:
@@ -1257,7 +1203,9 @@ func _register_erosion_system() -> void:
 	if "initialize" in _erosion_sys:
 		_erosion_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_erosion_sys, WorldConstants.CADENCE_EROSION, 0, true, 6.0)
+		var ts: float = float(time_system.time_scale) if time_system and "time_scale" in time_system else 1.0
+		var erosion_cad_init: int = _cadence_ticks_for_sim_days(float(WorldConstants.CADENCE_EROSION), ts)
+		simulation.register_system(_erosion_sys, erosion_cad_init, 0, true, EROSION_CATCHUP_MAX_DAYS)
 
 func _register_cloud_system() -> void:
 	if not ENABLE_CLOUDS:
@@ -1266,7 +1214,8 @@ func _register_cloud_system() -> void:
 	if "initialize" in _clouds_sys:
 		_clouds_sys.initialize(generator, time_system)
 	if "register_system" in simulation:
-		simulation.register_system(_clouds_sys, 2, 0, false, 1.0)
+		# Clouds/rain are atmosphere-fast processes: run every simulation tick.
+		simulation.register_system(_clouds_sys, 1, 0, false, 1.0)
 
 func _register_biome_systems() -> void:
 	if not (ENABLE_BIOMES_TICK or ENABLE_CRYOSPHERE_TICK):
@@ -1283,7 +1232,9 @@ func _register_biome_systems() -> void:
 			if "set_update_modes" in _biome_sys:
 				_biome_sys.set_update_modes(true, false)
 			if "register_system" in simulation:
-				simulation.register_system(_biome_sys, WorldConstants.CADENCE_BIOMES, 0, false, 90.0)
+				var ts_b: float = float(time_system.time_scale) if time_system and "time_scale" in time_system else 1.0
+				var biome_cad_init: int = _cadence_ticks_for_sim_days(float(WorldConstants.CADENCE_BIOMES), ts_b)
+				simulation.register_system(_biome_sys, biome_cad_init, 0, false, 90.0)
 			_biome_like_systems.append(_biome_sys)
 		if ENABLE_CRYOSPHERE_TICK:
 			_cryosphere_sys = load(biome_path).new()
@@ -1292,7 +1243,9 @@ func _register_biome_systems() -> void:
 			if "set_update_modes" in _cryosphere_sys:
 				_cryosphere_sys.set_update_modes(false, true)
 			if "register_system" in simulation:
-				simulation.register_system(_cryosphere_sys, WorldConstants.CADENCE_CRYOSPHERE, 0, false, 45.0)
+				var ts_c: float = float(time_system.time_scale) if time_system and "time_scale" in time_system else 1.0
+				var cryo_cad_init: int = _cadence_ticks_for_sim_days(float(WorldConstants.CADENCE_CRYOSPHERE), ts_c)
+				simulation.register_system(_cryosphere_sys, cryo_cad_init, 0, false, 45.0)
 		return
 	var split_systems := [
 		{
@@ -1351,7 +1304,9 @@ func _register_plate_system() -> void:
 	if "initialize" in _plates_sys:
 		_plates_sys.initialize(generator)
 	if "register_system" in simulation:
-		simulation.register_system(_plates_sys, int(time_system.get_days_per_year()), 0, false, 180.0)
+		var ts: float = float(time_system.time_scale) if time_system and "time_scale" in time_system else 1.0
+		var plate_cad_init: int = _cadence_ticks_for_sim_days(float(WorldConstants.CADENCE_PLATES), ts)
+		simulation.register_system(_plates_sys, plate_cad_init, 0, false, 180.0)
 
 func _register_volcanism_system() -> void:
 	if not ENABLE_VOLCANISM:
@@ -1360,7 +1315,9 @@ func _register_volcanism_system() -> void:
 	if "initialize" in _volcanism_sys:
 		_volcanism_sys.initialize(generator, time_system)
 	if "register_system" in simulation:
-		simulation.register_system(_volcanism_sys, 3, 0, false, 30.0)
+		var ts: float = float(time_system.time_scale) if time_system and "time_scale" in time_system else 1.0
+		var volc_cad_init: int = _cadence_ticks_for_sim_days(float(WorldConstants.CADENCE_VOLCANISM), ts)
+		simulation.register_system(_volcanism_sys, volc_cad_init, 0, false, 30.0)
 
 func _ensure_scene_fade_overlay() -> ColorRect:
 	if is_instance_valid(_scene_fade_rect):
@@ -1910,6 +1867,13 @@ func _sim_days_per_tick_for_scale(time_scale: float) -> float:
 		base_tick_days = max(1e-6, float(time_system.tick_days))
 	return max(0.0, base_tick_days * max(1.0, float(time_scale)))
 
+func _cadence_ticks_for_sim_days(target_sim_days: float, time_scale: float) -> int:
+	var days: float = max(1e-6, float(target_sim_days))
+	var dt_sim: float = _sim_days_per_tick_for_scale(time_scale)
+	if dt_sim <= 1e-9:
+		return 1
+	return max(1, int(ceil(days / dt_sim)))
+
 func _cap_interval_by_sim_days(current_interval: int, time_scale: float, max_sim_days_per_update: float) -> int:
 	var cur: int = max(1, int(current_interval))
 	if max_sim_days_per_update <= 0.0:
@@ -1924,103 +1888,78 @@ func _cap_interval_by_sim_days(current_interval: int, time_scale: float, max_sim
 func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 	var ts: float = max(1.0, time_scale)
 	var was_clouds_paused: bool = _speed_lod_clouds_paused
-	_speed_lod_clouds_paused = (ts >= SPEED_CLOUDS_PAUSE_THRESHOLD)
+	_speed_lod_clouds_paused = false
 	if _clouds_sys and "set_runtime_lod" in _clouds_sys:
-		if _speed_lod_clouds_paused:
-			# At ultra-high rates, cloud simulation is paused; it resyncs when speed is lowered again.
-			_clouds_sys.set_runtime_lod(true, 999999, 999999, 999999, 999999, 999999)
-		elif ts >= SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD:
-			_clouds_sys.set_runtime_lod(false, 8, 10, 10, 12, 6)
-		elif ts >= 1000.0:
-			_clouds_sys.set_runtime_lod(false, 5, 6, 6, 8, 4)
-		elif ts >= 100.0:
-			_clouds_sys.set_runtime_lod(false, 3, 3, 3, 5, 3)
-		elif ts >= 10.0:
-			_clouds_sys.set_runtime_lod(false, 2, 2, 2, 4, 2)
-		else:
-			_clouds_sys.set_runtime_lod(false, 2, 2, 2, 3, 2)
-	var climate_interval: int = 6
+		# Clouds/rain/wind should remain continuous in time.
+		_clouds_sys.set_runtime_lod(false, 1, 1, 1, 1, 1)
+	var climate_interval: int = 1
 	var light_interval: int = 1
-	if ts >= 1000000.0:
-		climate_interval = 7200
-		light_interval = 720
-	elif ts >= 100000.0:
-		climate_interval = 3600
-		light_interval = 240
-	elif ts >= 10000.0:
-		climate_interval = 720
-		light_interval = 24
-	elif ts >= SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD:
-		climate_interval = 192
-		light_interval = 8
-	elif ts >= 1000.0:
-		climate_interval = 96
-		light_interval = 1
-	elif ts >= 100.0:
-		climate_interval = 48
-		light_interval = 1
-	elif ts >= 10.0:
-		climate_interval = 24
-		light_interval = 1
 	climate_interval = _cap_interval_by_sim_days(climate_interval, ts, SPEED_LOD_CLIMATE_MAX_SIM_DAYS)
 	if _seasonal_sys and "set_update_intervals" in _seasonal_sys:
 		_seasonal_sys.set_update_intervals(climate_interval, light_interval)
-	# Keep long-term evolution systems active even at high speed.
-	# Cadence units are simulation ticks (not days), so over-throttling here can freeze evolution.
-	var hydro_cad: int = max(1, WorldConstants.CADENCE_HYDRO)
-	var erosion_cad: int = max(1, WorldConstants.CADENCE_EROSION)
-	var biome_cad: int = max(1, WorldConstants.CADENCE_BIOMES)
-	var cryosphere_cad: int = max(1, WorldConstants.CADENCE_CRYOSPHERE)
-	var volcanism_cad: int = max(1, WorldConstants.CADENCE_VOLCANISM)
-	var plates_cadence: int = int(time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else WorldConstants.CADENCE_PLATES)
+	# System intervals are authored in simulation-days for realism and converted to
+	# tick cadence based on current time scale.
+	var hydro_target_days: float = 0.25      # every ~6 in-sim hours
+	var erosion_target_days: float = 0.25    # every ~6 in-sim hours
+	var biome_target_days: float = float(WorldConstants.CADENCE_BIOMES)
+	var cryosphere_target_days: float = float(WorldConstants.CADENCE_CRYOSPHERE)
+	var volcanism_target_days: float = float(WorldConstants.CADENCE_VOLCANISM)
+	var plates_target_days: float = 1825.0   # ~5 in-sim years
 	if ts >= 1000000.0:
-		hydro_cad = 240
-		erosion_cad = 320
-		biome_cad = 180
-		cryosphere_cad = 24
-		volcanism_cad = 30
-		plates_cadence *= 4
+		hydro_target_days = 2.0
+		erosion_target_days = 2.0
+		biome_target_days = 120.0
+		cryosphere_target_days = 30.0
+		volcanism_target_days = 21.0
+		plates_target_days = 3650.0
 	elif ts >= 100000.0:
-		hydro_cad = 180
-		erosion_cad = 260
-		biome_cad = 120
-		cryosphere_cad = 22
-		volcanism_cad = 24
-		plates_cadence *= 3
+		hydro_target_days = 1.0
+		erosion_target_days = 1.0
+		biome_target_days = 90.0
+		cryosphere_target_days = 20.0
+		volcanism_target_days = 14.0
+		plates_target_days = 2920.0
 	elif ts >= 10000.0:
-		hydro_cad = 120
-		erosion_cad = 180
-		biome_cad = 90
-		cryosphere_cad = 20
-		volcanism_cad = 18
-		plates_cadence *= 2
+		hydro_target_days = 0.5
+		erosion_target_days = 0.5
+		biome_target_days = 60.0
+		cryosphere_target_days = 14.0
+		volcanism_target_days = 10.0
+		plates_target_days = 1825.0
 	elif ts >= SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD:
-		hydro_cad = 90
-		erosion_cad = 140
-		biome_cad = 60
-		cryosphere_cad = 18
-		volcanism_cad = 12
-		plates_cadence *= 2
+		hydro_target_days = 0.5
+		erosion_target_days = 0.5
+		biome_target_days = 45.0
+		cryosphere_target_days = 10.0
+		volcanism_target_days = 7.0
+		plates_target_days = 1460.0
 	elif ts >= 1000.0:
-		hydro_cad = 60
-		erosion_cad = 90
-		biome_cad = 45
-		cryosphere_cad = 16
-		volcanism_cad = 10
-		plates_cadence = int(float(plates_cadence) * 1.5)
+		hydro_target_days = 0.33
+		erosion_target_days = 0.33
+		biome_target_days = 30.0
+		cryosphere_target_days = 7.0
+		volcanism_target_days = 4.0
+		plates_target_days = 1095.0
 	elif ts >= 100.0:
-		hydro_cad = 45
-		erosion_cad = 60
-		biome_cad = 36
-		cryosphere_cad = 14
-		volcanism_cad = 8
-		plates_cadence = int(float(plates_cadence) * 1.25)
+		hydro_target_days = 0.25
+		erosion_target_days = 0.25
+		biome_target_days = 21.0
+		cryosphere_target_days = 4.0
+		volcanism_target_days = 2.0
+		plates_target_days = 730.0
 	elif ts >= 10.0:
-		hydro_cad = 36
-		erosion_cad = 45
-		biome_cad = 30
-		cryosphere_cad = 12
-		volcanism_cad = 6
+		hydro_target_days = 0.25
+		erosion_target_days = 0.25
+		biome_target_days = 14.0
+		cryosphere_target_days = 2.0
+		volcanism_target_days = 1.0
+		plates_target_days = 365.0
+	var hydro_cad: int = _cadence_ticks_for_sim_days(hydro_target_days, ts)
+	var erosion_cad: int = _cadence_ticks_for_sim_days(erosion_target_days, ts)
+	var biome_cad: int = _cadence_ticks_for_sim_days(biome_target_days, ts)
+	var cryosphere_cad: int = _cadence_ticks_for_sim_days(cryosphere_target_days, ts)
+	var volcanism_cad: int = _cadence_ticks_for_sim_days(volcanism_target_days, ts)
+	var plates_cadence: int = _cadence_ticks_for_sim_days(plates_target_days, ts)
 	hydro_cad = _cap_interval_by_sim_days(hydro_cad, ts, SPEED_LOD_HYDRO_MAX_SIM_DAYS)
 	erosion_cad = _cap_interval_by_sim_days(erosion_cad, ts, SPEED_LOD_EROSION_MAX_SIM_DAYS)
 	biome_cad = _cap_interval_by_sim_days(biome_cad, ts, SPEED_LOD_BIOME_MAX_SIM_DAYS)
@@ -2060,7 +1999,7 @@ func _apply_speed_lod_policy(time_scale: float, force_resync: bool) -> void:
 		if _hydro_sys:
 			simulation.set_system_catchup_max_days(_hydro_sys, HYDRO_CATCHUP_MAX_DAYS)
 		if _erosion_sys:
-			simulation.set_system_catchup_max_days(_erosion_sys, 6.0)
+			simulation.set_system_catchup_max_days(_erosion_sys, EROSION_CATCHUP_MAX_DAYS)
 		for biome_sys in _biome_like_systems:
 			if biome_sys:
 				simulation.set_system_catchup_max_days(biome_sys, 90.0)

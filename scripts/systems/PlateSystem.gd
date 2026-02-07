@@ -9,7 +9,6 @@ const ContinentalShelfCompute = preload("res://scripts/systems/ContinentalShelfC
 const PlateUpdateCompute = preload("res://scripts/systems/PlateUpdateCompute.gd")
 const PlateFieldAdvectionCompute = preload("res://scripts/systems/PlateFieldAdvectionCompute.gd")
 const TectonicPinholeCleanupCompute = preload("res://scripts/systems/TectonicPinholeCleanupCompute.gd")
-const CPU_MIRROR_MAX_CELLS: int = 250000
 
 var generator: Object = null
 
@@ -52,8 +51,6 @@ var _gpu_update: Object = null
 var _land_mask_compute: Object = null
 var _field_advection_compute: Object = null
 var _pinhole_cleanup_compute: Object = null
-var _cpu_sync_counter: int = 0
-var enable_runtime_cpu_mirror_sync: bool = false
 
 func initialize(gen: Object) -> void:
 	generator = gen
@@ -180,17 +177,6 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			):
 				if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(field_tmp_buf, rock_buf, w * h))):
 					gpu_ok = false
-			# Keep CPU mirrors coherent for systems/UI paths that still read arrays.
-			var sync_size: int = w * h
-			if enable_runtime_cpu_mirror_sync and "read_persistent_buffer" in generator and _should_sync_cpu_mirror(world, sync_size):
-				var biome_bytes: PackedByteArray = generator.read_persistent_buffer("biome_id")
-				var biome_i32: PackedInt32Array = biome_bytes.to_int32_array()
-				if biome_i32.size() == sync_size and "last_biomes" in generator:
-					generator.last_biomes = biome_i32
-				var rock_bytes: PackedByteArray = generator.read_persistent_buffer("rock_type")
-				var rock_i32: PackedInt32Array = rock_bytes.to_int32_array()
-				if rock_i32.size() == sync_size and "last_rock_type" in generator:
-					generator.last_rock_type = rock_i32
 	if not gpu_ok:
 		return {}
 	# Expose boundary mask to generator for volcanism coupling
@@ -214,28 +200,6 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			num_plates
 		)
 	return {"dirty_fields": PackedStringArray(["height", "is_land", "lava", "shelf", "biome_id", "rock_type"]), "boundary_count": boundary_count}
-
-func _should_sync_cpu_mirror(world: Object, size: int) -> bool:
-	if size <= 0 or size > CPU_MIRROR_MAX_CELLS:
-		return false
-	var ts: float = 1.0
-	if world != null and "time_scale" in world:
-		ts = max(1.0, float(world.time_scale))
-	var interval: int = 1
-	if ts >= 100000.0:
-		interval = 160
-	elif ts >= 10000.0:
-		interval = 80
-	elif ts >= 1000.0:
-		interval = 32
-	elif ts >= 100.0:
-		interval = 12
-	elif ts >= 10.0:
-		interval = 4
-	_cpu_sync_counter += 1
-	if _cpu_sync_counter <= 1:
-		return true
-	return (_cpu_sync_counter % max(1, interval)) == 0
 
 func _build_plates() -> void:
 	if generator == null:
@@ -516,16 +480,21 @@ func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 				var local_ref: float = lerp(min(heights[i], h_other), 0.5 * (heights[i] + h_other), 0.72)
 				var n_div: float = _noise.get_noise_2d(float(x) * 0.61 + float(pid) * 2.3, float(y) * 0.61 + float(p_other) * 1.7) * 0.5 + 0.5
 				var jitter: float = (n_div - 0.5) * lerp(0.016, 0.009, land_factor)
-				var rift_target: float = local_ref + jitter
+				var land_raise: float = clamp((land_factor - 0.55) / 0.45, 0.0, 1.0) * 0.030
+				var rift_target: float = local_ref + jitter + land_raise
 				var to_target: float = rift_target - heights[i]
-				var settle_rate: float = subduction_rate_per_day * dt_days * div * lerp(0.33, 0.22, land_factor)
+				var settle_rate: float = subduction_rate_per_day * dt_days * div * lerp(0.33, 0.18, land_factor)
 				uplift = clamp(to_target, -settle_rate, settle_rate)
 				var seam_w: float = clamp(1.0 - dist_len / 1.6, 0.0, 1.0)
-				var deep_axis: float = trench_rate_per_day * dt_days * div * lerp(1.00, 0.52, land_factor)
+				var deep_axis: float = trench_rate_per_day * dt_days * div * lerp(1.00, 0.20, land_factor)
 				uplift -= deep_axis * seam_w * seam_w
 				uplift += ridge_rate_per_day * dt_days * div * lerp(0.18, 0.08, land_factor)
-				var seam_floor: float = local_ref - lerp(0.22, 0.10, land_factor)
-				var flank_floor: float = local_ref - lerp(0.06, 0.03, land_factor)
+				var seam_floor: float = local_ref - lerp(0.22, 0.02, land_factor)
+				var flank_floor: float = local_ref - lerp(0.06, -0.01, land_factor)
+				var seam_sea_floor: float = generator.config.sea_level + lerp(-0.18, 0.05, land_factor)
+				var flank_sea_floor: float = generator.config.sea_level + lerp(-0.08, 0.08, land_factor)
+				seam_floor = max(seam_floor, seam_sea_floor)
+				flank_floor = max(flank_floor, flank_sea_floor)
 				var divergence_floor: float = lerp(flank_floor, seam_floor, seam_w)
 				if heights[i] + uplift < divergence_floor:
 					uplift = divergence_floor - heights[i]
@@ -568,10 +537,19 @@ func _update_boundary_uplift(dt_days: float, w: int, h: int) -> void:
 			if pid_b != pid2: div_score -= (plate_vel_v[pid2] - plate_vel_v[pid_b])
 			if div_score > 1.2:
 				var land_factor2: float = clamp((heights[i2] - generator.config.sea_level + 0.02) / 0.35, 0.0, 1.0)
-				var floor_level: float = heights[i2] - lerp(0.06, 0.03, land_factor2)
-				var rift_target2: float = heights[i2] + (_noise.get_noise_2d(float(x2) * 0.37, float(y2) * 0.37) * 0.5 + 0.5 - 0.5) * lerp(0.012, 0.007, land_factor2)
+				var h_l2: float = heights[xm + y2 * w]
+				var h_r2: float = heights[xp + y2 * w]
+				var h_t2: float = heights[x2 + ym * w]
+				var h_b2: float = heights[x2 + yp * w]
+				var local_ref2: float = (heights[i2] + h_l2 + h_r2 + h_t2 + h_b2) / 5.0
+				var floor_level: float = local_ref2 - lerp(0.05, 0.02, land_factor2)
+				var sea_floor2: float = generator.config.sea_level + lerp(-0.08, 0.07, land_factor2)
+				floor_level = max(floor_level, sea_floor2)
+				var jitter2: float = (_noise.get_noise_2d(float(x2) * 0.37, float(y2) * 0.37) * 0.5 + 0.5 - 0.5) * lerp(0.010, 0.006, land_factor2)
+				var land_raise2: float = clamp((land_factor2 - 0.55) / 0.45, 0.0, 1.0) * 0.028
+				var rift_target2: float = local_ref2 + jitter2 + land_raise2
 				var to_target2: float = rift_target2 - heights[i2]
-				var settle2: float = subduction_rate_per_day * dt_days * min(1.6, div_score) * lerp(0.24, 0.16, land_factor2)
+				var settle2: float = subduction_rate_per_day * dt_days * min(1.6, div_score) * lerp(0.22, 0.13, land_factor2)
 				heights[i2] = clamp(heights[i2] + clamp(to_target2, -settle2, settle2), floor_level, 2.0)
 	# Commit height changes
 	generator.last_height = heights

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bjga1jj6x0m4m"
+path="res://.godot/imported/lake_mask_from_fill.glsl-02d7bba18b90e06f4bb4c5c512d541e3.res"
+
+[deps]
+
+source_file="res://shaders/lake_mask_from_fill.glsl"
+dest_files=["res://.godot/imported/lake_mask_from_fill.glsl-02d7bba18b90e06f4bb4c5c512d541e3.res"]
+
+[params]
+

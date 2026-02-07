@@ -37,10 +37,19 @@ func _ensure() -> void:
 	if not _delta_pipeline.is_valid() and _delta_shader.is_valid():
 		_delta_pipeline = _rd.compute_pipeline_create(_delta_shader)
 
-func widen_deltas(w: int, h: int, river_mask: PackedByteArray, is_land: PackedByteArray, water_distance: PackedFloat32Array, max_shore_dist: float) -> PackedByteArray:
+func widen_deltas(
+		w: int,
+		h: int,
+		river_mask: PackedByteArray,
+		is_land: PackedByteArray,
+		water_distance: PackedFloat32Array,
+		flow_accum: PackedFloat32Array,
+		max_shore_dist: float,
+		min_source_accum: float
+	) -> PackedByteArray:
 	_ensure()
 	if not _delta_pipeline.is_valid() or _broken:
-		# CPU fallback: single-pass 3x3 dilation within near-shore band on land
+		# CPU fallback: single-pass 3x3 dilation near coast, only from major river cells.
 		var fallback_size: int = max(0, w * h)
 		var fallback_out := PackedByteArray(); fallback_out.resize(fallback_size)
 		for y in range(h):
@@ -66,8 +75,11 @@ func widen_deltas(w: int, h: int, river_mask: PackedByteArray, is_land: PackedBy
 							continue
 						var j: int = nx + ny * w
 						if j < river_mask.size() and river_mask[j] != 0:
-							grow = true
-							break
+							var src_big: bool = (j < flow_accum.size() and flow_accum[j] >= min_source_accum)
+							var seaward_or_side: bool = (j < water_distance.size() and i < water_distance.size() and water_distance[i] <= water_distance[j] + 0.5)
+							if src_big and seaward_or_side:
+								grow = true
+								break
 				fallback_out[i] = 1 if grow else 0
 		return fallback_out
 	var size: int = max(0, w * h)
@@ -79,6 +91,7 @@ func widen_deltas(w: int, h: int, river_mask: PackedByteArray, is_land: PackedBy
 	var buf_r_in := _rd.storage_buffer_create(river_u32.to_byte_array().size(), river_u32.to_byte_array())
 	var buf_land := _rd.storage_buffer_create(land_u32.to_byte_array().size(), land_u32.to_byte_array())
 	var buf_dist := _rd.storage_buffer_create(water_distance.to_byte_array().size(), water_distance.to_byte_array())
+	var buf_acc := _rd.storage_buffer_create(flow_accum.to_byte_array().size(), flow_accum.to_byte_array())
 	var river_out := PackedInt32Array(); river_out.resize(size)
 	var buf_r_out := _rd.storage_buffer_create(river_out.to_byte_array().size(), river_out.to_byte_array())
 	var uniforms: Array = []
@@ -86,9 +99,10 @@ func widen_deltas(w: int, h: int, river_mask: PackedByteArray, is_land: PackedBy
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(buf_r_in); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(buf_land); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(buf_dist); uniforms.append(u)
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_r_out); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_acc); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_r_out); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _delta_shader, 0)
-	var pc := PackedByteArray(); var ints := PackedInt32Array([w, h]); var floats := PackedFloat32Array([max_shore_dist]);
+	var pc := PackedByteArray(); var ints := PackedInt32Array([w, h]); var floats := PackedFloat32Array([max_shore_dist, min_source_accum]);
 	pc.append_array(ints.to_byte_array()); pc.append_array(floats.to_byte_array())
 	var pad := (16 - (pc.size() % 16)) % 16
 	if pad > 0:
@@ -110,5 +124,50 @@ func widen_deltas(w: int, h: int, river_mask: PackedByteArray, is_land: PackedBy
 	_rd.free_rid(buf_r_in)
 	_rd.free_rid(buf_land)
 	_rd.free_rid(buf_dist)
+	_rd.free_rid(buf_acc)
 	_rd.free_rid(buf_r_out)
 	return out_b
+
+func widen_deltas_gpu_buffers(
+		w: int,
+		h: int,
+		river_in_buf: RID,
+		land_buf: RID,
+		dist_buf: RID,
+		flow_accum_buf: RID,
+		max_shore_dist: float,
+		min_source_accum: float,
+		river_out_buf: RID
+	) -> bool:
+	_ensure()
+	if not _delta_pipeline.is_valid() or _broken:
+		return false
+	if not river_in_buf.is_valid() or not land_buf.is_valid() or not dist_buf.is_valid() or not flow_accum_buf.is_valid() or not river_out_buf.is_valid():
+		return false
+	var uniforms: Array = []
+	var u: RDUniform
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(river_in_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(land_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(dist_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(flow_accum_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(river_out_buf); uniforms.append(u)
+	var u_set := _rd.uniform_set_create(uniforms, _delta_shader, 0)
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([w, h])
+	var floats := PackedFloat32Array([max_shore_dist, min_source_accum])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray(); zeros.resize(pad)
+		pc.append_array(zeros)
+	var gx: int = int(ceil(float(w) / 16.0))
+	var gy: int = int(ceil(float(h) / 16.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _delta_pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, gx, gy, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+	return true

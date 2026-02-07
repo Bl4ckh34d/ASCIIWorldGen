@@ -12,21 +12,10 @@ var _climate_update_counter: int = 0
 var climate_update_interval_ticks: int = 6
 var light_update_interval_ticks: int = 1
 var _light_tex: Object = null
-var _sea_level_feedback_counter: int = 0
-var _sea_level_feedback_initialized: bool = false
-var _sea_level_base: float = 0.0
-var _sea_level_dynamic_offset: float = 0.0
-var _land_ice_baseline_fraction: float = -1.0
 var _paleo_initialized: bool = false
 var _paleo_base_offset: float = 0.25
 var _paleo_last_applied_offset: float = 0.25
 const TAU: float = 6.28318530718
-const BIOME_ICE_SHEET_ID: int = 1
-const BIOME_GLACIER_ID: int = 24
-const SEA_LEVEL_FEEDBACK_INTERVAL_TICKS: int = 24
-const SEA_LEVEL_FEEDBACK_TAU_DAYS: float = 720.0
-const SEA_LEVEL_PER_ICE_FRACTION: float = 0.18
-const SEA_LEVEL_DYNAMIC_MAX_OFFSET: float = 0.12
 const PALEO_PRIMARY_PERIOD_DAYS: float = 15330000.0   # ~42k years
 const PALEO_SECONDARY_PERIOD_DAYS: float = 4015000.0  # ~11k years
 const PALEO_DRIFT_PERIOD_DAYS: float = 2555000.0      # ~7k years
@@ -37,10 +26,6 @@ const PALEO_DRIFT_AMP_C: float = 1.2
 func initialize(gen: Object, time_sys: Object = null) -> void:
 	generator = gen
 	time_system = time_sys
-	_sea_level_feedback_counter = 0
-	_sea_level_feedback_initialized = false
-	_land_ice_baseline_fraction = -1.0
-	_sea_level_dynamic_offset = 0.0
 
 func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null:
@@ -72,10 +57,6 @@ func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		if do_climate_update and "quick_update_climate" in generator:
 			# Light is updated below every tick; skip light update in climate pass.
 			generator.quick_update_climate(true)
-		if do_climate_update:
-			_sea_level_feedback_counter += 1
-			if (_sea_level_feedback_counter % SEA_LEVEL_FEEDBACK_INTERVAL_TICKS) == 0:
-				_update_sea_level_from_land_ice(_dt_days)
 		var do_light_update: bool = (_light_update_counter <= 1) or (_light_update_counter % max(1, light_update_interval_ticks) == 0)
 		if do_light_update:
 			_update_light_field(world)
@@ -88,10 +69,6 @@ func set_update_intervals(climate_interval_ticks: int, light_interval_ticks: int
 func request_full_resync() -> void:
 	_climate_update_counter = 0
 	_light_update_counter = 0
-	_sea_level_feedback_counter = 0
-	_sea_level_feedback_initialized = false
-	_sea_level_dynamic_offset = 0.0
-	_land_ice_baseline_fraction = -1.0
 	_paleo_initialized = false
 
 func _apply_paleoclimate(sim_days: float) -> void:
@@ -185,57 +162,3 @@ func _update_light_field(world: Object) -> void:
 		var tex: Texture2D = _light_tex.update_from_buffer(w, h, light_buf)
 		if tex and "set_light_texture_override" in generator:
 			generator.set_light_texture_override(tex)
-
-func _update_sea_level_from_land_ice(dt_days: float) -> void:
-	if generator == null or not ("config" in generator):
-		return
-	if not ("last_is_land" in generator) or not ("last_biomes" in generator):
-		return
-	var land: PackedByteArray = generator.last_is_land
-	var biomes: PackedInt32Array = generator.last_biomes
-	var size: int = land.size()
-	if size <= 0 or biomes.size() != size:
-		return
-
-	if not _sea_level_feedback_initialized:
-		_sea_level_feedback_initialized = true
-		_sea_level_base = float(generator.config.sea_level)
-		_sea_level_dynamic_offset = 0.0
-	else:
-		var modeled_sl: float = _sea_level_base + _sea_level_dynamic_offset
-		var configured_sl: float = float(generator.config.sea_level)
-		if abs(configured_sl - modeled_sl) > 0.03:
-			_sea_level_base = configured_sl - _sea_level_dynamic_offset
-
-	var land_cells: int = 0
-	var land_ice_cells: int = 0
-	for i in range(size):
-		if land[i] == 0:
-			continue
-		land_cells += 1
-		var b: int = biomes[i]
-		if b == BIOME_GLACIER_ID or b == BIOME_ICE_SHEET_ID:
-			land_ice_cells += 1
-	if land_cells <= 0:
-		return
-
-	var ice_frac: float = float(land_ice_cells) / float(land_cells)
-	if _land_ice_baseline_fraction < 0.0:
-		_land_ice_baseline_fraction = ice_frac
-		return
-
-	var target_offset: float = (_land_ice_baseline_fraction - ice_frac) * SEA_LEVEL_PER_ICE_FRACTION
-	target_offset = clamp(target_offset, -SEA_LEVEL_DYNAMIC_MAX_OFFSET, SEA_LEVEL_DYNAMIC_MAX_OFFSET)
-	var dt_eff: float = max(0.0, dt_days)
-	var alpha: float = 1.0 - exp(-dt_eff / max(0.001, SEA_LEVEL_FEEDBACK_TAU_DAYS))
-	alpha = clamp(alpha, 0.0, 1.0)
-	_sea_level_dynamic_offset = lerp(_sea_level_dynamic_offset, target_offset, alpha)
-
-	var desired_sl: float = clamp(_sea_level_base + _sea_level_dynamic_offset, -1.0, 1.0)
-	var current_sl: float = float(generator.config.sea_level)
-	if abs(desired_sl - current_sl) <= 0.0005:
-		return
-	if "quick_update_sea_level" in generator:
-		generator.quick_update_sea_level(desired_sl)
-	else:
-		generator.config.sea_level = desired_sl

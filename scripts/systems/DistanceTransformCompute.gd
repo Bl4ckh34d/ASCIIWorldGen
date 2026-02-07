@@ -33,27 +33,19 @@ func _ensure() -> void:
 	if not _pipeline.is_valid() and _shader.is_valid():
 		_pipeline = _rd.compute_pipeline_create(_shader)
 
-func ocean_distance_to_land(w: int, h: int, is_land: PackedByteArray, wrap_x: bool) -> PackedFloat32Array:
-	_ensure()
-	if not _shader.is_valid() or not _pipeline.is_valid():
-		return PackedFloat32Array()
-	var size: int = max(0, w * h)
-	var dist_a := PackedFloat32Array()
-	dist_a.resize(size)
-	var dist_b := PackedFloat32Array()
-	dist_b.resize(size)
-	for i in range(size):
-		dist_a[i] = 0.0 if (i < is_land.size() and is_land[i] != 0) else 1e9
-		dist_b[i] = dist_a[i]
-	# Convert land mask to u32 to match GLSL uint[]
-	var land_u32 := PackedInt32Array()
-	land_u32.resize(size)
-	for j in range(size):
-		land_u32[j] = 1 if (j < is_land.size() and is_land[j] != 0) else 0
-	var buf_land := _rd.storage_buffer_create(land_u32.to_byte_array().size(), land_u32.to_byte_array())
-	var buf_in := _rd.storage_buffer_create(dist_a.to_byte_array().size(), dist_a.to_byte_array())
-	var buf_out := _rd.storage_buffer_create(dist_b.to_byte_array().size(), dist_b.to_byte_array())
-
+func _dispatch_mode(
+		w: int,
+		h: int,
+		wrap_x: bool,
+		mode: int,
+		buf_land: RID,
+		buf_in: RID,
+		buf_out: RID
+	) -> bool:
+	if not _pipeline.is_valid():
+		return false
+	if not buf_land.is_valid() or not buf_in.is_valid() or not buf_out.is_valid():
+		return false
 	var uniforms: Array = []
 	var u: RDUniform
 	u = RDUniform.new()
@@ -73,66 +65,74 @@ func ocean_distance_to_land(w: int, h: int, is_land: PackedByteArray, wrap_x: bo
 	uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 	var pc := PackedByteArray()
-	var ints := PackedInt32Array([w, h, (1 if wrap_x else 0), 0])
+	var ints := PackedInt32Array([w, h, (1 if wrap_x else 0), mode])
 	pc.append_array(ints.to_byte_array())
-	# Align to 16 bytes
 	var pad := (16 - (pc.size() % 16)) % 16
 	if pad > 0:
-		var zeros := PackedByteArray(); zeros.resize(pad)
+		var zeros := PackedByteArray()
+		zeros.resize(pad)
 		pc.append_array(zeros)
 	var gx: int = int(ceil(float(w) / 16.0))
 	var gy: int = int(ceil(float(h) / 16.0))
-
-	# forward pass
 	var cl := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(cl, _pipeline)
 	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
 	_rd.compute_list_set_push_constant(cl, pc, pc.size())
 	_rd.compute_list_dispatch(cl, gx, gy, 1)
 	_rd.compute_list_end()
-
-	# swap buffers for backward pass
 	_rd.free_rid(u_set)
-	_rd.free_rid(buf_in)
-	# make input = out, out = new buffer
-	buf_in = buf_out
-	buf_out = _rd.storage_buffer_create(dist_a.to_byte_array().size(), dist_a.to_byte_array())
-	uniforms.clear()
-	u = RDUniform.new()
-	u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	u.binding = 0
-	u.add_id(buf_land)
-	uniforms.append(u)
-	u = RDUniform.new()
-	u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	u.binding = 1
-	u.add_id(buf_in)
-	uniforms.append(u)
-	u = RDUniform.new()
-	u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	u.binding = 2
-	u.add_id(buf_out)
-	uniforms.append(u)
-	u_set = _rd.uniform_set_create(uniforms, _shader, 0)
-	pc = PackedByteArray()
-	ints = PackedInt32Array([w, h, (1 if wrap_x else 0), 1])
-	pc.append_array(ints.to_byte_array())
-	# Align to 16 bytes
-	var pad2 := (16 - (pc.size() % 16)) % 16
-	if pad2 > 0:
-		var zeros2 := PackedByteArray(); zeros2.resize(pad2)
-		pc.append_array(zeros2)
-	cl = _rd.compute_list_begin()
-	_rd.compute_list_bind_compute_pipeline(cl, _pipeline)
-	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
-	_rd.compute_list_set_push_constant(cl, pc, pc.size())
-	_rd.compute_list_dispatch(cl, gx, gy, 1)
-	_rd.compute_list_end()
+	return true
 
+func ocean_distance_to_land_gpu_buffers(
+		w: int,
+		h: int,
+		land_buf: RID,
+		wrap_x: bool,
+		dist_out_buf: RID,
+		dist_tmp_buf: RID
+	) -> bool:
+	_ensure()
+	if not _shader.is_valid() or not _pipeline.is_valid():
+		return false
+	if w <= 0 or h <= 0:
+		return false
+	if not land_buf.is_valid() or not dist_out_buf.is_valid() or not dist_tmp_buf.is_valid():
+		return false
+	# mode 2: seed distances from land mask into dist_out_buf
+	if not _dispatch_mode(w, h, wrap_x, 2, land_buf, dist_tmp_buf, dist_out_buf):
+		return false
+	# mode 0: forward pass
+	if not _dispatch_mode(w, h, wrap_x, 0, land_buf, dist_out_buf, dist_tmp_buf):
+		return false
+	# mode 1: backward pass
+	if not _dispatch_mode(w, h, wrap_x, 1, land_buf, dist_tmp_buf, dist_out_buf):
+		return false
+	return true
+
+func ocean_distance_to_land(w: int, h: int, is_land: PackedByteArray, wrap_x: bool) -> PackedFloat32Array:
+	_ensure()
+	if not _shader.is_valid() or not _pipeline.is_valid():
+		return PackedFloat32Array()
+	var size: int = max(0, w * h)
+	# Convert land mask to u32 to match GLSL uint[]
+	var land_u32 := PackedInt32Array()
+	land_u32.resize(size)
+	for j in range(size):
+		land_u32[j] = 1 if (j < is_land.size() and is_land[j] != 0) else 0
+	var buf_land := _rd.storage_buffer_create(land_u32.to_byte_array().size(), land_u32.to_byte_array())
+	var zeros := PackedByteArray()
+	zeros.resize(size * 4)
+	var buf_out := _rd.storage_buffer_create(zeros.size(), zeros)
+	var buf_tmp := _rd.storage_buffer_create(zeros.size(), zeros)
+	var ok: bool = ocean_distance_to_land_gpu_buffers(w, h, buf_land, wrap_x, buf_out, buf_tmp)
+	if not ok:
+		_rd.free_rid(buf_land)
+		_rd.free_rid(buf_out)
+		_rd.free_rid(buf_tmp)
+		return PackedFloat32Array()
 	var out_bytes := _rd.buffer_get_data(buf_out)
 	var out_dist: PackedFloat32Array = out_bytes.to_float32_array()
-	_rd.free_rid(u_set)
 	_rd.free_rid(buf_land)
-	_rd.free_rid(buf_in)
 	_rd.free_rid(buf_out)
+	_rd.free_rid(buf_tmp)
 	return out_dist

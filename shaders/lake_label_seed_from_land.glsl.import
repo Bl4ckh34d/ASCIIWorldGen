@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://blg6egyeamm8m"
+path="res://.godot/imported/lake_label_seed_from_land.glsl-27b538726f208f58d45a56b55ad1f366.res"
+
+[deps]
+
+source_file="res://shaders/lake_label_seed_from_land.glsl"
+dest_files=["res://.godot/imported/lake_label_seed_from_land.glsl-27b538726f208f58d45a56b55ad1f366.res"]
+
+[params]
+

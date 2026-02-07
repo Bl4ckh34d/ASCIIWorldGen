@@ -90,6 +90,12 @@ float fbm2(vec2 p, float freq, int octaves, float lacunarity, float gain){
     return sum;
 }
 
+mat2 rot2(float a){
+    float c = cos(a);
+    float s = sin(a);
+    return mat2(c, -s, s, c);
+}
+
 void main(){
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
@@ -97,28 +103,50 @@ void main(){
     int W = PC.width; int H = PC.height;
     int i = int(x) + int(y) * W;
 
-    // Domain warp fields
-    float wx = fbm2(vec2(float(x), float(y)) * 0.8, PC.base_freq, PC.octaves, PC.lacunarity, PC.gain);
-    float wy = fbm2(vec2(float(x) + 1000.0, float(y) - 777.0) * 0.8, PC.base_freq, PC.octaves, PC.lacunarity, PC.gain);
-    wx *= PC.warp_amount;
-    wy *= PC.warp_amount;
+    vec2 p = vec2(float(x), float(y));
+    vec2 p0 = p * vec2(PC.noise_x_scale, 1.0);
+    vec2 p1 = rot2(0.71) * p0;
+    vec2 p2 = rot2(-1.13) * p0;
+
+    // Multi-domain warp suppresses directional "wavy" artifacts.
+    float wx = (
+        fbm2(p1 * 0.70, PC.base_freq, PC.octaves, PC.lacunarity, PC.gain) * 0.62 +
+        fbm2(p2 * 1.25 + vec2(113.0, -71.0), PC.base_freq * 1.75, min(PC.octaves, 4), PC.lacunarity * 1.12, PC.gain * 0.84) * 0.38
+    ) * PC.warp_amount;
+    float wy = (
+        fbm2(p2 * 0.70 + vec2(53.0, 139.0), PC.base_freq, PC.octaves, PC.lacunarity, PC.gain) * 0.62 +
+        fbm2(p1 * 1.35 + vec2(-97.0, 211.0), PC.base_freq * 1.65, min(PC.octaves, 4), PC.lacunarity * 1.10, PC.gain * 0.86) * 0.38
+    ) * PC.warp_amount;
     OutWarpX.out_warp_x[i] = wx;
     OutWarpY.out_warp_y[i] = wy;
 
     // Base FBM (warped coords)
     float sx = float(x) + wx;
     float sy = float(y) + wy;
-    float fbm_val = fbm2(vec2(sx * PC.noise_x_scale, sy), PC.base_freq, PC.octaves, PC.lacunarity, PC.gain);
-    // Add a higher-frequency detail FBM band (finer "frizzy" structure)
+    vec2 sp0 = vec2(sx * PC.noise_x_scale, sy);
+    vec2 sp1 = rot2(0.57) * sp0;
+    vec2 sp2 = rot2(-0.93) * sp0;
+    float fbm_val = 0.58 * fbm2(sp1, PC.base_freq, PC.octaves, PC.lacunarity, PC.gain)
+        + 0.42 * fbm2(sp2, PC.base_freq * 1.17, PC.octaves, PC.lacunarity * 1.03, PC.gain * 0.97);
+    // Higher-frequency detail + ridged component for natural rugged structure.
     int det_oct = min(PC.octaves, 3);
-    float detail_val = fbm2(vec2(sx * PC.noise_x_scale * 3.0, sy * 3.0), PC.base_freq * 2.5, det_oct, PC.lacunarity * 1.35, PC.gain * 0.85);
-    float fbm_combined = mix(fbm_val, detail_val, 0.28);
-    // Continental base (unwarped, lower freq)
-    float cont_val = fbm2(vec2(float(x) * 0.5 * PC.noise_x_scale, float(y) * 0.5), PC.cont_freq, PC.octaves, PC.lacunarity, PC.gain);
+    float detail_val = fbm2(sp0 * 2.9, PC.base_freq * 2.3, det_oct, PC.lacunarity * 1.30, PC.gain * 0.82);
+    float ridge_val = 1.0 - abs(fbm2(sp0 * 1.9 + vec2(37.0, -59.0), PC.base_freq * 1.8, det_oct + 1, PC.lacunarity * 1.22, PC.gain * 0.80));
+    ridge_val = ridge_val * 2.0 - 1.0;
+    float fbm_combined = fbm_val * 0.60 + detail_val * 0.24 + ridge_val * 0.16;
+
+    // Continental scaffold: two low-frequency fields and a broad ridge mask.
+    vec2 cp0 = p0 * 0.5;
+    vec2 cp1 = rot2(0.41) * cp0;
+    vec2 cp2 = rot2(-0.67) * cp0;
+    float cont_a = fbm2(cp1, PC.cont_freq, PC.octaves, PC.lacunarity, PC.gain);
+    float cont_b = fbm2(cp2 + vec2(221.0, -133.0), PC.cont_freq * 0.82, max(2, PC.octaves - 1), PC.lacunarity * 1.02, PC.gain * 0.95);
+    float cont_ridge = 1.0 - abs(fbm2(cp0 + vec2(-301.0, 87.0), PC.cont_freq * 0.92, max(2, PC.octaves - 1), PC.lacunarity * 1.08, PC.gain * 0.90));
+    cont_ridge = cont_ridge * 2.0 - 1.0;
+    float cont_val = cont_a * 0.52 + cont_b * 0.33 + cont_ridge * 0.15;
 
     // Clamp to [-1,1] for safety
     OutFBM.out_fbm[i] = clamp(fbm_combined, -1.0, 1.0);
     OutCont.out_cont[i] = clamp(cont_val, -1.0, 1.0);
 }
-
 

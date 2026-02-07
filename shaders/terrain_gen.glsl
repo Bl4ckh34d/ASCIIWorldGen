@@ -142,9 +142,10 @@ void main(){
         cont = sample_bilinear_cont(W, H, float(x) * 0.5 * PC.noise_x_scale, float(y) * 0.5);
     }
 
-    // Height shaping similar to CPU path
-    // Slightly boost detail by weighting base FBM more; continental stays as low-frequency scaffold
-    float hval = 0.72 * fbm + 0.38 * cont;
+    // Height shaping: broad continents + rugged detail, avoiding regular wave bands.
+    float ridge_hint = 1.0 - abs(cont);
+    ridge_hint = ridge_hint * ridge_hint;
+    float hval = 0.58 * fbm + 0.50 * cont + 0.16 * (ridge_hint - 0.5);
     // Basic circular falloff when not wrapping X
     if (PC.wrap_x == 0) {
         float cx = float(W) * 0.5;
@@ -156,8 +157,8 @@ void main(){
         float falloff = clamp(1.0 - r * 0.85, 0.0, 1.0);
         hval = hval * 0.85 + falloff * 0.15;
     }
-    // Reduce gamma a touch so small-scale detail survives shaping
-    float gamma = 0.60;
+    // Preserve macro continents while keeping natural relief variation.
+    float gamma = 0.67;
     float a = abs(hval);
     hval = (hval >= 0.0 ? 1.0 : -1.0) * pow(a, gamma);
     hval *= 1.10;
@@ -166,5 +167,4 @@ void main(){
     OutH.out_height[i] = hval;
     OutLand.out_land[i] = (hval > PC.sea_level) ? 1u : 0u;
 }
-
 

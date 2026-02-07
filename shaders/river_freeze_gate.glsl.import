@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cvkvc1de240jw"
+path="res://.godot/imported/river_freeze_gate.glsl-009074ca890e5f9ecc7a3471d2b6ca25.res"
+
+[deps]
+
+source_file="res://shaders/river_freeze_gate.glsl"
+dest_files=["res://.godot/imported/river_freeze_gate.glsl-009074ca890e5f9ecc7a3471d2b6ca25.res"]
+
+[params]
+

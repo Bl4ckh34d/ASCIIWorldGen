@@ -170,20 +170,26 @@ void main() {
         float local_ref = mix(min(h_base, h_other), 0.5 * (h_base + h_other), 0.72);
         float n_div = fract(sin(dot(vec2(float(x), float(y)) + vec2(float(pid), float(p_other)) * 0.73 + vec2(PC.seed_phase * 2.0), vec2(41.73, 19.91))) * 24634.6345);
         float jitter = (n_div - 0.5) * mix(0.016, 0.009, land_factor);
-        float rift_target = local_ref + jitter;
+        float land_raise = smoothstep(0.55, 1.0, land_factor) * 0.030;
+        float rift_target = local_ref + jitter + land_raise;
         float to_target = rift_target - h_base;
-        float settle_rate = PC.subduction_rate_per_day * PC.dt_days * div * mix(0.33, 0.22, land_factor);
+        float settle_rate = PC.subduction_rate_per_day * PC.dt_days * div * mix(0.33, 0.18, land_factor);
         delta_h += clamp(to_target, -settle_rate, settle_rate);
         // Keep a narrow deep axis only at the seam itself.
         float seam_w = smoothstep(1.60, 0.60, nearest_d);
-        float deep_axis = PC.trench_rate_per_day * PC.dt_days * div * mix(1.00, 0.52, land_factor);
+        float deep_axis = PC.trench_rate_per_day * PC.dt_days * div * mix(1.00, 0.20, land_factor);
         delta_h -= deep_axis * seam_w * seam_w;
         // Gentle upwelling so ridge line still reads, without flattening the whole divergent zone.
         float ridge_gain = mix(0.18, 0.08, land_factor);
         delta_h += PC.ridge_rate_per_day * PC.dt_days * div * ridge_gain;
         // Dynamic floor: near seam can be deeper, outside seam stays near local ocean floor.
-        float seam_floor = local_ref - mix(0.22, 0.10, land_factor);
-        float flank_floor = local_ref - mix(0.06, 0.03, land_factor);
+        float seam_floor = local_ref - mix(0.22, 0.02, land_factor);
+        float flank_floor = local_ref - mix(0.06, -0.01, land_factor);
+        // Land divergence should not auto-create submerged trenches.
+        float seam_sea_floor = PC.sea_level + mix(-0.18, 0.05, land_factor);
+        float flank_sea_floor = PC.sea_level + mix(-0.08, 0.08, land_factor);
+        seam_floor = max(seam_floor, seam_sea_floor);
+        flank_floor = max(flank_floor, flank_sea_floor);
         divergence_floor = mix(flank_floor, seam_floor, seam_w);
     } else {
         // cheap hash noise based on coordinates

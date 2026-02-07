@@ -95,20 +95,23 @@ func _derive_world_config(orbit: float) -> Dictionary:
 	var cold_extreme: float = pow(cold_side, 2.20)
 	var harshness: float = pow(edge, 1.55)
 
-	# Temperature envelope: colder side grows polar ice but preserves an equatorial band
-	# except near the very edge; hotter side becomes arid/scorched progressively.
-	var temp_min_c: float = -14.0 - cold_extreme * 50.0 + hot_extreme * 12.0
-	var temp_max_c: float = 46.0 - cold_extreme * 22.0 + hot_extreme * 48.0
+	# Temperature envelope: make hot-side placement warm up more decisively so
+	# ice retreat comes mainly from climate, not explicit cap forcing.
+	var temp_min_c: float = -12.0 - cold_extreme * 50.0 + hot_extreme * 20.0
+	var temp_max_c: float = 46.0 - cold_extreme * 22.0 + hot_extreme * 52.0
 
 	# Keep oceans present through most of the band; reduce only near harsh hot edge.
 	var sea_level: float = 0.08 - harshness * 0.10 - hot_extreme * 0.20 + cold_extreme * 0.06
 	sea_level = clamp(sea_level, -0.40, 0.22)
 
-	var polar_cap_frac: float = clamp(0.04 + cold_extreme * 0.34 + harshness * 0.04, 0.03, 0.50)
+	# Keep explicit polar-cap forcing small on hot-side worlds; let temperature drive the rest.
+	var hot_cap_suppression: float = clamp(1.0 - hot_extreme * 0.90, 0.08, 1.0)
+	var polar_cap_raw: float = 0.015 + cold_extreme * 0.35 + pow(cold_side, 1.4) * 0.06
+	var polar_cap_frac: float = clamp(polar_cap_raw * hot_cap_suppression, 0.005, 0.50)
 	var moist_base_offset: float = 0.10 + habitability * 0.10 - hot_extreme * 0.20 - cold_extreme * 0.06
 	var moist_scale: float = clamp(0.84 + habitability * 0.22 - hot_extreme * 0.12 + cold_extreme * 0.04, 0.62, 1.14)
-	var season_amp_equator: float = lerp(0.05, 0.14, harshness)
-	var season_amp_pole: float = lerp(0.16, 0.40, harshness)
+	var season_amp_equator: float = clamp(lerp(0.05, 0.14, harshness) - hot_extreme * 0.015, 0.04, 0.14)
+	var season_amp_pole: float = clamp(0.14 + cold_extreme * 0.22 + harshness * 0.05 - hot_extreme * 0.08, 0.10, 0.40)
 	var diurnal_amp_equator: float = lerp(0.08, 0.20, hot_extreme)
 	var diurnal_amp_pole: float = lerp(0.04, 0.12, hot_extreme)
 	var min_ocean_fraction: float = clamp(0.03 + habitability * 0.10 + cold_extreme * 0.03 - hot_extreme * 0.04, 0.02, 0.18)

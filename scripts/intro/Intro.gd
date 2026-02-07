@@ -106,6 +106,8 @@ const PROMPT_LABEL_WIDTH_FACTOR := 0.84
 const PROMPT_LABEL_MIN_HEIGHT_FACTOR := 0.10
 const PROMPT_LABEL_MAX_HEIGHT_FACTOR := 0.26
 const PROMPT_LABEL_VERTICAL_PADDING_PX := 18.0
+const PLANET_STORY_LABEL_WIDTH_FACTOR := 0.72
+const PLANET_STORY_LABEL_OFFSET_FACTOR := 0.17
 
 const PROMPT_NONE := 0
 const PROMPT_STAR := 1
@@ -162,35 +164,7 @@ const GOLDILOCK_BAND_WIDTH_FACTOR := 0.30
 const GOLDILOCK_BAND_MIN_WIDTH_PX := 360.0
 const MAX_MOONS := 3
 
-const FANTASY_SINGLE_NAMES := [
-	"Bel", "Ash", "Keth", "Vorn", "Lun", "Tal", "Ril", "Karn", "Orn", "Thal",
-	"Brin", "Drus", "Fen", "Ith", "Jor", "Lor", "Morn", "Nesh", "Oth", "Ryn",
-	"Sarn", "Tor", "Ulm", "Vesh", "Wren", "Ael", "Bael", "Cael", "Daen", "Eld",
-	"Fael", "Heth", "Ivar", "Jask", "Loth", "Khar", "Vor", "Ashk", "Bren", "Cald",
-	"Dren", "Evor", "Ghal", "Harn", "Irel", "Jurn", "Kest", "Mesk", "Norn", "Oryn",
-	"Phel", "Rusk", "Seth", "Tarn", "Ulth", "Varn", "Aurn", "Bryl", "Cask", "Dorn",
-	"Frin", "Gesk", "Hov", "Jarn", "Keld", "Lorn", "Malk", "Neth", "Osk", "Pran",
-	"Rald", "Siv", "Tov", "Urik", "Wesk", "Aster", "Borth", "Cren", "Eskar", "Forn",
-	"Hest", "Ilth", "Jorv", "Krail", "Lusk", "Morv", "Orv", "Pesk", "Rask", "Surn",
-	"Uven", "Warn", "Zorn", "Avar", "Brenk", "Cyrn", "Drel", "Gorn", "Istr", "Jeth",
-	"Krys", "Morr", "Orel", "Reth", "Skar", "Uth", "Veld", "Zhul", "Bjorn", "Eirik",
-	"Leif", "Sten", "Hald", "Gunn", "Rurik", "Hakon", "Alrik", "Soren"
-]
 
-const FANTASY_CURATED_NAMES := [
-	"Astrael", "Varnis", "Kordesh", "Belora", "Nythar", "Orimel", "Truvain", "Lunara", "Ashkiel", "Mordun",
-	"Soryn", "Vaelith", "Draeven", "Thalora", "Yradesh", "Caldrin", "Mireth", "Rovara", "Zerath", "Elandor",
-	"Kyralis", "Badesh", "Lotharda", "Fenor", "Neruva", "Qorath", "Averon", "Brivar", "Celesh", "Doreth",
-	"Erivash", "Faryn", "Gorune", "Harovar", "Iskara", "Jorven", "Kelora", "Lyrath", "Morvane", "Nolira",
-	"Orveth", "Praxora", "Quenor", "Rethys", "Sarune", "Tovaris", "Uraveth", "Virel", "Wynora", "Xerun",
-	"Yalara", "Zorvain", "Ashael", "Brenor", "Corveth", "Dralune", "Elvaris", "Ferath", "Galorin", "Heskar",
-	"Iralune", "Jastor", "Keldara", "Lorveth", "Myralis", "Nardesh", "Ophira", "Pellune", "Qirath", "Rulora",
-	"Selvane", "Tarnel", "Umbrion", "Valeth", "Woralis", "Xandor", "Ylith", "Zarune", "Ardeth", "Briora",
-	"Caldora", "Drethys", "Eryth", "Fendara", "Galenor", "Hyrune", "Ithara", "Jorath", "Kryndel", "Luneth",
-	"Morash", "Nerath", "Oradis", "Praxel", "Quorune", "Rynora", "Sardel", "Thyra", "Uldara", "Varneth",
-	"Weskar", "Xerath", "Yoralis", "Zyndra", "Aldune", "Boreth", "Cyralis", "Drathen", "Elyra", "Fornal",
-	"Gryth", "Halune", "Iradesh", "Joralis", "Koveth", "Lareth", "Mirel", "Norune", "Orelith", "Pryndor"
-]
 
 const FANTASY_PREFIXES := [
 	"ash", "bal", "cor", "dar", "el", "fen", "gal", "har", "isk", "jor",
@@ -208,7 +182,29 @@ const FANTASY_PREFIXES := [
 	"maer", "mavor", "melor", "mira", "navor", "nelor", "nera", "nira", "oira", "orin",
 	"ovar", "pael", "parin", "pera", "rael", "relin", "riven", "savor", "selor", "sira",
 	"tavor", "teira", "thora", "ulor", "uryn", "vael", "velor", "vera", "voryn", "wavor",
-	"welor", "wira", "zorin", "zoral"
+	"welor", "wira", "zorin", "zoral", "bel", "keth", "vorn", "lun", "tal", "ril",
+	"karn", "orn", "thal", "drus", "ith", "morn", "nesh", "oth", "ryn", "sarn",
+	"ulm", "vesh", "wren", "bael", "daen", "eld", "fael", "heth", "ivar", "jask",
+	"khar", "ashk", "bren", "evor", "ghal", "harn", "irel", "jurn", "kest", "mesk",
+	"norn", "oryn", "phel", "rusk", "seth", "tarn", "ulth", "aurn", "bryl", "cask",
+	"dorn", "frin", "gesk", "hov", "jarn", "keld", "lorn", "malk", "osk", "pran",
+	"rald", "siv", "tov", "urik", "wesk", "aster", "borth", "cren", "eskar", "forn",
+	"ilth", "jorv", "krail", "lusk", "morv", "orv", "pesk", "rask", "surn", "uven",
+	"warn", "zorn", "avar", "brenk", "cyrn", "drel", "gorna", "istr", "jeth", "krys",
+	"morr", "orel", "reth", "skar", "uth", "veld", "zhul", "bjarna", "eirika", "leif",
+	"sten", "hald", "gunn", "rurik", "hakon", "alrik", "soren", "astrael", "varnis", "kordesh",
+	"belora", "nythar", "orimel", "truvain", "lunara", "ashkiel", "mordun", "soryn", "vaelith", "draeven",
+	"thalora", "yradesh", "caldrin", "mireth", "rovara", "zerath", "elandor", "kyralis", "badesh", "lotharda",
+	"fenor", "neruva", "qorath", "averon", "brivar", "celesh", "doreth", "erivash", "faryn", "gorune",
+	"harovar", "iskara", "jorven", "kelora", "lyrath", "morvane", "nolira", "orveth", "praxora", "quenor",
+	"rethys", "sarune", "tovaris", "uraveth", "virel", "wynora", "xerun", "yalara", "zorvain", "ashael",
+	"brenor", "corveth", "dralune", "elvaris", "ferath", "galorin", "heskar", "iralune", "jastor", "keldara",
+	"lorveth", "myralis", "nardesh", "ophira", "pellune", "qirath", "rulora", "selvane", "tarnel", "umbrion",
+	"valeth", "woralis", "xandor", "ylith", "zarune", "ardeth", "briora", "caldora", "drethys", "eryth",
+	"fendara", "galenor", "hyrune", "ithara", "jorath", "kryndel", "luneth", "morash", "nerath", "oradis",
+	"praxel", "quorune", "rynora", "sardel", "thyra", "uldara", "varneth", "weskar", "xerath", "yoralis",
+	"zyndra", "aldune", "boreth", "cyralis", "drathen", "elyra", "fornal", "gryth", "halune", "iradesh",
+	"joralis", "koveth", "lareth", "mirel", "norune", "orelith", "pryndor"
 ]
 
 const FANTASY_MIDDLE_VOWEL := [
@@ -596,6 +592,28 @@ func _layout_centered_prompt_label(label: RichTextLabel, w: float, h: float) -> 
 		(h - label_h) * 0.5
 	)
 
+func _layout_prompt_label_at(label: RichTextLabel, w: float, h: float, center: Vector2, width_factor: float) -> void:
+	if label == null:
+		return
+	var label_w: float = w * width_factor
+	var content_h: float = float(label.get_content_height())
+	var min_h: float = h * PROMPT_LABEL_MIN_HEIGHT_FACTOR
+	var max_h: float = h * PROMPT_LABEL_MAX_HEIGHT_FACTOR
+	var label_h: float = clamp(content_h + PROMPT_LABEL_VERTICAL_PADDING_PX, min_h, max_h)
+	label.size = Vector2(label_w, label_h)
+	var left: float = clamp(center.x - label_w * 0.5, w * 0.02, w - label_w - w * 0.02)
+	var top: float = clamp(center.y - label_h * 0.5, h * 0.02, h - label_h - h * 0.02)
+	label.position = Vector2(left, top)
+
+func _layout_planet_story_labels(w: float, h: float) -> void:
+	var px: float = _planet_x if _planet_has_position else _planet_preview_x
+	if px <= 0.0:
+		px = w * 0.5
+	var py: float = _orbit_y if _orbit_y > 0.0 else h * 0.5
+	var y_off: float = clamp(h * PLANET_STORY_LABEL_OFFSET_FACTOR, 64.0, 220.0)
+	_layout_prompt_label_at(_terminal_label, w, h, Vector2(px, py - y_off), PLANET_STORY_LABEL_WIDTH_FACTOR)
+	_layout_prompt_label_at(_planet_hint_label, w, h, Vector2(px, py + y_off), PLANET_STORY_LABEL_WIDTH_FACTOR)
+
 func _update_orbit_bounds() -> void:
 	var inner_x: float = _circle_positive_x_at(_zone_inner_radius, _orbit_y, _sun_end_center)
 	var outer_x: float = _circle_positive_x_at(_zone_outer_radius, _orbit_y, _sun_end_center)
@@ -673,6 +691,19 @@ func _update_ui_state() -> void:
 		if _terminal_label.visible:
 			_set_rich_label_text(_terminal_label, _build_prompt_display_text())
 			_terminal_label.modulate = Color(1.0, 1.0, 1.0, star_alpha)
+	elif _phase == PHASE_PLANET_PLACE:
+		var primary_alpha: float = _story_alpha(_phase_time, PLANET_PROMPT_FADE_IN_SEC, PLANET_STORY_HOLD_SEC, PLANET_PROMPT_FADE_OUT_SEC)
+		_terminal_label.visible = primary_alpha > 0.001
+		if _terminal_label.visible:
+			_set_rich_label_text(_terminal_label, _build_planet_story_primary_line())
+			_terminal_label.modulate = Color(1.0, 0.97, 0.90, primary_alpha)
+		if _moon_count > 0:
+			var moon_t: float = max(0.0, _phase_time - _planet_story_primary_total_sec())
+			var secondary_alpha: float = _story_alpha(moon_t, MOON_STORY_FADE_IN_SEC, MOON_STORY_HOLD_SEC, MOON_STORY_FADE_OUT_SEC)
+			_planet_hint_label.visible = secondary_alpha > 0.001
+			if _planet_hint_label.visible:
+				_set_rich_label_text(_planet_hint_label, _build_planet_story_secondary_line())
+				_planet_hint_label.modulate = Color(0.96, 0.96, 1.0, secondary_alpha)
 	elif _phase == PHASE_PLANET_PROMPT_FADE_IN:
 		var primary_alpha: float = _get_prompt_alpha()
 		_terminal_label.visible = primary_alpha > 0.001
@@ -686,8 +717,13 @@ func _update_ui_state() -> void:
 			_set_rich_label_text(_planet_hint_label, _build_planet_story_secondary_line())
 			_planet_hint_label.modulate = Color(0.96, 0.96, 1.0, secondary_alpha)
 
-	_layout_centered_prompt_label(_terminal_label, max(1.0, size.x), max(1.0, size.y))
-	_layout_centered_prompt_label(_planet_hint_label, max(1.0, size.x), max(1.0, size.y))
+	var lw: float = max(1.0, size.x)
+	var lh: float = max(1.0, size.y)
+	if _phase == PHASE_PLANET_PLACE:
+		_layout_planet_story_labels(lw, lh)
+	else:
+		_layout_centered_prompt_label(_terminal_label, lw, lh)
+		_layout_centered_prompt_label(_planet_hint_label, lw, lh)
 	var zone_label_visible: bool = (
 		_phase == PHASE_PLANET_PLACE
 		or _phase == PHASE_PLANET_PROMPT_FADE_IN
@@ -1014,7 +1050,7 @@ func _confirm_planet_position() -> void:
 	_ensure_planet_name_generated()
 	_prepare_startup_world_config()
 	_request_main_scene_preload()
-	_set_phase(PHASE_PLANET_PROMPT_FADE_IN)
+	_set_phase(PHASE_PLANET_ZOOM)
 
 func _current_orbit_norm() -> float:
 	var px: float = _planet_x if _planet_has_position else _planet_preview_x
@@ -1188,10 +1224,8 @@ func _roll_name_syllable_count(rng: RandomNumberGenerator) -> int:
 func _generate_fantasy_name(rng: RandomNumberGenerator, syllables: int) -> String:
 	var syl: int = int(clamp(syllables, 1, 3))
 	if syl == 1:
-		if FANTASY_SINGLE_NAMES.is_empty():
-			return "Bel"
-		var single_idx: int = rng.randi_range(0, FANTASY_SINGLE_NAMES.size() - 1)
-		return String(FANTASY_SINGLE_NAMES[single_idx])
+		# Pure syllable mode: 1-syllable names come from the prefix pool.
+		return _capitalize_name(_pick_pool_item(FANTASY_PREFIXES, rng))
 
 	var prefix: String = _pick_pool_item(FANTASY_PREFIXES, rng)
 	var built_name: String = prefix
