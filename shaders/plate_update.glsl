@@ -3,7 +3,7 @@
 // File: res://shaders/plate_update.glsl
 // Plate update with stylized but more realistic tectonic behavior:
 // - Slow plate drift (advection-like lateral transport)
-// - Convergent boundaries: uplift + subduction trench
+// - Convergent boundaries: uplift/mountain building (no deep trench carving)
 // - Divergent boundaries: ridges + extensional lowering
 // - Transform boundaries: shear roughness
 // All done in a single GPU pass.
@@ -145,8 +145,8 @@ void main() {
         float buoy_contrast = abs(b_self - b_other);
         float uplift_gain = (0.65 + 0.85 * buoy_contrast);
         if (self_subducts) {
-            delta_h -= PC.trench_rate_per_day * PC.dt_days * conv * (1.0 + 0.8 * buoy_contrast);
-            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain * 0.35;
+            // Convergent boundaries should build relief, not carve adjacent deep canyons.
+            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain * 0.55;
         } else if (other_subducts) {
             delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain;
         } else {

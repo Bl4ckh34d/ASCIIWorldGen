@@ -461,7 +461,7 @@ func _apply_tectonic_foundation(w: int, h: int) -> void:
 		var jitter: float = (_tectonic_hash01(x, y, seed ^ (pid * 911)) - 0.5) * 0.012
 		out_h[i] = clamp(out_h[i] + plate_base + jitter, -1.0, 2.0)
 
-	# Boundary belts: convergent => mountain arcs/trenches, divergent => ridges/rifts.
+	# Boundary belts: convergent => mountain arcs, divergent => ridges/rifts.
 	for y in range(h):
 		for x in range(w):
 			var i2: int = x + y * w
@@ -527,12 +527,11 @@ func _apply_tectonic_foundation(w: int, h: int) -> void:
 			if approach > 0.05:
 				var conv: float = min(2.0, approach - 0.05)
 				var uplift: float = 0.018 * conv * (0.70 + buoy_contrast * 1.10)
-				var trench: float = 0.012 * conv * (0.65 + buoy_contrast * 1.20)
 				var self_subducts: bool = (b1 + 0.03) < b2
 				var other_subducts: bool = (b2 + 0.03) < b1
 				if self_subducts:
-					delta_center -= trench
-					delta_center += uplift * 0.35
+					# Convergent boundaries: uplift only (no adjacent deep trench carving).
+					delta_center += uplift * 0.55
 				elif other_subducts:
 					delta_center += uplift
 				else:

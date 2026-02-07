@@ -317,10 +317,6 @@ vec3 render_bigbang(vec2 uv, float t) {
 
 	vec3 col = plasma_col * plasma_alpha;
 
-	// Initial singularity flash.
-	float flash = exp(-PC.phase_time * 65.0);
-	col += vec3(1.0, 0.96, 0.90) * flash * 1.65;
-
 	float post_glow = exp(-r * 2.8) * smoothstep(0.16, 1.0, expand) * 0.30;
 	col += vec3(0.34, 0.50, 0.92) * post_glow;
 
