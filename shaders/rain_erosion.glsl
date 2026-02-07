@@ -1,8 +1,9 @@
 #[compute]
 #version 450
 // File: res://shaders/rain_erosion.glsl
-// GPU rainfall erosion pass.
-// Skips non-erodible cells: water, lakes, lava, and cryosphere biomes.
+// GPU terrain erosion pass.
+// Rainfall erosion on normal land + glacial erosion on cryosphere land.
+// Skips non-erodible cells: water, lakes, lava.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -71,10 +72,7 @@ void main() {
 		return;
 	}
 	int bid = Biome.biome_id[i];
-	if (bid == PC.biome_ice_sheet_id || bid == PC.biome_glacier_id || bid == PC.biome_desert_ice_id) {
-		HeightOut.height_out[i] = h0;
-		return;
-	}
+	bool is_cryo = (bid == PC.biome_ice_sheet_id || bid == PC.biome_glacier_id || bid == PC.biome_desert_ice_id);
 
 	float above_sea = h0 - PC.sea_level;
 	if (above_sea <= -0.005) {
@@ -117,20 +115,38 @@ void main() {
 		return;
 	}
 
-	float moist = clamp(Moisture.moisture[i], 0.0, 1.0);
-	float flow = max(0.0, Flow.flow_accum[i]);
-	float flow_drive = flow / (flow + 64.0);
-	float rain_drive = clamp(moist * 0.78 + flow_drive * 0.22, 0.0, 1.0);
-	if (rain_drive <= 0.02) {
-		HeightOut.height_out[i] = h0;
-		return;
+	float shape_noise = 0.82 + 0.36 * hash12(vec2(float(x), float(y)) + vec2(PC.noise_phase, PC.noise_phase * 0.37));
+	float erode = 0.0;
+	float erode_cap = 0.0;
+
+	if (is_cryo) {
+		// Glacial abrasion/plucking:
+		// - driven primarily by slope and relief
+		// - weakly coupled to moisture as a proxy for ice throughput
+		// - stronger at higher elevations where persistent ice survives
+		float moist = clamp(Moisture.moisture[i], 0.0, 1.0);
+		float ice_flux = 0.45 + 0.55 * moist;
+		float cryo_relief = clamp((best_drop * 0.70 + avg_slope * 0.30 - 0.0004) / 0.045, 0.0, 1.0);
+		float cryo_altitude = 0.65 + 0.85 * clamp((above_sea - 0.02) / 0.65, 0.0, 1.0);
+		float cryo_rate = PC.base_rate_per_day * 2.1;
+		float cryo_rate_max = PC.max_rate_per_day * 2.4;
+		erode = PC.dt_days * cryo_rate * cryo_relief * cryo_altitude * ice_flux * (0.88 + 0.24 * shape_noise);
+		erode_cap = min(cryo_rate_max * PC.dt_days, best_drop * 0.52);
+	} else {
+		float moist = clamp(Moisture.moisture[i], 0.0, 1.0);
+		float flow = max(0.0, Flow.flow_accum[i]);
+		float flow_drive = flow / (flow + 64.0);
+		float rain_drive = clamp(moist * 0.78 + flow_drive * 0.22, 0.0, 1.0);
+		if (rain_drive <= 0.02) {
+			HeightOut.height_out[i] = h0;
+			return;
+		}
+
+		float mountain_drive = 0.6 + 1.4 * clamp((above_sea - 0.04) / 0.55, 0.0, 1.0);
+		erode = PC.dt_days * PC.base_rate_per_day * rain_drive * slope_drive * mountain_drive * shape_noise;
+		erode_cap = min(PC.max_rate_per_day * PC.dt_days, best_drop * 0.42);
 	}
 
-	float mountain_drive = 0.6 + 1.4 * clamp((above_sea - 0.04) / 0.55, 0.0, 1.0);
-	float shape_noise = 0.82 + 0.36 * hash12(vec2(float(x), float(y)) + vec2(PC.noise_phase, PC.noise_phase * 0.37));
-
-	float erode = PC.dt_days * PC.base_rate_per_day * rain_drive * slope_drive * mountain_drive * shape_noise;
-	float erode_cap = min(PC.max_rate_per_day * PC.dt_days, best_drop * 0.42);
 	erode = min(erode, erode_cap);
 
 	float h_out = clamp(h0 - erode, -1.0, 2.0);

@@ -372,10 +372,10 @@ vec3 render_bigbang(vec2 uv, float t) {
 	float flash_total = 0.30;
 	float flash_t = clamp(PC.phase_time / flash_total, 0.0, 1.0);
 	float flash_expand = smoothstep(0.0, 1.0, clamp(flash_t / 0.46, 0.0, 1.0));
-	float flash_collapse = smoothstep(0.52, 1.0, flash_t);
 	float flash_radius = mix(0.015, 2.90, flash_expand);
-	flash_radius = mix(flash_radius, 0.012, flash_collapse);
-	float flash_env = smoothstep(0.0, 0.12, flash_t) * (1.0 - smoothstep(0.86, 1.0, flash_t));
+	// Grow only, then fade out quickly in the same time window previously used for collapse.
+	float flash_fade = 1.0 - smoothstep(0.52, 1.0, flash_t);
+	float flash_env = smoothstep(0.0, 0.12, flash_t) * flash_fade;
 	vec2 fuv = q / max(0.001, flash_radius * 2.35 + 0.02);
 	vec2 mm = vec2(0.0);
 

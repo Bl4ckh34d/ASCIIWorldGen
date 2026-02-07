@@ -340,6 +340,8 @@ func apply_cycles_only(w: int, h: int,
 		float(params.get("diurnal_ocean_damp", 0.0)),
 		float(params.get("time_of_day", 0.0)),
 		float(params.get("continentality_scale", 1.0)),
+		float(params.get("temp_base_offset_delta", 0.0)),
+		float(params.get("temp_scale_ratio", 1.0)),
 	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
@@ -399,6 +401,8 @@ func apply_cycles_only_gpu(w: int, h: int, temp_buf: RID, land_buf: RID, dist_bu
 		float(params.get("diurnal_ocean_damp", 0.0)),
 		float(params.get("time_of_day", 0.0)),
 		float(params.get("continentality_scale", 1.0)),
+		float(params.get("temp_base_offset_delta", 0.0)),
+		float(params.get("temp_scale_ratio", 1.0)),
 	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())

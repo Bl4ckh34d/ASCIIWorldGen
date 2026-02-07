@@ -20,6 +20,8 @@ const SPEED_CLOUDS_PAUSE_THRESHOLD: float = 100000.0
 const SPEED_LIGHT_HEAVY_THROTTLE_THRESHOLD: float = 10000.0
 const STARTUP_ACCLIMATE_STEPS: int = 2
 const STARTUP_ACCLIMATE_STEP_DAYS: float = 0.25
+const INTRO_SCENE_REVEAL_MIN_DELAY_SEC: float = 0.30
+const INTRO_SCENE_REVEAL_MAX_DELAY_SEC: float = 3.00
 
 # UI References - will be set in _initialize_ui_nodes()
 var play_button: Button
@@ -158,6 +160,11 @@ var _speed_lod_clouds_paused: bool = false
 var _top_speed_buttons: Array = []
 var _simulation_speed_buttons: Array = []
 var _entered_from_intro: bool = false
+var _scene_fade_rect: ColorRect = null
+var _scene_fade_tween: Tween = null
+var _pending_intro_reveal: bool = false
+var _intro_reveal_min_delay_elapsed: bool = false
+var _intro_reveal_first_tick_seen: bool = false
 
 func _initialize_ui_nodes() -> void:
 	"""Initialize all UI node references with the new layout"""
@@ -1348,20 +1355,61 @@ func _ready() -> void:
 				bottom_panel.hide()
 		if not is_running:
 			_start_simulation()
-	_play_scene_fade_in()
+	if _entered_from_intro:
+		_defer_intro_scene_reveal()
+	else:
+		_play_scene_fade_in()
 
-func _play_scene_fade_in() -> void:
+func _ensure_scene_fade_overlay() -> ColorRect:
+	if is_instance_valid(_scene_fade_rect):
+		return _scene_fade_rect
 	var fade := ColorRect.new()
 	fade.color = Color.BLACK
 	fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	fade.z_index = 4090
 	fade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(fade)
-	var tween := create_tween()
-	tween.tween_property(fade, "modulate:a", 0.0, 1.10).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tween.finished.connect(func() -> void:
-		if is_instance_valid(fade):
-			fade.queue_free()
+	_scene_fade_rect = fade
+	return fade
+
+func _defer_intro_scene_reveal() -> void:
+	_ensure_scene_fade_overlay()
+	_pending_intro_reveal = true
+	_intro_reveal_min_delay_elapsed = false
+	_intro_reveal_first_tick_seen = false
+	var min_timer: SceneTreeTimer = get_tree().create_timer(INTRO_SCENE_REVEAL_MIN_DELAY_SEC)
+	min_timer.timeout.connect(func() -> void:
+		_intro_reveal_min_delay_elapsed = true
+		_try_finish_intro_scene_reveal(false)
+	)
+	var max_timer: SceneTreeTimer = get_tree().create_timer(INTRO_SCENE_REVEAL_MAX_DELAY_SEC)
+	max_timer.timeout.connect(func() -> void:
+		_try_finish_intro_scene_reveal(true)
+	)
+
+func _try_finish_intro_scene_reveal(force: bool) -> void:
+	if not _pending_intro_reveal:
+		return
+	if not force:
+		if not _intro_reveal_min_delay_elapsed:
+			return
+		if not _intro_reveal_first_tick_seen:
+			return
+	_pending_intro_reveal = false
+	_play_scene_fade_in()
+
+func _play_scene_fade_in() -> void:
+	var fade: ColorRect = _ensure_scene_fade_overlay()
+	fade.modulate.a = 1.0
+	if _scene_fade_tween != null:
+		_scene_fade_tween.kill()
+	_scene_fade_tween = create_tween()
+	_scene_fade_tween.tween_property(fade, "modulate:a", 0.0, 1.10).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_scene_fade_tween.finished.connect(func() -> void:
+		if is_instance_valid(_scene_fade_rect):
+			_scene_fade_rect.queue_free()
+		_scene_fade_rect = null
+		_scene_fade_tween = null
 	)
 
 func _ensure_window_visible() -> void:
@@ -1531,6 +1579,9 @@ func _on_sim_tick(_dt_days: float) -> void:
 	# Minimal MVP: on each tick, just refresh overlays that depend on time (future: incremental system updates)
 	if generator == null:
 		return
+	if _pending_intro_reveal and not _intro_reveal_first_tick_seen:
+		_intro_reveal_first_tick_seen = true
+		_try_finish_intro_scene_reveal(false)
 	if time_system and "time_scale" in time_system:
 		var ts_now: float = max(1.0, float(time_system.time_scale))
 		if abs(ts_now - _last_speed_time_scale) > 0.001:

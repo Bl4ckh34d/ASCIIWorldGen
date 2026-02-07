@@ -158,6 +158,8 @@ var world_data_1_override: Texture2D = null
 var world_data_2_override: Texture2D = null
 var last_light: PackedFloat32Array = PackedFloat32Array()
 var biome_phase: float = 0.0
+var _temperature_base_offset_ref: float = 0.0
+var _temperature_base_scale_ref: float = 1.0
 
 # Exposed by PlateSystem for coupling (GPU boundary mask as i32)
 var _plates_boundary_mask_i32: PackedInt32Array = PackedInt32Array()
@@ -1187,6 +1189,8 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	if config.use_gpu_all and _gpu_buffer_manager != null:
 		update_persistent_buffer("temperature", last_temperature.to_byte_array())
 		update_persistent_buffer("temperature_base", last_temperature.to_byte_array())
+		_temperature_base_offset_ref = config.temp_base_offset
+		_temperature_base_scale_ref = max(0.001, config.temp_scale)
 		update_persistent_buffer("moisture", last_moisture.to_byte_array())
 		update_persistent_buffer("biome_temp", last_temperature.to_byte_array())
 		update_persistent_buffer("biome_moist", last_moisture.to_byte_array())
@@ -1408,13 +1412,19 @@ func quick_update_climate(skip_light: bool = false) -> void:
 		"sim_days": config.season_phase * 365.0 + config.time_of_day,
 	}
 	params["distance_to_coast"] = last_water_distance
+	var temp_offset_delta: float = config.temp_base_offset - _temperature_base_offset_ref
+	var temp_scale_ratio: float = config.temp_scale / max(0.001, _temperature_base_scale_ref)
+	params["temp_base_offset_delta"] = temp_offset_delta
+	params["temp_scale_ratio"] = temp_scale_ratio
 	
 	if _climate_compute_gpu == null:
 		_climate_compute_gpu = ClimateAdjustCompute.new()
 	
 	# Fast path: if only seasonal/diurnal phases changed, use cycle_apply_only
-	# This is a simplification - in a full implementation you'd track what changed
-	var use_fast_path = last_temperature.size() == size
+	# If long-term drift changed the baseline significantly, force full GPU climate
+	# pass so moisture/biomes stay coherent with temperature.
+	var fast_baseline_ok: bool = abs(temp_offset_delta) < 0.02 and abs(temp_scale_ratio - 1.0) < 0.05
+	var use_fast_path = last_temperature.size() == size and fast_baseline_ok
 	var gpu_only: bool = config.use_gpu_all and _gpu_buffer_manager != null
 	if not gpu_only:
 		return
@@ -1459,6 +1469,8 @@ func quick_update_climate(skip_light: bool = false) -> void:
 		if not used_gpu_fast:
 			update_persistent_buffer("temperature", last_temperature.to_byte_array())
 			update_persistent_buffer("temperature_base", last_temperature.to_byte_array())
+			_temperature_base_offset_ref = config.temp_base_offset
+			_temperature_base_scale_ref = max(0.001, config.temp_scale)
 		if updated_moisture:
 			update_persistent_buffer("moisture", last_moisture.to_byte_array())
 

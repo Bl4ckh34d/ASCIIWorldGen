@@ -28,6 +28,8 @@ layout(push_constant) uniform Params {
     float time_of_day;            // 0..1
     // Misc
     float continentality_scale;   // scales coast distance -> 0..1
+    float temp_base_offset_delta; // delta vs temperature_base reference offset
+    float temp_scale_ratio;       // current temp_scale / temperature_base reference scale
 } PC;
 
 float clamp01(float v){ return clamp(v, 0.0, 1.0); }
@@ -65,5 +67,11 @@ void main(){
 
     float t = Temp.temp_in[i];
     float t_out = clamp01(t + dT_season + dT_diurnal);
+    // Re-anchor fast-path output against the baseline temperature buffer.
+    // This lets long-term paleoclimate drift (warm/ice ages) show up without
+    // accumulating additive error each tick.
+    float offset_delta = clamp(PC.temp_base_offset_delta, -0.35, 0.35);
+    float scale_ratio = clamp(PC.temp_scale_ratio, 0.6, 1.6);
+    t_out = clamp01((t_out + offset_delta - 0.5) * scale_ratio + 0.5);
     OutT.temp_out[i] = t_out;
 }

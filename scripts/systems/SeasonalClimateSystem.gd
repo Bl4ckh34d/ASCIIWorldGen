@@ -92,7 +92,7 @@ func _apply_paleoclimate(sim_days: float) -> void:
 		# Respect user/runtime edits to base temp offset (slider, presets, etc.).
 		if abs(current_offset - _paleo_last_applied_offset) > 0.0001:
 			_paleo_base_offset = current_offset
-	var seed: int = int(cfg.rng_seed) if "rng_seed" in cfg else 0
+	var seed: int = int(cfg.rng_seed)
 	var phase0: float = _hash11(float(seed) * 0.137 + 11.7) * TAU
 	var phase1: float = _hash11(float(seed) * 0.173 + 23.4) * TAU
 	var phase2: float = _hash11(float(seed) * 0.211 + 37.9) * TAU
@@ -108,14 +108,17 @@ func _apply_paleoclimate(sim_days: float) -> void:
 	_paleo_last_applied_offset = out_offset
 
 func _hash11(x: float) -> float:
-	return fract(sin(x * 127.1 + 311.7) * 43758.5453123)
+	return _fract(sin(x * 127.1 + 311.7) * 43758.5453123)
 
 func _value_noise_1d(x: float) -> float:
 	var i0: float = floor(x)
 	var i1: float = i0 + 1.0
-	var f: float = fract(x)
+	var f: float = _fract(x)
 	var u: float = f * f * (3.0 - 2.0 * f)
 	return lerp(_hash11(i0), _hash11(i1), u)
+
+func _fract(v: float) -> float:
+	return v - floor(v)
 
 func _update_light_field(world: Object) -> void:
 	"""Update the day-night light field using GPU compute"""

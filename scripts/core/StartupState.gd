@@ -10,6 +10,8 @@ var intro_completed: bool = false
 
 var _pending_world_config: Dictionary = {}
 var _intro_seed_string: String = ""
+var _intro_seed_base: String = ""
+var _intro_world_prepared: bool = false
 
 func reset() -> void:
 	star_name = ""
@@ -20,19 +22,33 @@ func reset() -> void:
 	intro_completed = false
 	_pending_world_config.clear()
 	_intro_seed_string = ""
+	_intro_seed_base = ""
+	_intro_world_prepared = false
 
-func set_intro_selection(star_input: String, orbit_value: float, world_name: String = "", selected_moon_count: int = 0, selected_moon_seed: float = 0.0) -> void:
+func prepare_intro_world_config(star_input: String, orbit_value: float, selected_moon_count: int = 0, selected_moon_seed: float = 0.0) -> void:
 	star_name = _sanitize_star_name(star_input)
-	planet_name = _sanitize_planet_name(world_name)
 	orbit_norm = clamp(float(orbit_value), 0.0, 1.0)
 	moon_count = clamp(int(selected_moon_count), 0, 3)
 	moon_seed = max(0.0, float(selected_moon_seed))
-	_intro_seed_string = "%s|%s|orbit=%.4f|moons=%d|moonseed=%.3f" % [star_name, planet_name, orbit_norm, moon_count, moon_seed]
+	_intro_seed_base = "%s|orbit=%.4f|moons=%d|moonseed=%.3f" % [star_name, orbit_norm, moon_count, moon_seed]
+	_intro_seed_string = _intro_seed_base
 	_pending_world_config = _derive_world_config(orbit_norm)
-	_pending_world_config["seed"] = _intro_seed_string
+	_pending_world_config["seed"] = _intro_seed_base
 	_pending_world_config["moon_count"] = moon_count
 	_pending_world_config["moon_seed"] = moon_seed
-	intro_completed = true
+	_intro_world_prepared = true
+	intro_completed = false
+
+func set_intro_planet_name(world_name: String) -> void:
+	planet_name = _sanitize_planet_name(world_name)
+	if _intro_seed_base.is_empty():
+		_intro_seed_base = "%s|orbit=%.4f|moons=%d|moonseed=%.3f" % [star_name, orbit_norm, moon_count, moon_seed]
+	_intro_seed_string = "%s|planet=%s" % [_intro_seed_base, planet_name]
+	intro_completed = _intro_world_prepared and not _pending_world_config.is_empty()
+
+func set_intro_selection(star_input: String, orbit_value: float, world_name: String = "", selected_moon_count: int = 0, selected_moon_seed: float = 0.0) -> void:
+	prepare_intro_world_config(star_input, orbit_value, selected_moon_count, selected_moon_seed)
+	set_intro_planet_name(world_name)
 
 func has_pending_world_config() -> bool:
 	return intro_completed and not _pending_world_config.is_empty()
@@ -42,6 +58,7 @@ func consume_world_config() -> Dictionary:
 		return {}
 	var out: Dictionary = _pending_world_config.duplicate(true)
 	_pending_world_config.clear()
+	_intro_world_prepared = false
 	intro_completed = false
 	return out
 

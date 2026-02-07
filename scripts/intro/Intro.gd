@@ -9,6 +9,7 @@ const DEFAULT_INTRO_QUOTE_AUTHOR := "- Carl Sagan"
 const INTRO_FLAGS_PATH := "user://intro_flags.cfg"
 const INTRO_FLAGS_SECTION := "intro"
 const INTRO_FLAGS_KEY_FIRST_QUOTE_SHOWN := "first_quote_shown"
+const MAIN_SCENE_PATH := "res://scenes/Main.tscn"
 const INTRO_QUOTES := [
 	{
 		"text": DEFAULT_INTRO_QUOTE_TEXT,
@@ -297,6 +298,8 @@ var _planet_name_suggestion: String = ""
 var _name_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _selected_quote_text: String = DEFAULT_INTRO_QUOTE_TEXT
 var _selected_quote_author: String = DEFAULT_INTRO_QUOTE_AUTHOR
+var _main_scene_preload_requested: bool = false
+var _main_scene_packed: PackedScene = null
 
 var _bigbang_compute: RefCounted = null
 var _bg_texture: Texture2D = null
@@ -363,6 +366,7 @@ func _process(delta: float) -> void:
 	var dt: float = max(0.0, delta)
 	_phase_time += dt
 	_intro_total_time += dt
+	_poll_main_scene_preload()
 
 	match _phase:
 		PHASE_QUOTE:
@@ -395,7 +399,10 @@ func _process(delta: float) -> void:
 				_set_phase(PHASE_TRANSITION)
 		PHASE_TRANSITION:
 			if _phase_time >= TRANSITION_SEC:
-				get_tree().change_scene_to_file("res://scenes/Main.tscn")
+				if _main_scene_packed != null:
+					get_tree().change_scene_to_packed(_main_scene_packed)
+				else:
+					get_tree().change_scene_to_file(MAIN_SCENE_PATH)
 		_:
 			pass
 
@@ -943,6 +950,8 @@ func _confirm_planet_position() -> void:
 		return
 	_planet_x = _planet_preview_x
 	_planet_has_position = true
+	_prepare_startup_world_config()
+	_request_main_scene_preload()
 	_set_phase(PHASE_PLANET_PROMPT_FADE_IN)
 
 func _current_orbit_norm() -> float:
@@ -1073,5 +1082,48 @@ func _finalize_intro_selection() -> void:
 		_planet_has_position = true
 
 	var startup_state := get_node_or_null("/root/StartupState")
-	if startup_state and "set_intro_selection" in startup_state:
-		startup_state.set_intro_selection(_star_name, _current_orbit_norm(), _planet_name, _moon_count, _moon_seed)
+	if startup_state:
+		if "prepare_intro_world_config" in startup_state:
+			startup_state.prepare_intro_world_config(_star_name, _current_orbit_norm(), _moon_count, _moon_seed)
+		if "set_intro_planet_name" in startup_state:
+			startup_state.set_intro_planet_name(_planet_name)
+		elif "set_intro_selection" in startup_state:
+			startup_state.set_intro_selection(_star_name, _current_orbit_norm(), _planet_name, _moon_count, _moon_seed)
+	_request_main_scene_preload()
+
+func _prepare_startup_world_config() -> void:
+	var startup_state := get_node_or_null("/root/StartupState")
+	if startup_state == null:
+		return
+	if not ("prepare_intro_world_config" in startup_state):
+		return
+	var prepared_star_name: String = _star_name.strip_edges()
+	if prepared_star_name.is_empty():
+		prepared_star_name = "Unnamed Star"
+	startup_state.prepare_intro_world_config(prepared_star_name, _current_orbit_norm(), _moon_count, _moon_seed)
+
+func _request_main_scene_preload() -> void:
+	if _main_scene_packed != null:
+		return
+	if _main_scene_preload_requested:
+		return
+	var req_err: int = ResourceLoader.load_threaded_request(MAIN_SCENE_PATH, "PackedScene")
+	if req_err == OK:
+		_main_scene_preload_requested = true
+		return
+	# Fallback when threaded loading is unavailable.
+	var loaded: Resource = load(MAIN_SCENE_PATH)
+	if loaded is PackedScene:
+		_main_scene_packed = loaded as PackedScene
+
+func _poll_main_scene_preload() -> void:
+	if not _main_scene_preload_requested:
+		return
+	var status: int = ResourceLoader.load_threaded_get_status(MAIN_SCENE_PATH)
+	if status == ResourceLoader.THREAD_LOAD_LOADED:
+		var loaded: Resource = ResourceLoader.load_threaded_get(MAIN_SCENE_PATH)
+		if loaded is PackedScene:
+			_main_scene_packed = loaded as PackedScene
+		_main_scene_preload_requested = false
+	elif status == ResourceLoader.THREAD_LOAD_FAILED:
+		_main_scene_preload_requested = false
