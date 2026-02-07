@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cq6ksqmu68xqa"
+path="res://.godot/imported/rain_erosion.glsl-112500b235e78ed5cb8de38b9a321110.res"
+
+[deps]
+
+source_file="res://shaders/rain_erosion.glsl"
+dest_files=["res://.godot/imported/rain_erosion.glsl-112500b235e78ed5cb8de38b9a321110.res"]
+
+[params]
+
