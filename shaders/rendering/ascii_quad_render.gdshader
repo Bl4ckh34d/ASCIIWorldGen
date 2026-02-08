@@ -27,6 +27,10 @@ uniform float cloud_light_strength = 0.25;
 uniform vec2 cloud_shadow_offset = vec2(1.5, 1.0);
 uniform float day_of_year = 0.0;
 uniform float time_of_day = 0.0;
+// When enabled, override lon/lat for solar geometry (regional/local map views).
+uniform int use_fixed_lonlat = 0;
+uniform float fixed_lon = 0.0; // radians
+uniform float fixed_phi = 0.0; // radians, [-PI/2..PI/2]
 uniform int use_glyphs = 0;
 uniform int bedrock_only_mode = 0;
 
@@ -34,6 +38,15 @@ uniform int bedrock_only_mode = 0;
 uniform vec2 map_dimensions;
 uniform vec2 cell_size;
 uniform vec2 atlas_uv_size; // 1/16, 1/6
+
+// View window parameters (optional).
+// When display_dimensions is (0,0), the shader uses map_dimensions (legacy behavior).
+// Otherwise, it renders only the sub-rectangle of the data textures starting at
+// display_origin (in cells) with size display_dimensions (in cells), optionally
+// shifted by scroll_offset (fractional cells) for smooth scrolling.
+uniform vec2 display_dimensions = vec2(0.0, 0.0);
+uniform vec2 display_origin = vec2(0.0, 0.0);
+uniform vec2 scroll_offset = vec2(0.0, 0.0);
 
 // Hover overlay parameters (tile coordinates; negative disables)
 uniform vec2 hover_cell = vec2(-1.0, -1.0);
@@ -188,8 +201,12 @@ void fragment() {
         // Debug gradient to verify shader execution (use SCREEN_UV to avoid UV=0 issues)
         COLOR = vec4(SCREEN_UV.x, SCREEN_UV.y, 0.0, 1.0);
     } else {
-    // Calculate world position from screen UV
-    vec2 world_pos = UV * map_dimensions;
+    vec2 disp = display_dimensions;
+    if (disp.x <= 0.0 || disp.y <= 0.0) {
+        disp = map_dimensions;
+    }
+    // Calculate world position from screen UV.
+    vec2 world_pos = UV * disp + display_origin + scroll_offset;
     vec2 world_cell = floor(world_pos);
     world_cell = clamp(world_cell, vec2(0.0), map_dimensions - vec2(1.0));
     
@@ -303,9 +320,13 @@ void fragment() {
     }
 
     // Shared solar geometry for cloud shadows and water glint.
-    float lon = TAU * (world_cell.x / max(1.0, map_dimensions.x));
-    float lat_norm_signed = 0.5 - (world_cell.y / max(1.0, map_dimensions.y - 1.0));
-    float phi = lat_norm_signed * PI;
+    float lon = (use_fixed_lonlat != 0)
+        ? fixed_lon
+        : (TAU * (world_cell.x / max(1.0, map_dimensions.x)));
+    float lat_norm_signed = (use_fixed_lonlat != 0)
+        ? (fixed_phi / PI)
+        : (0.5 - (world_cell.y / max(1.0, map_dimensions.y - 1.0)));
+    float phi = (use_fixed_lonlat != 0) ? fixed_phi : (lat_norm_signed * PI);
     float decl = SOLAR_TILT * cos(TAU * day_of_year);
     float sun_lon = -TAU * time_of_day;
     vec3 n = _dir_from_lon_lat(lon, phi);

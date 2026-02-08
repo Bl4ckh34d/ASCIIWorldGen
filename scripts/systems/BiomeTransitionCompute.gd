@@ -48,7 +48,13 @@ func blend_to_buffer(
 			step_general: float,
 			step_cryosphere: float,
 			rng_seed: int,
-			epoch: int
+			epoch: int,
+			seed_floor_general: float = 0.018,
+			seed_floor_cryosphere: float = 0.002,
+			front_q0: float = 0.10,
+			front_q1: float = 0.72,
+			front_gamma: float = 1.7,
+			cryo_polar_seed_boost: float = 0.08
 		) -> bool:
 	_ensure()
 	if not _pipeline.is_valid():
@@ -68,8 +74,12 @@ func blend_to_buffer(
 	var floats := PackedFloat32Array([
 		clamp(step_general, 0.0, 1.0),
 		clamp(step_cryosphere, 0.0, 1.0),
-		0.0,
-		0.0
+		clamp(seed_floor_general, 0.0, 1.0),
+		clamp(seed_floor_cryosphere, 0.0, 1.0),
+		clamp(front_q0, 0.0, 1.0),
+		clamp(front_q1, 0.0, 1.0),
+		max(0.01, front_gamma),
+		clamp(cryo_polar_seed_boost, 0.0, 1.0)
 	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())

@@ -12,6 +12,15 @@ uniform int use_light_texture = 0;
 uniform vec2 map_dimensions;
 uniform float day_of_year = 0.0;
 uniform float time_of_day = 0.0;
+// When enabled, override lon/lat for solar geometry (regional/local map views).
+uniform int use_fixed_lonlat = 0;
+uniform float fixed_lon = 0.0; // radians
+uniform float fixed_phi = 0.0; // radians, [-PI/2..PI/2]
+
+// View window parameters (optional, see ascii_quad_render.gdshader).
+uniform vec2 display_dimensions = vec2(0.0, 0.0);
+uniform vec2 display_origin = vec2(0.0, 0.0);
+uniform vec2 scroll_offset = vec2(0.0, 0.0);
 
 uniform float cloud_opacity = 0.90;
 uniform float cloud_min = 0.18;
@@ -30,7 +39,11 @@ vec3 _dir_from_lon_lat(float lon, float lat) {
 }
 
 void fragment() {
-    vec2 world_pos = UV * map_dimensions;
+    vec2 disp = display_dimensions;
+    if (disp.x <= 0.0 || disp.y <= 0.0) {
+        disp = map_dimensions;
+    }
+    vec2 world_pos = UV * disp + display_origin + scroll_offset;
     vec2 world_cell = floor(world_pos);
     world_cell = clamp(world_cell, vec2(0.0), map_dimensions - vec2(1.0));
     vec2 world_uv = (world_cell + vec2(0.5)) / map_dimensions;
@@ -47,9 +60,13 @@ void fragment() {
 
     // Drive cloud visibility from pure sun geometry (season/day-night), not
     // relief-shaded ground lighting, so terrain shadows don't show through.
-    float lon = CLOUD_TAU * (world_cell.x / max(1.0, map_dimensions.x));
-    float lat_norm = 0.5 - (world_cell.y / max(1.0, map_dimensions.y - 1.0));
-    float phi = lat_norm * CLOUD_PI;
+    float lon = (use_fixed_lonlat != 0)
+        ? fixed_lon
+        : (CLOUD_TAU * (world_cell.x / max(1.0, map_dimensions.x)));
+    float lat_norm = (use_fixed_lonlat != 0)
+        ? (fixed_phi / CLOUD_PI)
+        : (0.5 - (world_cell.y / max(1.0, map_dimensions.y - 1.0)));
+    float phi = (use_fixed_lonlat != 0) ? fixed_phi : (lat_norm * CLOUD_PI);
     float decl = SOLAR_TILT * cos(CLOUD_TAU * day_of_year);
     float sun_lon = -CLOUD_TAU * time_of_day;
     float s = dot(_dir_from_lon_lat(lon, phi), _dir_from_lon_lat(sun_lon, decl));

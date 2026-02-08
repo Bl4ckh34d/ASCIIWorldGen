@@ -7,8 +7,9 @@ We are pivoting from the `/ProceduralGame` Python/terminal idea to the existing 
 Goal: turn the existing world generator into the foundation of a full game. Keep the world map generation and visuals (especially ocean depth coloring + climate zones) while staying on the GPU-first runtime path.
 
 ## Key Decisions (Locked In)
-- Engine: Godot 4.4 (project config shows `config/features=4.4`).
+- Engine: Godot 4.6 (project config shows `config/features=4.6`).
 - Base project: use existing worldgen project directly.
+- Rendering: **GPU-only (or GPU-first)** for map visuals (world/regional/local). No RichTextLabel/CPU BBCode map rendering; reuse `GPUAsciiRenderer` + compute-driven lighting/clouds.
 - World map resolution: keep the worldgen resolution from the project (current defaults in code: `width=275`, `height=62`; verify/adjust if needed).
 - World topology: wrap horizontally (cylindrical world).
 - Seed handling: prompt the player for a seed (default random if blank).
@@ -24,13 +25,20 @@ Goal: turn the existing world generator into the foundation of a full game. Keep
 - Make the map view stable and interactive.
 
 ## Near-Term Scope (Next)
-- Add world map gameplay layer:
-  - Player marker that moves on the world map.
-  - Random encounter trigger on movement.
-  - POI generation on world map (cities, villages, fortresses, dungeons, temples, etc.).
-  - Deterministic POI seeds tied to the world seed + civilization seed so revisits persist.
-- Add turn-based battle framework (Final Fantasy–style) with party members.
-- Add time system (day/night + seasons) that influences world and schedules.
+- Add multi-scene game loop:
+  - `Main` world map scene (macro map, tile selection).
+  - Regional map scene (1m²-like local terrain per selected world tile).
+  - Local POI/interior scene (houses/dungeons at higher zoom).
+  - Random battle scene (FF1/FF2 style command menu + win screen).
+  - In-game menu overlay (inventory, party loadout/equipment, stats, settings, quit).
+- Ensure regional map can cross to adjacent world tiles and remain seamless based on neighboring world-tile biome data.
+- Keep deterministic generation for POIs and encounter outcomes from world seed + tile coordinates.
+- Time system (minimal):
+  - World map: speed-up buttons accelerate world evolution/simulation.
+  - Gameplay (regional/local/battle): normal time only.
+  - Fast travel (only to previously visited world-map tiles): temporarily accelerates time while traveling.
+  - Calendar: use a 365-day year for player familiarity (no leap years for now).
+  - Later: time-of-day affects encounter tables; daylight length varies by season + latitude (midnight sun).
 
 ## Longer-Term Scope (Later)
 - Civilization simulation (lightweight).
@@ -60,25 +68,41 @@ Current runtime direction:
   - coastal shallow water + beaches
   - temperature/moisture
   - biome IDs
-- Remove or skip the erosion/plates/water-cycle systems.
+- Keep the GPU-first simulation path (plates/hydro/erosion/etc) as the default runtime, but tune via cadence/budget controls.
 - Keep ocean depth coloring and shelf/turquoise blend.
 - Ensure the map renders reliably at the existing resolution on the GPU runtime path.
 
-### Phase 2 – World Map Gameplay Layer
-- Add a player entity on the world map.
-- Movement with wrap-around in X.
-- Add random encounter rolls on movement steps.
-- Add POI placement (seeded, reproducible).
+### Phase 2 – Scene Flow + Regional Map
+- From `Main` world map: click tile to enter regional map for that tile.
+- Capture world biome snapshot and selected tile context in shared startup/gameplay state.
+- Regional map:
+  - Render deterministic local terrain from selected/neighbor world tile biomes.
+  - Move player with edge crossing into adjacent world tiles (X wraps, Y clamps).
+  - Seeded POI spawn points (house/dungeon) and seeded random encounter rolls.
+  - Toggleable menu overlay.
 
-### Phase 3 – Battle System
-- Turn-based battles with party up to 4 members.
-- Death is permanent; no resurrection.
-- Hiring system at inns/temples/POIs.
-- Basic inventory and equipment.
+### Phase 3 – Battles + POI Interiors
+- Battle scene with command menu (`Attack`, `Magic`, `Item`, `Flee`) and result panel.
+- Return player cleanly to regional map after battle with persisted position.
+- Defeat: Game Over (load save or restart).
+- POI interior scene for house/dungeon entry/exit loop.
+- Expand toward full RPG systems:
+  - Party up to 4 members.
+  - Hiring system at inns/temples/POIs.
+  - Basic inventory and equipment.
 
 ### Phase 4 – Time + Seasons
-- World time ticking on movement/encounters.
-- Day/night and seasonal modifiers.
+- Minimal time model:
+  - World time can tick on movement/encounters for display/logs.
+  - No gameplay speed-up controls outside the world map.
+  - Fast travel advances time faster during travel only.
+- Day/night and seasonal modifiers: later.
+
+## Detailed Plans (Docs)
+- Regional seamless generator + cache: `docs/REGIONAL_SEAMLESS_GENERATION_PLAN.md`
+- Local POI interiors: `docs/LOCAL_AREA_MAP_PLAN.md`
+- Battle system: `docs/BATTLE_SYSTEM_EXPANSION_PLAN.md`
+- Menu + inventory + equipment: `docs/MENU_INVENTORY_PLAN.md`
 
 ## Open Questions / To Decide
 - Confirm target world resolution or increase for game map.
@@ -90,6 +114,51 @@ Current runtime direction:
 ## Design Decisions Log
 - 2026-02-05: Pivot from new Python/terminal project to existing Godot worldgen project.
 - 2026-02-05: Use full biome system, horizontal wrap, seed prompt.
+- 2026-02-08: Locked core scene stack: world map -> regional map -> local POI interiors + battle scene + menu overlay.
+
+## Current Implementation Status
+- Implemented:
+  - World-map tile click signal and transition from `Main` to `RegionalMap`.
+  - Shared gameplay state in `StartupState` for world snapshot + tile context + queued battle/POI transitions.
+  - New scenes:
+    - `scenes/RegionalMap.tscn`
+    - `scenes/BattleScene.tscn`
+    - `scenes/LocalAreaScene.tscn`
+    - `scenes/ui/MenuOverlay.tscn`
+  - Regional map prototype:
+    - Deterministic biome-aware ASCII terrain generation.
+    - Player movement and seamless cross-tile traversal (X wrap, Y clamp).
+    - Seeded POI placement + entry to interior scene.
+    - Seeded random encounter entry to battle scene.
+  - Battle prototype:
+    - FF-style command buttons and win/escape result panel.
+    - Multi-party selection (choose commands for party members, then resolve) with multi-enemy support (count-based).
+    - Game Over on defeat.
+  - Interior prototype:
+    - Walkable local map with return path to regional map.
+    - Dungeon boss battle trigger and persistent POI instance state (boss defeated + main chest opened).
+  - Map overlay + fast travel scaffold:
+    - `M` opens a world-map overlay from gameplay scenes.
+    - Fast travel is allowed only to previously visited world tiles and advances time during travel.
+  - System scaffolding layer:
+    - `GameState` autoload as single source of truth for run state.
+    - `GameEvents` autoload as scene-agnostic signal hub.
+    - `SceneRouter` autoload for centralized scene transitions.
+    - Data models for party members/party state/time state.
+    - Additional persistent models for settings, quests, and world flags/progress.
+    - Data catalogs for items, enemies, and POI types.
+    - Deterministic registries for POIs and encounters.
+    - Battle state machine scaffold driving command resolution + rewards payload.
+    - Versioned JSON save/load schema (`SAVE_SCHEMA_VERSION=3`).
+    - Multi-slot save scaffolding (`slot_0..slot_2`) via scene contracts.
+    - Tabbed menu overlay (`Overview`, `Party`, `Characters`, `Stats`, `Quests`, `Settings`) wired to live data + save/load/settings apply.
+      - Characters tab: per-member slot inventory (Valheim-like), HP/MP bars, right-click Use/Equip/Drop, drag & drop between slots.
+- Pending/Next:
+  - Replace prototype ASCII local/regional rendering with full art/render layer.
+  - Make regional generation truly continuous across tile edges via shared edge constraints/chunk cache.
+  - Add full party/inventory/stats data models and menu wiring.
+  - Integrate time/day-night progression into movement, POIs, and battles.
 
 ## Working Agreement
 - Keep this file updated with decisions, scope, and next steps so other agents can continue without re-discovery.
+- Treat GPU-only rendering as a project constraint: prefer RD compute + Texture2DRD pipelines and avoid CPU readbacks/fallbacks.

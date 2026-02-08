@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://btv5w5cu7xuye"
+path="res://.godot/imported/ocean_land_gate.glsl-98ed1fe329b45475fe81ecfe99da088d.res"
+
+[deps]
+
+source_file="res://shaders/ocean_land_gate.glsl"
+dest_files=["res://.godot/imported/ocean_land_gate.glsl-98ed1fe329b45475fe81ecfe99da088d.res"]
+
+[params]
+

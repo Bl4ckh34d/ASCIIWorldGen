@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://du6il7k506bue"
+path="res://.godot/imported/terrain_hydro_metrics.glsl-1c067e081eaae60021e5d3729d84f51c.res"
+
+[deps]
+
+source_file="res://shaders/terrain_hydro_metrics.glsl"
+dest_files=["res://.godot/imported/terrain_hydro_metrics.glsl-1c067e081eaae60021e5d3729d84f51c.res"]
+
+[params]
+

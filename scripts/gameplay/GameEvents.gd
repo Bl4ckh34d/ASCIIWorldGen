@@ -1,0 +1,18 @@
+extends Node
+
+signal world_snapshot_updated(width: int, height: int, seed_hash: int)
+signal location_changed(location: Dictionary)
+signal regional_step_taken(location: Dictionary)
+signal battle_started(encounter: Dictionary)
+signal battle_resolved(result: Dictionary)
+signal poi_entered(poi_data: Dictionary)
+signal menu_opened(context_title: String)
+signal menu_closed(context_title: String)
+signal party_changed(party: Dictionary)
+signal inventory_changed(inventory: Dictionary)
+signal time_advanced(time_label: String)
+signal settings_changed(settings: Dictionary)
+signal quests_changed(quests: Dictionary)
+signal world_flags_changed(flags: Dictionary)
+signal save_written(path: String)
+signal save_loaded(path: String)

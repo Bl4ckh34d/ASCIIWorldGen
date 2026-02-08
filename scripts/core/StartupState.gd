@@ -13,6 +13,18 @@ var _intro_seed_string: String = ""
 var _intro_seed_base: String = ""
 var _intro_world_prepared: bool = false
 
+# Shared gameplay state for scene-to-scene flow (world map -> regional -> POI/battle)
+var world_seed_hash: int = 0
+var world_width: int = 0
+var world_height: int = 0
+var world_biome_ids: PackedInt32Array = PackedInt32Array()
+var selected_world_tile: Vector2i = Vector2i(-1, -1)
+var selected_world_tile_biome_id: int = -1
+var selected_world_tile_biome_name: String = ""
+var regional_local_pos: Vector2i = Vector2i(48, 48)
+var pending_battle: Dictionary = {}
+var pending_poi: Dictionary = {}
+
 func reset() -> void:
 	star_name = ""
 	planet_name = ""
@@ -24,6 +36,16 @@ func reset() -> void:
 	_intro_seed_string = ""
 	_intro_seed_base = ""
 	_intro_world_prepared = false
+	world_seed_hash = 0
+	world_width = 0
+	world_height = 0
+	world_biome_ids = PackedInt32Array()
+	selected_world_tile = Vector2i(-1, -1)
+	selected_world_tile_biome_id = -1
+	selected_world_tile_biome_name = ""
+	regional_local_pos = Vector2i(48, 48)
+	pending_battle.clear()
+	pending_poi.clear()
 
 func prepare_intro_world_config(star_input: String, orbit_value: float, selected_moon_count: int = 0, selected_moon_seed: float = 0.0) -> void:
 	star_name = _sanitize_star_name(star_input)
@@ -64,6 +86,51 @@ func consume_world_config() -> Dictionary:
 
 func get_intro_seed_string() -> String:
 	return _intro_seed_string
+
+func set_world_snapshot(width: int, height: int, seed_hash: int, biome_ids: PackedInt32Array) -> void:
+	world_width = max(1, width)
+	world_height = max(1, height)
+	world_seed_hash = seed_hash
+	world_biome_ids = biome_ids.duplicate()
+
+func set_selected_world_tile(x: int, y: int, biome_id: int, biome_name: String, local_x: int = 48, local_y: int = 48) -> void:
+	selected_world_tile = Vector2i(x, y)
+	selected_world_tile_biome_id = biome_id
+	selected_world_tile_biome_name = biome_name
+	regional_local_pos = Vector2i(local_x, local_y)
+
+func has_world_snapshot() -> bool:
+	return world_width > 0 and world_height > 0 and world_biome_ids.size() == world_width * world_height
+
+func get_world_biome_id(x: int, y: int) -> int:
+	if not has_world_snapshot():
+		return selected_world_tile_biome_id
+	var wx: int = posmod(x, world_width)
+	var wy: int = clamp(y, 0, world_height - 1)
+	var i: int = wx + wy * world_width
+	if i < 0 or i >= world_biome_ids.size():
+		return selected_world_tile_biome_id
+	return world_biome_ids[i]
+
+func queue_battle(encounter_data: Dictionary) -> void:
+	pending_battle = encounter_data.duplicate(true)
+
+func consume_battle() -> Dictionary:
+	if pending_battle.is_empty():
+		return {}
+	var out: Dictionary = pending_battle.duplicate(true)
+	pending_battle.clear()
+	return out
+
+func queue_poi(poi_data: Dictionary) -> void:
+	pending_poi = poi_data.duplicate(true)
+
+func consume_poi() -> Dictionary:
+	if pending_poi.is_empty():
+		return {}
+	var out: Dictionary = pending_poi.duplicate(true)
+	pending_poi.clear()
+	return out
 
 func _sanitize_star_name(raw_value: String) -> String:
 	var cleaned: String = raw_value.strip_edges()

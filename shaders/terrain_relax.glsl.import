@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cuqg6e6u04fw4"
+path="res://.godot/imported/terrain_relax.glsl-72253ee7bc2da91efe6887fff8185a92.res"
+
+[deps]
+
+source_file="res://shaders/terrain_relax.glsl"
+dest_files=["res://.godot/imported/terrain_relax.glsl-72253ee7bc2da91efe6887fff8185a92.res"]
+
+[params]
+

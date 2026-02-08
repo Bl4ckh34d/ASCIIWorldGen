@@ -24,6 +24,9 @@ config/icon="res://icon.svg"
 [autoload]
 
 StartupState="*res://scripts/core/StartupState.gd"
+GameEvents="*res://scripts/gameplay/GameEvents.gd"
+GameState="*res://scripts/gameplay/GameState.gd"
+SceneRouter="*res://scripts/gameplay/SceneRouter.gd"
 
 [display]
 

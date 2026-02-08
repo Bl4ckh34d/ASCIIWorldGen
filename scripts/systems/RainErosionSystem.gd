@@ -104,6 +104,8 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if _land_mask_compute == null:
 		_land_mask_compute = LandMaskCompute.new()
 	_land_mask_compute.update_from_height(w, h, height_buf, float(generator.config.sea_level), land_buf)
+	if "apply_ocean_connectivity_gate_runtime" in generator:
+		generator.apply_ocean_connectivity_gate_runtime()
 
 	_step_counter += 1
 

@@ -27,6 +27,13 @@ var _fallback_white_tex: Texture2D
 var _render_bedrock_view: bool = false
 var _solar_day_of_year: float = 0.0
 var _solar_time_of_day: float = 0.0
+var _use_fixed_lonlat: bool = false
+var _fixed_lon: float = 0.0
+var _fixed_phi: float = 0.0
+var _display_dimensions: Vector2 = Vector2.ZERO
+var _display_origin: Vector2 = Vector2.ZERO
+var _scroll_offset: Vector2 = Vector2.ZERO
+var _display_window_explicit: bool = false
 
 # Data managers
 var font_atlas_generator: Object
@@ -74,6 +81,10 @@ func initialize_rendering(font: Font, font_size: int, width: int, height: int) -
 	
 	map_width = width
 	map_height = height
+	_display_dimensions = Vector2(float(map_width), float(map_height))
+	_display_origin = Vector2.ZERO
+	_scroll_offset = Vector2.ZERO
+	_display_window_explicit = false
 	
 	# Generate font atlas
 	var FontAtlasGeneratorClass = load("res://scripts/rendering/FontAtlasGenerator.gd")
@@ -140,12 +151,18 @@ func _create_material() -> void:
 		quad_material.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
 		quad_material.set_shader_parameter("cell_size", cell_size)
 		quad_material.set_shader_parameter("atlas_uv_size", Vector2(1.0/16.0, 1.0/6.0))
+		quad_material.set_shader_parameter("display_dimensions", _display_dimensions)
+		quad_material.set_shader_parameter("display_origin", _display_origin)
+		quad_material.set_shader_parameter("scroll_offset", _scroll_offset)
 		quad_material.set_shader_parameter("sea_level", 0.0)
 		quad_material.set_shader_parameter("cloud_shadow_strength", 0.14)
 		quad_material.set_shader_parameter("cloud_light_strength", 0.25)
 		quad_material.set_shader_parameter("cloud_shadow_offset", Vector2(1.5, 1.0))
 		quad_material.set_shader_parameter("day_of_year", _solar_day_of_year)
 		quad_material.set_shader_parameter("time_of_day", _solar_time_of_day)
+		quad_material.set_shader_parameter("use_fixed_lonlat", 0)
+		quad_material.set_shader_parameter("fixed_lon", 0.0)
+		quad_material.set_shader_parameter("fixed_phi", 0.0)
 		quad_material.set_shader_parameter("use_glyphs", 0)
 		quad_material.set_shader_parameter("bedrock_only_mode", 0)
 		quad_material.set_shader_parameter("use_cloud_texture", 0)
@@ -186,6 +203,9 @@ func _create_material() -> void:
 				cloud_mat.set_shader_parameter("world_data_1", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("world_data_3", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
+				cloud_mat.set_shader_parameter("display_dimensions", _display_dimensions)
+				cloud_mat.set_shader_parameter("display_origin", _display_origin)
+				cloud_mat.set_shader_parameter("scroll_offset", _scroll_offset)
 				cloud_mat.set_shader_parameter("cloud_opacity", 0.95)
 				cloud_mat.set_shader_parameter("cloud_min", 0.18)
 				cloud_mat.set_shader_parameter("cloud_levels", 10.0)
@@ -194,6 +214,9 @@ func _create_material() -> void:
 				cloud_mat.set_shader_parameter("cloud_night_alpha", 0.28)
 				cloud_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 				cloud_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
+				cloud_mat.set_shader_parameter("use_fixed_lonlat", 0)
+				cloud_mat.set_shader_parameter("fixed_lon", 0.0)
+				cloud_mat.set_shader_parameter("fixed_phi", 0.0)
 				cloud_mat.set_shader_parameter("cloud_texture", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("light_texture", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("use_cloud_texture", 0)
@@ -332,10 +355,16 @@ func _update_material_uniforms() -> void:
 		
 		# Set map dimensions
 		shader_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
+		shader_mat.set_shader_parameter("display_dimensions", _display_dimensions)
+		shader_mat.set_shader_parameter("display_origin", _display_origin)
+		shader_mat.set_shader_parameter("scroll_offset", _scroll_offset)
 		shader_mat.set_shader_parameter("cell_size", cell_size)
 		shader_mat.set_shader_parameter("bedrock_only_mode", 1 if _render_bedrock_view else 0)
 		shader_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 		shader_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
+		shader_mat.set_shader_parameter("use_fixed_lonlat", 1 if _use_fixed_lonlat else 0)
+		shader_mat.set_shader_parameter("fixed_lon", _fixed_lon)
+		shader_mat.set_shader_parameter("fixed_phi", _fixed_phi)
 		
 		# Set atlas parameters
 		var atlas_uv_size = font_atlas_generator.get_uv_dimensions()
@@ -402,8 +431,14 @@ func _update_cloud_uniforms() -> void:
 		if cloud_rect:
 			cloud_rect.visible = (t3 != null) or (cloud_texture_override != null)
 		cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
+		cloud_mat.set_shader_parameter("display_dimensions", _display_dimensions)
+		cloud_mat.set_shader_parameter("display_origin", _display_origin)
+		cloud_mat.set_shader_parameter("scroll_offset", _scroll_offset)
 		cloud_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 		cloud_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
+		cloud_mat.set_shader_parameter("use_fixed_lonlat", 1 if _use_fixed_lonlat else 0)
+		cloud_mat.set_shader_parameter("fixed_lon", _fixed_lon)
+		cloud_mat.set_shader_parameter("fixed_phi", _fixed_phi)
 
 func _update_light_uniform() -> void:
 	"""Update only the light texture uniform"""
@@ -415,6 +450,12 @@ func _update_light_uniform() -> void:
 		shader_mat.set_shader_parameter("bedrock_only_mode", 1 if _render_bedrock_view else 0)
 		shader_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 		shader_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
+		shader_mat.set_shader_parameter("use_fixed_lonlat", 1 if _use_fixed_lonlat else 0)
+		shader_mat.set_shader_parameter("fixed_lon", _fixed_lon)
+		shader_mat.set_shader_parameter("fixed_phi", _fixed_phi)
+		shader_mat.set_shader_parameter("display_dimensions", _display_dimensions)
+		shader_mat.set_shader_parameter("display_origin", _display_origin)
+		shader_mat.set_shader_parameter("scroll_offset", _scroll_offset)
 		if light_texture_override and is_instance_valid(light_texture_override):
 			shader_mat.set_shader_parameter("light_texture", light_texture_override)
 			shader_mat.set_shader_parameter("use_light_texture", 1)
@@ -445,6 +486,12 @@ func _update_light_uniform() -> void:
 		cloud_mat.set_shader_parameter("world_data_1", _safe_tex(t1c, _fallback_black_tex))
 		cloud_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 		cloud_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
+		cloud_mat.set_shader_parameter("use_fixed_lonlat", 1 if _use_fixed_lonlat else 0)
+		cloud_mat.set_shader_parameter("fixed_lon", _fixed_lon)
+		cloud_mat.set_shader_parameter("fixed_phi", _fixed_phi)
+		cloud_mat.set_shader_parameter("display_dimensions", _display_dimensions)
+		cloud_mat.set_shader_parameter("display_origin", _display_origin)
+		cloud_mat.set_shader_parameter("scroll_offset", _scroll_offset)
 		if light_texture_override and is_instance_valid(light_texture_override):
 			cloud_mat.set_shader_parameter("light_texture", light_texture_override)
 			cloud_mat.set_shader_parameter("use_light_texture", 1)
@@ -479,6 +526,51 @@ func set_solar_params(day_of_year: float, time_of_day: float) -> void:
 		var cloud_mat := cloud_material as ShaderMaterial
 		cloud_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 		cloud_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
+
+func set_fixed_lonlat(enabled: bool, lon_rad: float, phi_rad: float) -> void:
+	_use_fixed_lonlat = bool(enabled)
+	_fixed_lon = float(lon_rad)
+	_fixed_phi = float(phi_rad)
+	if quad_material and quad_material is ShaderMaterial:
+		var shader_mat := quad_material as ShaderMaterial
+		shader_mat.set_shader_parameter("use_fixed_lonlat", 1 if _use_fixed_lonlat else 0)
+		shader_mat.set_shader_parameter("fixed_lon", _fixed_lon)
+		shader_mat.set_shader_parameter("fixed_phi", _fixed_phi)
+		shader_mat.set_shader_parameter("display_dimensions", _display_dimensions)
+		shader_mat.set_shader_parameter("display_origin", _display_origin)
+		shader_mat.set_shader_parameter("scroll_offset", _scroll_offset)
+	if cloud_material and cloud_material is ShaderMaterial:
+		var cloud_mat := cloud_material as ShaderMaterial
+		cloud_mat.set_shader_parameter("use_fixed_lonlat", 1 if _use_fixed_lonlat else 0)
+		cloud_mat.set_shader_parameter("fixed_lon", _fixed_lon)
+		cloud_mat.set_shader_parameter("fixed_phi", _fixed_phi)
+		cloud_mat.set_shader_parameter("display_dimensions", _display_dimensions)
+		cloud_mat.set_shader_parameter("display_origin", _display_origin)
+		cloud_mat.set_shader_parameter("scroll_offset", _scroll_offset)
+
+func set_display_window(display_w: int, display_h: int, origin_x: float = 0.0, origin_y: float = 0.0) -> void:
+	# Control which sub-rectangle of the data textures is shown on screen.
+	_display_dimensions = Vector2(float(max(0, display_w)), float(max(0, display_h)))
+	_display_origin = Vector2(origin_x, origin_y)
+	_display_window_explicit = true
+	_apply_view_window_uniforms()
+
+func set_scroll_offset(offset_x: float, offset_y: float) -> void:
+	# Smooth camera scroll (fractional cells).
+	_scroll_offset = Vector2(offset_x, offset_y)
+	_apply_view_window_uniforms()
+
+func _apply_view_window_uniforms() -> void:
+	if quad_material and quad_material is ShaderMaterial:
+		var shader_mat := quad_material as ShaderMaterial
+		shader_mat.set_shader_parameter("display_dimensions", _display_dimensions)
+		shader_mat.set_shader_parameter("display_origin", _display_origin)
+		shader_mat.set_shader_parameter("scroll_offset", _scroll_offset)
+	if cloud_material and cloud_material is ShaderMaterial:
+		var cloud_mat := cloud_material as ShaderMaterial
+		cloud_mat.set_shader_parameter("display_dimensions", _display_dimensions)
+		cloud_mat.set_shader_parameter("display_origin", _display_origin)
+		cloud_mat.set_shader_parameter("scroll_offset", _scroll_offset)
 
 func set_river_texture_override(tex: Texture2D) -> void:
 	river_texture_override = tex
@@ -558,6 +650,9 @@ func resize_map(new_width: int, new_height: int) -> void:
 	
 	map_width = new_width
 	map_height = new_height
+	if not _display_window_explicit:
+		_display_dimensions = Vector2(float(map_width), float(map_height))
+		_display_origin = Vector2.ZERO
 	
 	# Update viewport size
 	var viewport_width = new_width * cell_size.x
@@ -572,6 +667,7 @@ func resize_map(new_width: int, new_height: int) -> void:
 	if cloud_material and cloud_material is ShaderMaterial:
 		var cloud_mat := cloud_material as ShaderMaterial
 		cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
+	_apply_view_window_uniforms()
 	
 	needs_mesh_update = true
 

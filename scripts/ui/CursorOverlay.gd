@@ -5,6 +5,7 @@ extends Control
 ## Runs in its own process to be lag-resistant during simulation
 
 signal tile_hovered(x: int, y: int)
+signal tile_clicked(x: int, y: int, button_index: int)
 signal mouse_exited_map()
 
 var world_width: int = 0
@@ -61,6 +62,10 @@ func set_draw_enabled(enabled: bool) -> void:
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and is_mouse_over:
 		_handle_mouse_motion(event.position)
+	elif event is InputEventMouseButton and is_mouse_over:
+		var mb: InputEventMouseButton = event
+		if mb.pressed:
+			_handle_mouse_click(mb.position, mb.button_index)
 
 var main: Node = null
 
@@ -120,6 +125,18 @@ func _handle_mouse_motion(pos: Vector2) -> void:
 	
 	# Keep label disabled to reduce per-frame UI work
 	cursor_label.visible = false
+
+func _handle_mouse_click(pos: Vector2, button_index: int) -> void:
+	if char_width <= 0.0 or char_height <= 0.0:
+		return
+	var map_px_w: float = float(world_width) * char_width
+	var map_px_h: float = float(world_height) * char_height
+	var inside: bool = pos.x >= 0.0 and pos.y >= 0.0 and pos.x < map_px_w and pos.y < map_px_h
+	if not inside:
+		return
+	var x: int = clamp(int(pos.x / char_width), 0, world_width - 1)
+	var y: int = clamp(int(pos.y / char_height), 0, world_height - 1)
+	emit_signal("tile_clicked", x, y, button_index)
 
 
 func _on_mouse_entered() -> void:

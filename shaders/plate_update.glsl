@@ -138,6 +138,25 @@ void main() {
     float delta_h = 0.0;
     bool divergent = false;
     float divergence_floor = -1.0;
+    float ocean_neighbors = 0.0;
+    float neigh_count = 0.0;
+    for (int oy = -1; oy <= 1; ++oy) {
+        for (int ox = -1; ox <= 1; ++ox) {
+            if (ox == 0 && oy == 0) continue;
+            int ny = int(y) + oy;
+            if (ny < 0 || ny >= H) continue;
+            int nx = int(x) + ox;
+            if (nx < 0) nx = W - 1; else if (nx >= W) nx = 0;
+            float hn_ctx = HIn.height_in[nx + ny * W];
+            if (hn_ctx <= PC.sea_level) ocean_neighbors += 1.0;
+            neigh_count += 1.0;
+        }
+    }
+    float ocean_ratio = (neigh_count > 0.0) ? (ocean_neighbors / neigh_count) : 0.0;
+    float marine_context = smoothstep(0.12, 0.55, ocean_ratio);
+    if (h_base <= PC.sea_level) {
+        marine_context = max(marine_context, 0.7);
+    }
     const float conv_thresh = 0.08;
     const float div_thresh = -0.08;
     if (approach > conv_thresh) {
@@ -161,8 +180,9 @@ void main() {
     } else if (approach < div_thresh) {
         divergent = true;
         float div = (-approach) - (-div_thresh);
+        float continental_guard = 1.0 - marine_context;
         // Keep divergent deformation narrow so rifts do not widen into giant basins.
-        boundary_w = pow(belt_w, 2.25);
+        boundary_w = mix(pow(belt_w, 2.35), pow(belt_w, 1.75), marine_context);
         float land_factor = smoothstep(PC.sea_level - 0.02, PC.sea_level + 0.35, h_base);
         // Preserve surrounding bathymetry instead of converging to a fixed sea-level offset.
         // Use local two-plate neighborhood as the divergent baseline.
@@ -173,14 +193,15 @@ void main() {
         float land_raise = smoothstep(0.55, 1.0, land_factor) * 0.030;
         float rift_target = local_ref + jitter + land_raise;
         float to_target = rift_target - h_base;
-        float settle_rate = PC.subduction_rate_per_day * PC.dt_days * div * mix(0.33, 0.18, land_factor);
+        float settle_rate = PC.subduction_rate_per_day * PC.dt_days * div * mix(0.26, 0.14, land_factor);
         delta_h += clamp(to_target, -settle_rate, settle_rate);
         // Keep a narrow deep axis only at the seam itself.
         float seam_w = smoothstep(1.60, 0.60, nearest_d);
-        float deep_axis = PC.trench_rate_per_day * PC.dt_days * div * mix(1.00, 0.20, land_factor);
+        float deep_axis = PC.trench_rate_per_day * PC.dt_days * div * mix(0.82, 0.16, land_factor);
+        deep_axis *= mix(0.16, 1.0, marine_context);
         delta_h -= deep_axis * seam_w * seam_w;
         // Gentle upwelling so ridge line still reads, without flattening the whole divergent zone.
-        float ridge_gain = mix(0.18, 0.08, land_factor);
+        float ridge_gain = mix(0.16, 0.08, land_factor);
         delta_h += PC.ridge_rate_per_day * PC.dt_days * div * ridge_gain;
         // Dynamic floor: near seam can be deeper, outside seam stays near local ocean floor.
         float seam_floor = local_ref - mix(0.22, 0.02, land_factor);
@@ -191,6 +212,16 @@ void main() {
         seam_floor = max(seam_floor, seam_sea_floor);
         flank_floor = max(flank_floor, flank_sea_floor);
         divergence_floor = mix(flank_floor, seam_floor, seam_w);
+        // Continental interiors should produce rift valleys first, not instant oceanic trenches.
+        float continental_floor = PC.sea_level + mix(0.012, -0.04, marine_context);
+        divergence_floor = max(divergence_floor, continental_floor);
+        // Reduce net lowering when marine context is weak.
+        delta_h *= mix(0.35, 1.0, marine_context);
+        // Preserve some rough extensional signal even under strong guard.
+        if (continental_guard > 0.2) {
+            float n_rift = fract(sin(dot(vec2(float(x) + 19.0, float(y) + 7.0) + vec2(PC.seed_phase * 1.7), vec2(18.9898, 67.233))) * 32768.5453);
+            delta_h += PC.transform_roughness_per_day * PC.dt_days * div * (n_rift - 0.5) * 0.35 * continental_guard;
+        }
     } else {
         // cheap hash noise based on coordinates
         float n = fract(sin(dot(vec2(float(x), float(y)) + vec2(PC.seed_phase), vec2(12.9898,78.233))) * 43758.5453);

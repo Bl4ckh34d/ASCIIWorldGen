@@ -230,6 +230,21 @@ func set_solar_params(day_of_year: float, time_of_day: float) -> void:
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_solar_params"):
 		quad_renderer.set_solar_params(day_of_year, time_of_day)
 
+func set_fixed_lonlat(enabled: bool, lon_rad: float, phi_rad: float) -> void:
+	"""Override lon/lat mapping for solar geometry (regional/local map views)."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_fixed_lonlat"):
+		quad_renderer.set_fixed_lonlat(enabled, lon_rad, phi_rad)
+
+func set_display_window(display_w: int, display_h: int, origin_x: float = 0.0, origin_y: float = 0.0) -> void:
+	"""Display only a sub-rectangle of the data textures (for padded views)."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_display_window"):
+		quad_renderer.set_display_window(display_w, display_h, origin_x, origin_y)
+
+func set_scroll_offset_cells(offset_x: float, offset_y: float) -> void:
+	"""Smooth camera scroll (fractional cell offset)."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_scroll_offset"):
+		quad_renderer.set_scroll_offset(offset_x, offset_y)
+
 func set_river_texture_override(tex: Texture2D) -> void:
 	"""Provide a GPU-updated river texture (Texture2DRD) to the renderer."""
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_river_texture_override"):

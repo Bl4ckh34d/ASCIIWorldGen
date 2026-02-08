@@ -26,11 +26,13 @@ const VolcanismCompute = preload("res://scripts/systems/VolcanismCompute.gd")
 const CloudOverlayCompute = preload("res://scripts/systems/CloudOverlayCompute.gd")
 const LandMaskCompute = preload("res://scripts/systems/LandMaskCompute.gd")
 const LakeLabelCompute = preload("res://scripts/systems/LakeLabelCompute.gd")
+const OceanLandGateCompute = preload("res://scripts/systems/OceanLandGateCompute.gd")
 const DepressionFillCompute = preload("res://scripts/systems/DepressionFillCompute.gd")
 const LakeLabelFromMaskCompute = preload("res://scripts/systems/LakeLabelFromMaskCompute.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 const WorldData1TextureCompute = preload("res://scripts/systems/WorldData1TextureCompute.gd")
 const WorldData2TextureCompute = preload("res://scripts/systems/WorldData2TextureCompute.gd")
+const TerrainHydroMetricsCompute = preload("res://scripts/systems/TerrainHydroMetricsCompute.gd")
 var _terrain_compute: Object = null
 var _dt_compute: Object = null
 var _shelf_compute: Object = null
@@ -38,6 +40,7 @@ var _climate_compute_gpu: Object = null
 var _flow_compute: Object = null
 var _river_compute: Object = null
 var _lake_label_compute: Object = null
+var _ocean_land_gate_compute: Object = null
 var _gpu_buffer_manager: Object = null
 var _land_mask_compute: Object = null
 var _lithology_compute: Object = null
@@ -125,10 +128,22 @@ class Config:
 	var lake_fill_ocean_ref: float = 1.0
 	# Use seed-derived physically plausible defaults for climate-shaping knobs.
 	var auto_physical_defaults: bool = true
+	# Keep ocean extent stable over long tectonic runs.
+	var fixed_water_budget_enabled: bool = false
+	var fixed_ocean_fraction_target: float = -1.0
+	var sea_level_solver_gain: float = 0.45
+	var sea_level_solver_max_step: float = 0.015
+	# Enforce ocean connectivity gate so inland basins become lakes, not ocean.
+	var ocean_connectivity_gate_enabled: bool = true
 
 var config := Config.new()
 var debug_parity: bool = false
 const CLIMATE_CPU_MIRROR_MAX_CELLS: int = 250000
+const TERRAIN_METRICS_STATS_U32_COUNT: int = 6
+const TERRAIN_METRICS_HEIGHT_OFFSET: float = 1.5
+const TERRAIN_METRICS_HEIGHT_SUM_SCALE: float = 1024.0
+const TERRAIN_METRICS_SLOPE_MEAN_THRESHOLD: float = 0.085
+const TERRAIN_METRICS_SLOPE_PEAK_THRESHOLD: float = 0.22
 
 var last_height: PackedFloat32Array = PackedFloat32Array()
 var last_height_final: PackedFloat32Array = PackedFloat32Array()
@@ -184,6 +199,10 @@ var volcanic_stats: Dictionary = {}
 
 # Parity/validation metrics removed for GPU-only mode
 var debug_last_metrics: Dictionary = {}
+var water_budget_stats: Dictionary = {}
+var _terrain_metrics_compute: Object = null
+var _tectonic_bias_prev_mean_valid: bool = false
+var _tectonic_bias_prev_mean_height: float = 0.0
 
 # Phase 0 scaffolding: central state and shared noise cache (currently unused)
 var _world_state: Object = null
@@ -212,6 +231,10 @@ var _debug_cache_fertility: PackedFloat32Array = PackedFloat32Array()
 const DEBUG_CACHE_STALE_USEC: int = 250000
 var _debug_cache_last_refresh_usec: int = 0
 var _climate_cpu_mirror_dirty: bool = true
+var _water_budget_initialized: bool = false
+var _water_total_target: float = 0.0
+var _water_ocean_fraction_target: float = -1.0
+var _sea_solver_last_apply_day: float = -1.0
 
 func _init() -> void:
 	randomize()
@@ -257,6 +280,16 @@ func apply_config(dict: Dictionary) -> void:
 		config.lake_fill_ocean_ref = clamp(float(dict["lake_fill_ocean_ref"]), 0.05, 1.0)
 	if dict.has("auto_physical_defaults"):
 		config.auto_physical_defaults = bool(dict["auto_physical_defaults"])
+	if dict.has("fixed_water_budget_enabled"):
+		config.fixed_water_budget_enabled = bool(dict["fixed_water_budget_enabled"])
+	if dict.has("fixed_ocean_fraction_target"):
+		config.fixed_ocean_fraction_target = clamp(float(dict["fixed_ocean_fraction_target"]), -1.0, 0.99)
+	if dict.has("sea_level_solver_gain"):
+		config.sea_level_solver_gain = clamp(float(dict["sea_level_solver_gain"]), 0.0, 2.0)
+	if dict.has("sea_level_solver_max_step"):
+		config.sea_level_solver_max_step = clamp(float(dict["sea_level_solver_max_step"]), 0.0001, 0.2)
+	if dict.has("ocean_connectivity_gate_enabled"):
+		config.ocean_connectivity_gate_enabled = bool(dict["ocean_connectivity_gate_enabled"])
 	if dict.has("shallow_threshold"):
 		config.shallow_threshold = float(dict["shallow_threshold"]) 
 	if dict.has("shore_band"):
@@ -552,6 +585,8 @@ func clear() -> void:
 	_river_compute = null
 	_river_freeze_compute = null
 	_lake_label_compute = null
+	_ocean_land_gate_compute = null
+	_terrain_metrics_compute = null
 	
 	# Clear GPU buffer manager
 	if _gpu_buffer_manager:
@@ -570,6 +605,13 @@ func clear() -> void:
 	
 	# Reset ocean fraction
 	last_ocean_fraction = 0.5
+	_water_budget_initialized = false
+	_water_total_target = 0.0
+	_water_ocean_fraction_target = -1.0
+	_sea_solver_last_apply_day = -1.0
+	_tectonic_bias_prev_mean_valid = false
+	_tectonic_bias_prev_mean_height = 0.0
+	water_budget_stats.clear()
 	_climate_cpu_mirror_dirty = true
 	# Reset hover/debug cache so new generations never show stale tile info.
 	_debug_cache_valid = false
@@ -789,6 +831,9 @@ func generate() -> PackedByteArray:
 	last_lake.fill(0)
 	last_lake_id.resize(size_init)
 	last_lake_id.fill(0)
+	if not apply_ocean_connectivity_gate_runtime():
+		push_error("Generate: ocean connectivity gate failed.")
+		return PackedByteArray()
 
 	# Step 2: feature noise + shoreline features (GPU buffer-to-buffer, no readback)
 	var size: int = w * h
@@ -1109,6 +1154,7 @@ func generate() -> PackedByteArray:
 	if _gpu_buffer_manager == null:
 		_gpu_buffer_manager = GPUBufferManager.new()
 	ensure_persistent_buffers(false)
+	update_water_budget_and_sea_solver(0.0, null)
 
 	return last_is_land
 
@@ -1143,6 +1189,13 @@ func _prepare_new_generation_state(size: int) -> void:
 	last_fertility.resize(size)
 	for i_f in range(size):
 		last_fertility[i_f] = _base_fertility_for_rock(last_rock_type[i_f])
+	_water_budget_initialized = false
+	_water_total_target = 0.0
+	_water_ocean_fraction_target = -1.0
+	_sea_solver_last_apply_day = -1.0
+	_tectonic_bias_prev_mean_valid = false
+	_tectonic_bias_prev_mean_height = 0.0
+	water_budget_stats.clear()
 	last_clouds.resize(size)
 	last_clouds.fill(0.0)
 	last_light.resize(size)
@@ -1228,6 +1281,9 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_is_land.fill(1 if 0.0 > config.sea_level else 0)
 	if not land_updated_gpu and _gpu_buffer_manager != null:
 		update_persistent_buffer("is_land", _pack_bytes_to_u32(last_is_land).to_byte_array())
+	# Enforce ocean connectivity before downstream shoreline/climate work.
+	if not apply_ocean_connectivity_gate_runtime():
+		push_warning("quick_update_sea_level: ocean connectivity gate failed; using raw sea-level land mask.")
 	# Update ocean fraction
 	if _height_mirror_has_signal(last_height_final):
 		var ocean_ct: int = 0
@@ -1772,11 +1828,257 @@ func quick_update_flow_rivers() -> void:
 	if rtex:
 		set_river_texture_override(rtex)
 
+func apply_ocean_connectivity_gate_runtime() -> bool:
+	# Convert inland water components into lakes-on-land so oceans remain boundary-connected.
+	if not config.ocean_connectivity_gate_enabled:
+		return true
+	if _gpu_buffer_manager == null:
+		return false
+	var w: int = config.width
+	var h: int = config.height
+	var size: int = w * h
+	if size <= 0:
+		return false
+	ensure_persistent_buffers(false)
+	var land_buf: RID = get_persistent_buffer("is_land")
+	var lake_buf: RID = get_persistent_buffer("lake")
+	var lake_id_buf: RID = get_persistent_buffer("lake_id")
+	if not land_buf.is_valid() or not lake_buf.is_valid() or not lake_id_buf.is_valid():
+		return false
+	if _lake_label_compute == null:
+		_lake_label_compute = LakeLabelCompute.new()
+	if _ocean_land_gate_compute == null:
+		_ocean_land_gate_compute = OceanLandGateCompute.new()
+	var label_iters: int = max(16, min(512, w + h))
+	var labeled_ok: bool = _lake_label_compute != null and _lake_label_compute.label_lakes_gpu_buffers(w, h, land_buf, true, lake_buf, lake_id_buf, label_iters)
+	if not labeled_ok:
+		return false
+	var keep_lakes: bool = bool(config.lakes_enabled)
+	var gate_ok: bool = _ocean_land_gate_compute != null and _ocean_land_gate_compute.apply(w, h, land_buf, lake_buf, lake_id_buf, keep_lakes)
+	if not gate_ok:
+		return false
+	return true
+
+func _collect_terrain_hydro_metrics_gpu() -> Dictionary:
+	var out := {
+		"ok": false,
+		"total_cells": 0.0,
+		"ocean_cells": 0.0,
+		"lake_cells": 0.0,
+		"slope_outlier_cells": 0.0,
+		"inland_below_sea_cells": 0.0,
+		"inland_ocean_cells": 0.0,
+		"ocean_fraction": 0.0,
+		"mean_height": 0.0,
+	}
+	if _gpu_buffer_manager == null:
+		return out
+	var w: int = config.width
+	var h: int = config.height
+	var size: int = w * h
+	if size <= 0:
+		return out
+	ensure_persistent_buffers(false)
+	var height_buf: RID = get_persistent_buffer("height")
+	var land_buf: RID = get_persistent_buffer("is_land")
+	var lake_buf: RID = get_persistent_buffer("lake")
+	if not height_buf.is_valid() or not land_buf.is_valid() or not lake_buf.is_valid():
+		return out
+	var stats_buf: RID = ensure_gpu_storage_buffer("terrain_metrics_stats", TERRAIN_METRICS_STATS_U32_COUNT * 4)
+	if not stats_buf.is_valid():
+		return out
+	var zeros := PackedInt32Array()
+	zeros.resize(TERRAIN_METRICS_STATS_U32_COUNT)
+	zeros.fill(0)
+	if not update_persistent_buffer("terrain_metrics_stats", zeros.to_byte_array()):
+		return out
+	var metrics_compute: Object = ensure_terrain_metrics_compute()
+	if metrics_compute == null:
+		return out
+	var metrics_ok: bool = metrics_compute.collect_metrics(
+		w,
+		h,
+		height_buf,
+		land_buf,
+		lake_buf,
+		stats_buf,
+		config.sea_level,
+		TERRAIN_METRICS_SLOPE_MEAN_THRESHOLD,
+		TERRAIN_METRICS_SLOPE_PEAK_THRESHOLD,
+		TERRAIN_METRICS_HEIGHT_SUM_SCALE
+	)
+	if not metrics_ok:
+		return out
+	var stats_bytes: PackedByteArray = read_persistent_buffer_region("terrain_metrics_stats", 0, TERRAIN_METRICS_STATS_U32_COUNT * 4)
+	if stats_bytes.size() < TERRAIN_METRICS_STATS_U32_COUNT * 4:
+		return out
+	var stats_i32: PackedInt32Array = stats_bytes.to_int32_array()
+	if stats_i32.size() < TERRAIN_METRICS_STATS_U32_COUNT:
+		return out
+	var total_cells: float = max(1.0, float(stats_i32[0]))
+	var ocean_cells: float = max(0.0, float(stats_i32[1]))
+	var lake_cells: float = max(0.0, float(stats_i32[2]))
+	var slope_outliers: float = max(0.0, float(stats_i32[3]))
+	var inland_below_sea: float = max(0.0, float(stats_i32[4]))
+	var hsum_q: float = max(0.0, float(stats_i32[5]))
+	var mean_height: float = (hsum_q / TERRAIN_METRICS_HEIGHT_SUM_SCALE) / total_cells - TERRAIN_METRICS_HEIGHT_OFFSET
+	var ocean_fraction: float = clamp(ocean_cells / total_cells, 0.0, 1.0)
+	out["ok"] = true
+	out["total_cells"] = total_cells
+	out["ocean_cells"] = ocean_cells
+	out["lake_cells"] = lake_cells
+	out["slope_outlier_cells"] = slope_outliers
+	out["inland_below_sea_cells"] = inland_below_sea
+	# "Inland ocean" is tracked as inland below-sea cells after connectivity gating.
+	out["inland_ocean_cells"] = inland_below_sea
+	out["ocean_fraction"] = ocean_fraction
+	out["mean_height"] = mean_height
+	last_ocean_fraction = ocean_fraction
+	debug_last_metrics = out.duplicate()
+	return out
+
+func sample_terrain_hydro_metrics() -> Dictionary:
+	return _collect_terrain_hydro_metrics_gpu()
+
+func register_tectonic_tick_metrics(dt_days: float) -> Dictionary:
+	var metrics: Dictionary = _collect_terrain_hydro_metrics_gpu()
+	if not bool(metrics.get("ok", false)):
+		return metrics
+	var mean_height: float = float(metrics.get("mean_height", 0.0))
+	tectonic_stats["mean_height"] = mean_height
+	tectonic_stats["slope_outlier_cells"] = float(metrics.get("slope_outlier_cells", 0.0))
+	tectonic_stats["inland_ocean_cells"] = float(metrics.get("inland_ocean_cells", 0.0))
+	if _tectonic_bias_prev_mean_valid:
+		var delta_h: float = mean_height - _tectonic_bias_prev_mean_height
+		var net_bias: float = float(tectonic_stats.get("net_height_bias", 0.0)) + delta_h
+		var samples: int = int(tectonic_stats.get("height_bias_samples", 0)) + 1
+		var days_total: float = float(tectonic_stats.get("height_bias_days_total", 0.0)) + max(0.0, dt_days)
+		tectonic_stats["last_height_delta"] = delta_h
+		tectonic_stats["net_height_bias"] = net_bias
+		tectonic_stats["height_bias_samples"] = samples
+		tectonic_stats["height_bias_days_total"] = days_total
+		tectonic_stats["net_height_bias_per_tick"] = net_bias / float(max(1, samples))
+		if days_total > 0.0:
+			tectonic_stats["net_height_bias_per_day"] = net_bias / days_total
+		if dt_days > 0.0:
+			tectonic_stats["last_height_delta_per_day"] = delta_h / dt_days
+	_tectonic_bias_prev_mean_height = mean_height
+	_tectonic_bias_prev_mean_valid = true
+	return metrics
+
+func _estimate_reservoirs_from_gpu(max_cells: int = CLIMATE_CPU_MIRROR_MAX_CELLS) -> Dictionary:
+	var out := {
+		"ok": false,
+		"ocean_cells": 0.0,
+		"lake_cells": 0.0,
+		"atmo": 0.0,
+		"ice_cells": 0.0,
+		"total": 0.0,
+		"ocean_fraction": 0.0,
+		"slope_outlier_cells": 0.0,
+		"inland_below_sea_cells": 0.0,
+		"inland_ocean_cells": 0.0,
+		"mean_height": 0.0,
+	}
+	var w: int = config.width
+	var h: int = config.height
+	var size: int = w * h
+	if size <= 0:
+		return out
+	var metrics: Dictionary = _collect_terrain_hydro_metrics_gpu()
+	if not bool(metrics.get("ok", false)):
+		return out
+	var ocean_cells: float = float(metrics.get("ocean_cells", 0.0))
+	var lake_cells: float = float(metrics.get("lake_cells", 0.0))
+	var atmo: float = 0.0
+	var ice: float = 0.0
+	out["ok"] = true
+	out["ocean_cells"] = ocean_cells
+	out["lake_cells"] = lake_cells
+	out["atmo"] = atmo
+	out["ice_cells"] = ice
+	out["total"] = ocean_cells + lake_cells + atmo + ice
+	out["ocean_fraction"] = float(metrics.get("ocean_fraction", 0.0))
+	out["slope_outlier_cells"] = float(metrics.get("slope_outlier_cells", 0.0))
+	out["inland_below_sea_cells"] = float(metrics.get("inland_below_sea_cells", 0.0))
+	out["inland_ocean_cells"] = float(metrics.get("inland_ocean_cells", 0.0))
+	out["mean_height"] = float(metrics.get("mean_height", 0.0))
+	return out
+
+func update_water_budget_and_sea_solver(dt_days: float, world: Object) -> Dictionary:
+	var out := {"ok": false, "sea_level_changed": false}
+	if not config.fixed_water_budget_enabled:
+		return out
+	var est: Dictionary = _estimate_reservoirs_from_gpu()
+	if not bool(est.get("ok", false)):
+		return out
+	var total_units: float = float(est.get("total", 0.0))
+	var ocean_frac: float = float(est.get("ocean_fraction", 0.0))
+	if not _water_budget_initialized:
+		_water_total_target = total_units
+		_water_ocean_fraction_target = config.fixed_ocean_fraction_target if config.fixed_ocean_fraction_target >= 0.0 else ocean_frac
+		_water_budget_initialized = true
+	if config.fixed_ocean_fraction_target >= 0.0:
+		_water_ocean_fraction_target = config.fixed_ocean_fraction_target
+	var now_days: float = 0.0
+	if world != null and "simulation_time_days" in world:
+		now_days = float(world.simulation_time_days)
+	else:
+		now_days = float(Time.get_ticks_msec()) / 1000.0
+	var can_apply: bool = (_sea_solver_last_apply_day < 0.0) or ((now_days - _sea_solver_last_apply_day) >= 28.0)
+	var sea_changed: bool = false
+	if can_apply:
+		var err_ocean: float = _water_ocean_fraction_target - ocean_frac
+		var sea_step: float = clamp(err_ocean * config.sea_level_solver_gain, -config.sea_level_solver_max_step, config.sea_level_solver_max_step)
+		if abs(sea_step) >= 0.00025:
+			var new_sea: float = clamp(config.sea_level + sea_step, -1.0, 1.0)
+			quick_update_sea_level(new_sea)
+			# Sea-level update rebuilds land; enforce connectivity gate again.
+			apply_ocean_connectivity_gate_runtime()
+			sea_changed = true
+			_sea_solver_last_apply_day = now_days
+	water_budget_stats = {
+		"target_total": _water_total_target,
+		"current_total": total_units,
+		"target_ocean_fraction": _water_ocean_fraction_target,
+		"current_ocean_fraction": ocean_frac,
+		"drift_total": total_units - _water_total_target,
+		"slope_outlier_cells": float(est.get("slope_outlier_cells", 0.0)),
+		"inland_below_sea_cells": float(est.get("inland_below_sea_cells", 0.0)),
+		"inland_ocean_cells": float(est.get("inland_ocean_cells", 0.0)),
+		"mean_height": float(est.get("mean_height", 0.0)),
+		"net_tectonic_height_bias": float(tectonic_stats.get("net_height_bias", 0.0)),
+		"sea_level": config.sea_level,
+		"sea_level_changed": sea_changed,
+		"dt_days": dt_days,
+	}
+	out["ok"] = true
+	out["sea_level_changed"] = sea_changed
+	return out
+
 func get_width() -> int:
 	return config.width
 
 func get_height() -> int:
 	return config.height
+
+func get_biome_snapshot_from_gpu(max_cells: int = 250000) -> PackedInt32Array:
+	# `last_biomes` is not guaranteed to stay in sync in GPU-only runtime.
+	# For gameplay (regional/local maps) we need an authoritative snapshot.
+	var w: int = int(config.width)
+	var h: int = int(config.height)
+	var size: int = w * h
+	if size <= 0:
+		return PackedInt32Array()
+	if size > max_cells:
+		return PackedInt32Array()
+	if _gpu_buffer_manager == null:
+		return last_biomes.duplicate()
+	ensure_persistent_buffers(false)
+	var bytes: PackedByteArray = read_persistent_buffer_region("biome_id", 0, size * 4)
+	if bytes.size() != size * 4:
+		return last_biomes.duplicate()
+	return bytes.to_int32_array()
 
 func get_cell_info(x: int, y: int) -> Dictionary:
 	if x < 0 or y < 0 or x >= config.width or y >= config.height:
@@ -2098,6 +2400,7 @@ func ensure_persistent_buffers(refresh: bool = true) -> void:
 	_gpu_buffer_manager.ensure_buffer("wind_u", float_size)
 	_gpu_buffer_manager.ensure_buffer("wind_v", float_size)
 	_gpu_buffer_manager.ensure_buffer("cloud_source", float_size)
+	_gpu_buffer_manager.ensure_buffer("terrain_metrics_stats", TERRAIN_METRICS_STATS_U32_COUNT * 4)
 
 func _pack_bytes_to_u32(byte_array: PackedByteArray) -> PackedInt32Array:
 	"""Convert PackedByteArray to PackedInt32Array for GPU use"""
@@ -2120,6 +2423,11 @@ func ensure_gpu_storage_buffer(name: String, size_bytes: int, initial_data: Pack
 	if _gpu_buffer_manager == null:
 		_gpu_buffer_manager = GPUBufferManager.new()
 	return _gpu_buffer_manager.ensure_buffer(name, size_bytes, initial_data)
+
+func ensure_terrain_metrics_compute() -> Object:
+	if _terrain_metrics_compute == null:
+		_terrain_metrics_compute = TerrainHydroMetricsCompute.new()
+	return _terrain_metrics_compute
 
 func ensure_flow_compute() -> Object:
 	if _flow_compute == null:

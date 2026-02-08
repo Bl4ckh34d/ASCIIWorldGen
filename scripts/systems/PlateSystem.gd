@@ -7,6 +7,7 @@ extends RefCounted
 const PlateUpdateCompute = preload("res://scripts/systems/PlateUpdateCompute.gd")
 const PlateFieldAdvectionCompute = preload("res://scripts/systems/PlateFieldAdvectionCompute.gd")
 const TectonicPinholeCleanupCompute = preload("res://scripts/systems/TectonicPinholeCleanupCompute.gd")
+const TerrainRelaxCompute = preload("res://scripts/systems/TerrainRelaxCompute.gd")
 
 var generator: Object = null
 
@@ -17,9 +18,15 @@ var ridge_rate_per_day: float = 0.0005  # divergent ridges are secondary to exte
 var subsidence_rate_per_day: float = 0.0016 # legacy divergence sink
 var transform_roughness_per_day: float = 0.0004
 var subduction_rate_per_day: float = 0.0018
-var trench_rate_per_day: float = 0.0022
+var trench_rate_per_day: float = 0.00135
 var drift_cells_per_day: float = 0.02
 var boundary_band_cells: int = 3
+var terrain_relax_enabled: bool = true
+var terrain_relax_iterations: int = 3
+var terrain_relax_rate: float = 0.55
+var terrain_relax_max_delta_interior: float = 0.030
+var terrain_relax_max_delta_boundary: float = 0.120
+var terrain_relax_max_step_per_iter: float = 0.018
 var pinhole_cleanup_enabled: bool = true
 var pinhole_min_land_neighbors: int = 8
 var pinhole_min_boundary_neighbors: int = 2
@@ -46,6 +53,7 @@ var _gpu_update: Object = null
 var _land_mask_compute: Object = null
 var _field_advection_compute: Object = null
 var _pinhole_cleanup_compute: Object = null
+var _terrain_relax_compute: Object = null
 
 func initialize(gen: Object) -> void:
 	generator = gen
@@ -58,6 +66,7 @@ func initialize(gen: Object) -> void:
 	_land_mask_compute = load("res://scripts/systems/LandMaskCompute.gd").new()
 	_field_advection_compute = PlateFieldAdvectionCompute.new()
 	_pinhole_cleanup_compute = TectonicPinholeCleanupCompute.new()
+	_terrain_relax_compute = TerrainRelaxCompute.new()
 
 func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null:
@@ -111,6 +120,35 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			# Copy height_tmp -> height (reuse FlowCompute copy)
 			if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(height_tmp, height_buf, w * h))):
 				gpu_ok = false
+			if gpu_ok and terrain_relax_enabled:
+				if _terrain_relax_compute == null:
+					_terrain_relax_compute = TerrainRelaxCompute.new()
+				var relax_iters: int = clamp(terrain_relax_iterations, 1, 8)
+				var in_buf: RID = height_buf
+				var out_buf: RID = height_tmp
+				for _it in range(relax_iters):
+					var relax_ok: bool = _terrain_relax_compute.relax_gpu_buffers(
+						w,
+						h,
+						in_buf,
+						out_buf,
+						boundary_buf,
+						lava_buf,
+						float(generator.config.sea_level),
+						terrain_relax_max_delta_interior,
+						terrain_relax_max_delta_boundary,
+						terrain_relax_rate,
+						terrain_relax_max_step_per_iter
+					)
+					if not relax_ok:
+						gpu_ok = false
+						break
+					var tbuf: RID = in_buf
+					in_buf = out_buf
+					out_buf = tbuf
+				if gpu_ok and in_buf != height_buf:
+					if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(in_buf, height_buf, w * h))):
+						gpu_ok = false
 			# Update land mask buffer from height
 			if gpu_ok and _land_mask_compute:
 				var land_buf: RID = generator.get_persistent_buffer("is_land")
@@ -136,6 +174,9 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 						pinhole_min_boundary_neighbors,
 						int(generator.config.rng_seed) ^ sim_days_seed
 					)
+				if gpu_ok and "apply_ocean_connectivity_gate_runtime" in generator:
+					if not bool(generator.apply_ocean_connectivity_gate_runtime()):
+						gpu_ok = false
 		# Advect plate-bound categorical fields so biomes/lithology move with plate drift.
 		if gpu_ok and field_tmp_buf.is_valid():
 			if _field_advection_compute == null:
@@ -188,6 +229,8 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			boundary_count,
 			num_plates
 		)
+	if "register_tectonic_tick_metrics" in generator:
+		generator.register_tectonic_tick_metrics(dt_days)
 	return {"dirty_fields": PackedStringArray(["height", "is_land", "lava", "shelf", "biome_id", "rock_type"]), "boundary_count": boundary_count}
 
 func _build_plates() -> void:

@@ -109,6 +109,11 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var dirty := PackedStringArray(["flow"])
 	if river_cycle_committed or (total_tiles <= 1 and river_trace_any):
 		dirty.append("river")
+	if "update_water_budget_and_sea_solver" in generator:
+		var wb: Dictionary = generator.update_water_budget_and_sea_solver(dt_days, world)
+		if bool(wb.get("sea_level_changed", false)):
+			dirty.append("is_land")
+			dirty.append("biome")
 	return {
 		"dirty_fields": dirty,
 		"consumed_days": max(0.0, float(dt_days))

@@ -6,6 +6,43 @@ const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 func color_for_biome(biome: int, is_beach: bool) -> Color:
 	if is_beach:
 		return Color(1.0, 0.98, 0.90)
+	# Gameplay-only marker colors (biome IDs >= 200).
+	if biome >= 200:
+		match biome:
+			200: # POI: House
+				return Color(0.84, 0.74, 0.56)
+			201: # POI: Dungeon
+				return Color(0.58, 0.36, 0.22)
+			202: # POI: Cleared dungeon
+				return Color(0.60, 0.60, 0.60)
+			210: # Interior: Wall
+				return Color(0.20, 0.20, 0.22)
+			211: # Interior: Floor
+				return Color(0.50, 0.40, 0.28)
+			212: # Interior: Door
+				return Color(0.80, 0.65, 0.20)
+			213: # Interior: Chest
+				return Color(0.95, 0.80, 0.25)
+			214: # Interior: Boss
+				return Color(0.85, 0.20, 0.18)
+			215: # Interior: Bed
+				return Color(0.65, 0.25, 0.22)
+			216: # Interior: Table
+				return Color(0.55, 0.45, 0.30)
+				217: # Interior: Hearth
+					return Color(0.75, 0.35, 0.15)
+				218: # NPC: Man
+					return Color(0.35, 0.60, 0.95)
+				219: # NPC: Woman
+					return Color(0.95, 0.45, 0.55)
+				220: # Player marker (optional)
+					return Color(0.98, 0.90, 0.30)
+				221: # NPC: Child
+					return Color(0.92, 0.86, 0.40)
+				222: # NPC: Shopkeeper
+					return Color(0.35, 0.90, 0.55)
+				_:
+					return Color(1.0, 1.0, 1.0)
 	match biome:
 		BiomeClassifier.Biome.ICE_SHEET:
 			return Color(0.95, 0.98, 1.0)

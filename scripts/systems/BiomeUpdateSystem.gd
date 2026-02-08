@@ -19,6 +19,12 @@ var biome_transition_max_step: float = 0.035
 var cryosphere_transition_max_step: float = 0.06
 var ocean_ice_base_thresh_c: float = -9.5
 var ocean_ice_wiggle_amp_c: float = 1.1
+var transition_seed_floor_general: float = 0.018
+var transition_seed_floor_cryosphere: float = 0.002
+var transition_front_q0: float = 0.10
+var transition_front_q1: float = 0.72
+var transition_front_gamma: float = 1.7
+var transition_cryo_polar_seed_boost: float = 0.08
 var _height_min_cache: float = 0.0
 var _height_max_cache: float = 1.0
 var _height_cache_size: int = -1
@@ -378,7 +384,13 @@ func _apply_temporal_transition_gpu(
 		step_b,
 		step_c,
 		int(generator.config.rng_seed),
-		_transition_epoch
+		_transition_epoch,
+		transition_seed_floor_general,
+		transition_seed_floor_cryosphere,
+		transition_front_q0,
+		transition_front_q1,
+		transition_front_gamma,
+		transition_cryo_polar_seed_boost
 	)
 	if not ok:
 		return true

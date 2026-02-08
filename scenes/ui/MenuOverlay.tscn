@@ -1,0 +1,325 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/gameplay/MenuOverlay.gd" id="1"]
+
+[node name="MenuOverlay" type="CanvasLayer"]
+layer = 20
+script = ExtResource("1")
+
+[node name="Backdrop" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.6)
+
+[node name="RootPanel" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -440.0
+offset_top = -270.0
+offset_right = 440.0
+offset_bottom = 270.0
+
+[node name="Margin" type="MarginContainer" parent="RootPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 18
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 18
+theme_override_constants/margin_bottom = 14
+
+[node name="VBox" type="VBoxContainer" parent="RootPanel/Margin"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="RootPanel/Margin/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Menu"
+
+[node name="StatusLabel" type="Label" parent="RootPanel/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Context: Regional"
+
+[node name="Tabs" type="TabContainer" parent="RootPanel/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 360)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="OverviewTab" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="OverviewText" type="RichTextLabel" parent="RootPanel/Margin/VBox/Tabs/OverviewTab"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = false
+scroll_active = true
+
+[node name="PartyTab" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs"]
+layout_mode = 2
+
+[node name="PartyText" type="RichTextLabel" parent="RootPanel/Margin/VBox/Tabs/PartyTab"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = false
+scroll_active = true
+
+[node name="InventoryTab" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs"]
+layout_mode = 2
+
+[node name="InventoryV2Root" type="HBoxContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 12
+
+[node name="MemberListPanel" type="PanelContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/InventoryV2Root"]
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="MemberListMargin" type="MarginContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/InventoryV2Root/MemberListPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
+
+[node name="MemberListScroll" type="ScrollContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/InventoryV2Root/MemberListPanel/MemberListMargin"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="MemberList" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/InventoryV2Root/MemberListPanel/MemberListMargin/MemberListScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="BagPanel" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/InventoryV2Root"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="BagGrid" type="GridContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/InventoryV2Root/BagPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 0
+columns = 8
+
+[node name="ItemDetails" type="RichTextLabel" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/InventoryV2Root/BagPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = false
+scroll_active = true
+
+[node name="InventoryHint" type="Label" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/InventoryV2Root/BagPanel"]
+layout_mode = 2
+autowrap_mode = 2
+text = "Right-click items for actions. Drag and drop to move. Equipped items occupy a slot."
+
+[node name="ItemContextMenu" type="PopupMenu" parent="RootPanel/Margin/VBox/Tabs/InventoryTab"]
+unique_name_in_owner = true
+
+[node name="UseTargetPopup" type="PopupPanel" parent="RootPanel/Margin/VBox/Tabs/InventoryTab"]
+unique_name_in_owner = true
+size = Vector2(360, 220)
+
+[node name="UseTargetMargin" type="MarginContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/UseTargetPopup"]
+layout_mode = 2
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="UseTargetVBox" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/UseTargetPopup/UseTargetMargin"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="UseTargetTitle" type="Label" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/UseTargetPopup/UseTargetMargin/UseTargetVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Use Item"
+
+[node name="UseTargetList" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/UseTargetPopup/UseTargetMargin/UseTargetVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="UseTargetCancel" type="Button" parent="RootPanel/Margin/VBox/Tabs/InventoryTab/UseTargetPopup/UseTargetMargin/UseTargetVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Cancel"
+
+[node name="EquipmentTab" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs"]
+layout_mode = 2
+
+[node name="EquipRow" type="HBoxContainer" parent="RootPanel/Margin/VBox/Tabs/EquipmentTab"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="EquipMemberLabel" type="Label" parent="RootPanel/Margin/VBox/Tabs/EquipmentTab/EquipRow"]
+layout_mode = 2
+text = "Member"
+
+[node name="EquipMemberOption" type="OptionButton" parent="RootPanel/Margin/VBox/Tabs/EquipmentTab/EquipRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="EquipSlotLabel" type="Label" parent="RootPanel/Margin/VBox/Tabs/EquipmentTab/EquipRow"]
+layout_mode = 2
+text = "Slot"
+
+[node name="EquipSlotOption" type="OptionButton" parent="RootPanel/Margin/VBox/Tabs/EquipmentTab/EquipRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="UnequipButton" type="Button" parent="RootPanel/Margin/VBox/Tabs/EquipmentTab/EquipRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Unequip"
+
+[node name="EquipmentText" type="RichTextLabel" parent="RootPanel/Margin/VBox/Tabs/EquipmentTab"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = false
+scroll_active = true
+
+[node name="StatsTab" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs"]
+layout_mode = 2
+
+[node name="StatsText" type="RichTextLabel" parent="RootPanel/Margin/VBox/Tabs/StatsTab"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = false
+scroll_active = true
+
+[node name="QuestsTab" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs"]
+layout_mode = 2
+
+[node name="QuestsText" type="RichTextLabel" parent="RootPanel/Margin/VBox/Tabs/QuestsTab"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = false
+scroll_active = true
+
+[node name="SettingsTab" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SettingsText" type="Label" parent="RootPanel/Margin/VBox/Tabs/SettingsTab"]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 2
+text = "Settings"
+
+[node name="EncounterRow" type="HBoxContainer" parent="RootPanel/Margin/VBox/Tabs/SettingsTab"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="EncounterLabel" type="Label" parent="RootPanel/Margin/VBox/Tabs/SettingsTab/EncounterRow"]
+layout_mode = 2
+text = "Encounter Rate"
+
+[node name="EncounterSlider" type="HSlider" parent="RootPanel/Margin/VBox/Tabs/SettingsTab/EncounterRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.1
+max_value = 2.0
+step = 0.05
+value = 1.0
+
+[node name="EncounterValue" type="Label" parent="RootPanel/Margin/VBox/Tabs/SettingsTab/EncounterRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "x1.00"
+
+[node name="TextSpeedRow" type="HBoxContainer" parent="RootPanel/Margin/VBox/Tabs/SettingsTab"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="TextSpeedLabel" type="Label" parent="RootPanel/Margin/VBox/Tabs/SettingsTab/TextSpeedRow"]
+layout_mode = 2
+text = "Text Speed"
+
+[node name="TextSpeedSlider" type="HSlider" parent="RootPanel/Margin/VBox/Tabs/SettingsTab/TextSpeedRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.5
+max_value = 2.0
+step = 0.05
+value = 1.0
+
+[node name="TextSpeedValue" type="Label" parent="RootPanel/Margin/VBox/Tabs/SettingsTab/TextSpeedRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "x1.00"
+
+[node name="AutoBattleCheck" type="CheckBox" parent="RootPanel/Margin/VBox/Tabs/SettingsTab"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Auto Battle"
+
+[node name="ApplySettingsButton" type="Button" parent="RootPanel/Margin/VBox/Tabs/SettingsTab"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Apply Settings"
+
+[node name="ButtonRow" type="HBoxContainer" parent="RootPanel/Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SaveSlotOption" type="OptionButton" parent="RootPanel/Margin/VBox/ButtonRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="SaveButton" type="Button" parent="RootPanel/Margin/VBox/ButtonRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Save"
+
+[node name="LoadButton" type="Button" parent="RootPanel/Margin/VBox/ButtonRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Load"
+
+[node name="QuitButton" type="Button" parent="RootPanel/Margin/VBox/ButtonRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Quit to Desktop"
+
+[node name="CloseButton" type="Button" parent="RootPanel/Margin/VBox/ButtonRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Close"
+
+[node name="Hint" type="Label" parent="RootPanel/Margin/VBox"]
+layout_mode = 2
+text = "Esc or Tab closes menu"

@@ -4,6 +4,7 @@ class_name MainController
 
 const WorldConstants = preload("res://scripts/core/WorldConstants.gd")
 const HighSpeedValidatorScript = preload("res://scripts/core/HighSpeedValidator.gd")
+const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
 
 # --- Performance toggles (turn off heavy systems for faster world map) ---
 const ENABLE_SEASONAL_CLIMATE: bool = true
@@ -46,6 +47,7 @@ const STARTUP_ACCLIMATE_STEPS: int = 2
 const STARTUP_ACCLIMATE_STEP_DAYS: float = 0.25
 const INTRO_SCENE_REVEAL_MIN_DELAY_SEC: float = 0.30
 const INTRO_SCENE_REVEAL_MAX_DELAY_SEC: float = 3.00
+const REGIONAL_MAP_SCENE_PATH: String = SceneContracts.SCENE_REGIONAL_MAP
 
 # UI References - will be set in _initialize_ui_nodes()
 var play_button: Button
@@ -643,11 +645,11 @@ func _apply_intro_startup_config() -> bool:
 	var startup_state: Node = get_node_or_null("/root/StartupState")
 	if startup_state == null:
 		return false
-	if not ("has_pending_world_config" in startup_state):
+	if not startup_state.has_method("has_pending_world_config"):
 		return false
 	if not startup_state.has_pending_world_config():
 		return false
-	if not ("consume_world_config" in startup_state):
+	if not startup_state.has_method("consume_world_config"):
 		return false
 	var cfg: Dictionary = startup_state.consume_world_config()
 	if cfg.is_empty():
@@ -682,6 +684,9 @@ func _on_play_pressed() -> void:
 
 func _on_reset_pressed() -> void:
 	_stop_simulation()
+	var game_state: Node = get_node_or_null("/root/GameState")
+	if game_state != null and game_state.has_method("reset_run"):
+		game_state.reset_run()
 	_generate_new_world()
 
 func _start_simulation() -> void:
@@ -2527,6 +2532,8 @@ func _connect_cursor_overlay() -> void:
 	if cursor_overlay and cursor_overlay.has_signal("tile_hovered"):
 		cursor_overlay.tile_hovered.connect(_on_tile_hovered)
 		cursor_overlay.mouse_exited_map.connect(_on_cursor_exited)
+		if cursor_overlay.has_signal("tile_clicked"):
+			cursor_overlay.tile_clicked.connect(_on_tile_clicked)
 		# Position overlay to match AsciiMap exactly
 		_setup_cursor_overlay_positioning()
 
@@ -2623,6 +2630,76 @@ func _on_tile_hovered(x: int, y: int) -> void:
 	_update_info_panel_for_tile(x, y)
 	# Also update GPU hover overlay immediately (if enabled)
 	_gpu_hover_cell(x, y)
+
+func _on_tile_clicked(x: int, y: int, button_index: int) -> void:
+	if button_index != MOUSE_BUTTON_LEFT:
+		return
+	if generator == null:
+		return
+	var startup_state: Node = get_node_or_null("/root/StartupState")
+	var game_state: Node = get_node_or_null("/root/GameState")
+	var scene_router: Node = get_node_or_null("/root/SceneRouter")
+	var cell_info: Dictionary = generator.get_cell_info(x, y)
+	if not bool(cell_info.get("is_land", false)):
+		if info_label:
+			info_label.text = "Cannot enter ocean/ice tiles."
+		return
+	if game_state != null and game_state.has_method("initialize_world_snapshot"):
+		var biome_snapshot: PackedInt32Array = generator.last_biomes
+		# In GPU-only runtime, `last_biomes` can be stale; read the authoritative GPU buffer.
+		if "get_biome_snapshot_from_gpu" in generator:
+			var gpu_biomes: PackedInt32Array = generator.get_biome_snapshot_from_gpu()
+			if gpu_biomes.size() == generator.get_width() * generator.get_height():
+				biome_snapshot = gpu_biomes
+		game_state.initialize_world_snapshot(
+			generator.get_width(),
+			generator.get_height(),
+			int(generator.config.rng_seed),
+			biome_snapshot
+		)
+	if game_state != null and game_state.has_method("set_location"):
+		game_state.set_location(
+			"regional",
+			x,
+			y,
+			48,
+			48,
+			int(cell_info.get("biome", -1)),
+			String(cell_info.get("biome_name", "Unknown"))
+		)
+		if startup_state != null:
+			if startup_state.has_method("set_world_snapshot"):
+				var biome_snapshot2: PackedInt32Array = generator.last_biomes
+				if "get_biome_snapshot_from_gpu" in generator:
+					var gpu_biomes2: PackedInt32Array = generator.get_biome_snapshot_from_gpu()
+					if gpu_biomes2.size() == generator.get_width() * generator.get_height():
+						biome_snapshot2 = gpu_biomes2
+				startup_state.set_world_snapshot(
+					generator.get_width(),
+					generator.get_height(),
+					int(generator.config.rng_seed),
+					biome_snapshot2
+				)
+		if startup_state.has_method("set_selected_world_tile"):
+			startup_state.set_selected_world_tile(
+				x,
+				y,
+				int(cell_info.get("biome", -1)),
+				String(cell_info.get("biome_name", "Unknown")),
+				48,
+				48
+			)
+	if scene_router != null and scene_router.has_method("goto_regional"):
+		scene_router.goto_regional(
+			x,
+			y,
+			48,
+			48,
+			int(cell_info.get("biome", -1)),
+			String(cell_info.get("biome_name", "Unknown"))
+		)
+	else:
+		get_tree().change_scene_to_file(REGIONAL_MAP_SCENE_PATH)
 
 func _on_cursor_exited() -> void:
 	if info_label:
