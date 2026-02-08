@@ -51,7 +51,7 @@ This evolves the current placeholder room renderer in `scripts/gameplay/LocalAre
 Implemented in the current scaffold (initial pass):
 - Houses spawn 0..4 NPCs in common “family constellations”.
 - Shops are houses flagged as `is_shop` and spawn exactly 1 shopkeeper + 0..N customers.
-- NPCs perform a simple realtime random-walk.
+- NPCs pick a random destination and use **A*** pathfinding to walk there in realtime (shopkeepers are stationary).
 - `E` interacts with adjacent NPCs and opens placeholder dialogue (time pauses while the dialogue popup is open).
 
 Target behavior:

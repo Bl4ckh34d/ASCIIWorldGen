@@ -2,9 +2,14 @@ extends Control
 
 const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
 const BattleStateMachine = preload("res://scripts/gameplay/BattleStateMachine.gd")
+const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
 const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
 const SpellCatalog = preload("res://scripts/gameplay/catalog/SpellCatalog.gd")
+const WorldTimeStateModel = preload("res://scripts/gameplay/models/WorldTimeState.gd")
+const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
+const BiomePalette = preload("res://scripts/style/BiomePalette.gd")
 
+@onready var bg_rect: ColorRect = $BG
 @onready var battle_info_label: Label = %BattleInfoLabel
 @onready var battle_log: RichTextLabel = %BattleLog
 @onready var party_label: Label = %PartyLabel
@@ -33,11 +38,16 @@ var _outcome_applied: bool = false
 var _reward_logs: PackedStringArray = PackedStringArray()
 var _submenu_mode: String = "" # "" | "item"
 var _submenu_target_ids: PackedStringArray = PackedStringArray()
+var _bg_time_accum: float = 0.0
+var _biome_palette: Object = null
+var _command_buttons: Array[Button] = []
+var _command_base_text: Dictionary = {} # Button -> base label (without pointer)
 
 func _ready() -> void:
 	game_state = get_node_or_null("/root/GameState")
 	startup_state = get_node_or_null("/root/StartupState")
 	scene_router = get_node_or_null("/root/SceneRouter")
+	_biome_palette = BiomePalette.new()
 	battle_data = _consume_battle_payload()
 	if battle_data.is_empty():
 		battle_data = {
@@ -69,6 +79,7 @@ func _ready() -> void:
 		party_state = game_state.party
 	machine.begin(battle_data, party_state)
 	_wire_buttons()
+	_init_command_menu()
 	if result_panel:
 		result_panel.visible = false
 	if sub_menu_panel:
@@ -90,6 +101,180 @@ func _ready() -> void:
 	_apply_auto_battle_if_enabled()
 	_refresh_panels()
 	set_process_unhandled_input(true)
+	set_process(true)
+	_init_battle_background()
+
+func _init_command_menu() -> void:
+	_command_buttons = []
+	_command_base_text.clear()
+	for b in [attack_button, magic_button, item_button, flee_button]:
+		if b == null:
+			continue
+		_command_buttons.append(b)
+		_command_base_text[b] = String(b.text)
+		b.focus_mode = Control.FOCUS_ALL
+		if not b.focus_entered.is_connected(_on_command_focus_entered):
+			b.focus_entered.connect(_on_command_focus_entered)
+	call_deferred("_focus_default_command")
+
+func _focus_default_command() -> void:
+	if attack_button != null and not attack_button.disabled:
+		attack_button.grab_focus()
+	_update_command_menu_visuals()
+
+func _on_command_focus_entered() -> void:
+	_update_command_menu_visuals()
+
+func _update_command_menu_visuals() -> void:
+	var vp: Viewport = get_viewport()
+	var focused: Control = vp.gui_get_focus_owner() if vp else null
+	for b in _command_buttons:
+		if b == null:
+			continue
+		var base: String = String(_command_base_text.get(b, b.text))
+		var label: String = base.to_upper()
+		var prefix: String = "> " if focused == b else "  "
+		b.text = prefix + label
+
+func _process(delta: float) -> void:
+	if delta <= 0.0:
+		return
+	_bg_time_accum += delta
+	_update_battle_background()
+
+func _init_battle_background() -> void:
+	if bg_rect == null:
+		return
+	var shader: Shader = load("res://shaders/rendering/battle_background.gdshader")
+	if shader == null:
+		return
+	# Ensure shader output isn't tinted by the ColorRect's base color.
+	bg_rect.color = Color(1, 1, 1, 1)
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	bg_rect.material = mat
+	_update_battle_background(true)
+
+func _update_battle_background(force_static: bool = false) -> void:
+	if bg_rect == null:
+		return
+	var mat: ShaderMaterial = bg_rect.material as ShaderMaterial
+	if mat == null:
+		return
+	mat.set_shader_parameter("u_time", float(Time.get_ticks_msec()) / 1000.0)
+	var biome_id: int = int(battle_data.get("biome_id", int(BiomeClassifier.Biome.GRASSLAND)))
+	mat.set_shader_parameter("u_kind", _battle_bg_kind_for_biome(biome_id))
+	var pal: Variant = _biome_palette
+	if pal == null:
+		pal = BiomePalette.new()
+	var c: Color = pal.color_for_biome(biome_id, false)
+	mat.set_shader_parameter("u_biome_color", Vector3(c.r, c.g, c.b))
+	mat.set_shader_parameter("u_time_of_day", _time_of_day01())
+
+	var wthr: Dictionary = _weather_for_battle(biome_id)
+	mat.set_shader_parameter("u_cloud_coverage", float(wthr.get("cloud_coverage", 0.4)))
+	mat.set_shader_parameter("u_rain", float(wthr.get("rain", 0.0)))
+
+	if force_static:
+		# Place moons deterministically per battle.
+		_set_moons(mat)
+
+func _time_of_day01() -> float:
+	if game_state != null and game_state.get("world_time") != null:
+		var wt = game_state.world_time
+		var sod: int = int(wt.second_of_day) if ("second_of_day" in wt) else int(wt.minute_of_day) * 60
+		sod = clamp(sod, 0, WorldTimeStateModel.SECONDS_PER_DAY - 1)
+		return float(sod) / float(WorldTimeStateModel.SECONDS_PER_DAY)
+	return 0.5
+
+func _day_index_0_364() -> int:
+	if game_state != null and game_state.get("world_time") != null:
+		var wt = game_state.world_time
+		var day_index: int = max(0, int(wt.day) - 1)
+		for m in range(1, int(wt.month)):
+			day_index += WorldTimeStateModel.days_in_month(m)
+		return clamp(day_index, 0, 364)
+	return 0
+
+func _weather_for_battle(biome_id: int) -> Dictionary:
+	var wx: int = int(battle_data.get("world_x", 0))
+	var wy: int = int(battle_data.get("world_y", 0))
+	var seed: int = int(game_state.world_seed_hash) if game_state != null and int(game_state.world_seed_hash) != 0 else 1
+	var d: int = _day_index_0_364()
+	var key: String = "wthr|%d|%d|d=%d" % [wx, wy, d]
+	var base: float = DeterministicRng.randf01(seed, key)
+	var humidity: float = _humidity_for_biome(biome_id)
+	var cloud_coverage: float = clamp(0.20 + 0.70 * base + (humidity - 0.5) * 0.20, 0.0, 1.0)
+	# Rain: require high humidity + high cloud coverage.
+	var rain: float = 0.0
+	if cloud_coverage > 0.72 and humidity > 0.55:
+		rain = clamp((cloud_coverage - 0.72) / 0.28, 0.0, 1.0) * clamp((humidity - 0.55) / 0.45, 0.0, 1.0)
+	# Cold biomes bias toward snow/clear skies (no rain for now).
+	if biome_id == BiomeClassifier.Biome.ICE_SHEET or biome_id == BiomeClassifier.Biome.GLACIER or biome_id == BiomeClassifier.Biome.ALPINE:
+		rain = 0.0
+	return {"cloud_coverage": cloud_coverage, "rain": rain}
+
+func _humidity_for_biome(biome_id: int) -> float:
+	match biome_id:
+		BiomeClassifier.Biome.RAINFOREST, BiomeClassifier.Biome.TROPICAL_FOREST:
+			return 0.85
+		BiomeClassifier.Biome.SWAMP, BiomeClassifier.Biome.FROZEN_MARSH:
+			return 0.80
+		BiomeClassifier.Biome.TEMPERATE_FOREST, BiomeClassifier.Biome.BOREAL_FOREST, BiomeClassifier.Biome.CONIFER_FOREST, BiomeClassifier.Biome.FROZEN_FOREST:
+			return 0.65
+		BiomeClassifier.Biome.DESERT_SAND, BiomeClassifier.Biome.WASTELAND, BiomeClassifier.Biome.SALT_DESERT, BiomeClassifier.Biome.DESERT_ICE:
+			return 0.18
+		BiomeClassifier.Biome.ICE_SHEET, BiomeClassifier.Biome.GLACIER:
+			return 0.30
+		_:
+			return 0.45
+
+func _battle_bg_kind_for_biome(biome_id: int) -> int:
+	# See shader uniform `u_kind`.
+	match biome_id:
+		BiomeClassifier.Biome.BEACH:
+			return 5
+		BiomeClassifier.Biome.SWAMP, BiomeClassifier.Biome.FROZEN_MARSH:
+			return 6
+		BiomeClassifier.Biome.MOUNTAINS, BiomeClassifier.Biome.ALPINE, BiomeClassifier.Biome.GLACIER:
+			return 3
+		BiomeClassifier.Biome.HILLS, BiomeClassifier.Biome.FROZEN_HILLS, BiomeClassifier.Biome.SCORCHED_HILLS:
+			return 2
+		BiomeClassifier.Biome.DESERT_SAND, BiomeClassifier.Biome.WASTELAND, BiomeClassifier.Biome.SALT_DESERT, BiomeClassifier.Biome.DESERT_ICE:
+			return 4
+		BiomeClassifier.Biome.TROPICAL_FOREST, BiomeClassifier.Biome.BOREAL_FOREST, BiomeClassifier.Biome.CONIFER_FOREST, BiomeClassifier.Biome.TEMPERATE_FOREST, BiomeClassifier.Biome.RAINFOREST, BiomeClassifier.Biome.FROZEN_FOREST, BiomeClassifier.Biome.SCORCHED_FOREST:
+			return 1
+		BiomeClassifier.Biome.ICE_SHEET:
+			return 7
+		_:
+			return 0
+
+func _set_moons(mat: ShaderMaterial) -> void:
+	if mat == null:
+		return
+	var wx: int = int(battle_data.get("world_x", 0))
+	var wy: int = int(battle_data.get("world_y", 0))
+	var seed: int = int(game_state.world_seed_hash) if game_state != null and int(game_state.world_seed_hash) != 0 else 1
+	var moon_count: int = 0
+	var moon_seed_val: float = 0.0
+	if startup_state != null:
+		moon_count = clamp(int(startup_state.get("moon_count")), 0, 3)
+		moon_seed_val = float(startup_state.get("moon_seed"))
+	var d: int = _day_index_0_364()
+	var base: int = int(abs(int(moon_seed_val * 1000.0))) + d
+	var moons: Array[Vector4] = []
+	for i in range(moon_count):
+		var kroot: String = "moon|%d|%d|%d" % [i, wx, wy]
+		var mx: float = lerp(0.18, 0.82, DeterministicRng.randf01(seed, kroot + "|x"))
+		var my: float = lerp(0.10, 0.32, DeterministicRng.randf01(seed, kroot + "|y"))
+		var mr: float = lerp(0.035, 0.070, DeterministicRng.randf01(seed, kroot + "|r"))
+		var period: float = float(18 + i * 9)
+		var phase: float = fposmod(float(base + i * 7) / period, 1.0)
+		var bright: float = 0.35 + 0.65 * (0.5 - 0.5 * cos(phase * TAU))
+		moons.append(Vector4(mx, my, mr, bright))
+	mat.set_shader_parameter("u_moon0", moons[0] if moons.size() > 0 else Vector4(-1, -1, 0, 0))
+	mat.set_shader_parameter("u_moon1", moons[1] if moons.size() > 1 else Vector4(-1, -1, 0, 0))
+	mat.set_shader_parameter("u_moon2", moons[2] if moons.size() > 2 else Vector4(-1, -1, 0, 0))
 
 func _apply_auto_battle_if_enabled() -> void:
 	if game_state == null or not game_state.has_method("get_settings_snapshot"):
@@ -189,12 +374,43 @@ func _unhandled_input(event: InputEvent) -> void:
 			if vp:
 				vp.set_input_as_handled()
 			return
+	# FF-like command navigation when not in a submenu.
+	if _submenu_mode == "" and machine.can_accept_input() and (result_panel == null or not result_panel.visible):
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_UP:
+				_cycle_command_focus(-1)
+				if vp:
+					vp.set_input_as_handled()
+				return
+			if event.keycode == KEY_DOWN:
+				_cycle_command_focus(1)
+				if vp:
+					vp.set_input_as_handled()
+				return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if _submenu_mode != "" and (event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER):
 			_on_sub_menu_confirm_pressed()
 			if vp:
 				vp.set_input_as_handled()
 			return
+
+func _cycle_command_focus(delta: int) -> void:
+	if _command_buttons.is_empty():
+		return
+	var vp: Viewport = get_viewport()
+	var focused: Control = vp.gui_get_focus_owner() if vp else null
+	var idx: int = _command_buttons.find(focused)
+	if idx < 0:
+		idx = 0
+	var n: int = _command_buttons.size()
+	for _i in range(n):
+		idx = posmod(idx + delta, n)
+		var b: Button = _command_buttons[idx]
+		if b == null or b.disabled:
+			continue
+		b.grab_focus()
+		break
+	_update_command_menu_visuals()
 
 func _show_result_panel(result_data: Dictionary) -> void:
 	if result_panel:
@@ -229,7 +445,7 @@ func _open_item_submenu() -> void:
 	if sub_menu_hint:
 		sub_menu_hint.text = "Select an item and a target. Enter confirms. Esc cancels."
 	_refresh_item_list()
-	_refresh_target_options()
+	_refresh_item_targets_for_selected_item()
 	sub_menu_panel.visible = true
 	_set_command_buttons_enabled(false)
 
@@ -266,6 +482,10 @@ func _set_command_buttons_enabled(enabled: bool) -> void:
 	if magic_button: magic_button.disabled = not enabled
 	if item_button: item_button.disabled = not enabled
 	if flee_button: flee_button.disabled = not enabled
+	if enabled:
+		call_deferred("_focus_default_command")
+	else:
+		_update_command_menu_visuals()
 
 func _refresh_item_list() -> void:
 	sub_menu_list.clear()
@@ -289,20 +509,30 @@ func _refresh_item_list() -> void:
 		sub_menu_list.add_item("(no consumables)")
 		sub_menu_list.set_item_disabled(0, true)
 		return
+	var prefer: String = ""
+	if int(inv.get("Potion", 0)) > 0:
+		prefer = "Potion"
+	elif int(inv.get("Herb", 0)) > 0:
+		prefer = "Herb"
+	var prefer_idx: int = -1
 	for item_name in names:
 		var count: int = int(inv.get(item_name, 0))
 		var label: String = "%s x%d" % [item_name, count] if count > 1 else item_name
 		var idx: int = sub_menu_list.get_item_count()
 		sub_menu_list.add_item(label)
 		sub_menu_list.set_item_metadata(idx, item_name)
+		if prefer_idx < 0 and item_name == prefer:
+			prefer_idx = idx
 	if sub_menu_list.get_item_count() > 0:
-		sub_menu_list.select(0)
+		sub_menu_list.select(prefer_idx if prefer_idx >= 0 else 0)
 
 func _refresh_target_options() -> void:
 	_submenu_target_ids = PackedStringArray()
 	if sub_menu_target_option:
 		sub_menu_target_option.clear()
 	var st: Dictionary = machine.get_state_summary()
+	var want_id: String = String(st.get("select_member_id", ""))
+	var want_idx: int = -1
 	var party_list: Array = st.get("party", [])
 	for entry in party_list:
 		if typeof(entry) != TYPE_DICTIONARY:
@@ -310,10 +540,15 @@ func _refresh_target_options() -> void:
 		if int(entry.get("hp", 0)) <= 0:
 			continue
 		_submenu_target_ids.append(String(entry.get("id", "")))
+		if want_idx < 0 and String(entry.get("id", "")) == want_id:
+			want_idx = _submenu_target_ids.size() - 1
 		if sub_menu_target_option:
 			sub_menu_target_option.add_item(String(entry.get("name", "Member")), _submenu_target_ids.size() - 1)
 	if sub_menu_target_option:
-		sub_menu_target_option.select(0)
+		if want_idx >= 0 and want_idx < _submenu_target_ids.size():
+			sub_menu_target_option.select(want_idx)
+		else:
+			sub_menu_target_option.select(0)
 
 func _refresh_enemy_target_options() -> void:
 	_submenu_target_ids = PackedStringArray()
@@ -357,6 +592,55 @@ func _refresh_magic_targets_for_selected_spell() -> void:
 		_refresh_target_options()
 	else:
 		_refresh_enemy_target_options()
+
+func _refresh_item_targets_for_selected_item() -> void:
+	var item_name: String = _selected_submenu_item_name()
+	if item_name.is_empty():
+		_refresh_target_options()
+		return
+	var item: Dictionary = ItemCatalog.get_item(item_name)
+	var effect: Dictionary = item.get("use_effect", {})
+	var tgt: String = String(effect.get("target", item.get("target", ""))).to_lower()
+	if tgt.is_empty():
+		var t: String = String(effect.get("type", ""))
+		tgt = "enemy" if t == "damage" else "party"
+	if tgt == "enemy":
+		_refresh_enemy_target_options()
+	elif tgt == "any":
+		_refresh_any_target_options()
+	else:
+		_refresh_target_options()
+
+func _refresh_any_target_options() -> void:
+	_submenu_target_ids = PackedStringArray()
+	if sub_menu_target_option:
+		sub_menu_target_option.clear()
+	var st: Dictionary = machine.get_state_summary()
+	var want_id: String = String(st.get("select_member_id", ""))
+	var want_idx: int = -1
+	var party_list: Array = st.get("party", [])
+	for entry in party_list:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		if int(entry.get("hp", 0)) <= 0:
+			continue
+		var idv: String = String(entry.get("id", ""))
+		_submenu_target_ids.append(idv)
+		if want_idx < 0 and idv == want_id:
+			want_idx = _submenu_target_ids.size() - 1
+		if sub_menu_target_option:
+			sub_menu_target_option.add_item("Ally: %s" % String(entry.get("name", "Member")), _submenu_target_ids.size() - 1)
+	var enemy_list: Array = st.get("enemies", [])
+	for entry2 in enemy_list:
+		if typeof(entry2) != TYPE_DICTIONARY:
+			continue
+		if int(entry2.get("hp", 0)) <= 0:
+			continue
+		_submenu_target_ids.append(String(entry2.get("id", "")))
+		if sub_menu_target_option:
+			sub_menu_target_option.add_item("Enemy: %s" % String(entry2.get("name", "Enemy")), _submenu_target_ids.size() - 1)
+	if sub_menu_target_option and _submenu_target_ids.size() > 0:
+		sub_menu_target_option.select(want_idx if want_idx >= 0 else 0)
 
 func _selected_submenu_item_name() -> String:
 	if sub_menu_list == null:
@@ -405,6 +689,8 @@ func _on_sub_menu_cancel_pressed() -> void:
 func _on_sub_menu_item_selected(_idx: int) -> void:
 	if _submenu_mode == "magic":
 		_refresh_magic_targets_for_selected_spell()
+	elif _submenu_mode == "item":
+		_refresh_item_targets_for_selected_item()
 
 func _apply_outcome_if_needed(outcome: Dictionary) -> void:
 	if _outcome_applied:
@@ -477,6 +763,12 @@ func _on_continue_pressed() -> void:
 		if not return_poi.is_empty() and scene_router != null and scene_router.has_method("goto_local"):
 			scene_router.goto_local(return_poi)
 		else:
+			# Fallback path: still pass the POI payload (including interior_x/y) to the next scene.
+			if not return_poi.is_empty():
+				if game_state != null and game_state.has_method("queue_poi"):
+					game_state.queue_poi(return_poi)
+				if startup_state != null and startup_state.has_method("queue_poi"):
+					startup_state.queue_poi(return_poi)
 			get_tree().change_scene_to_file(SceneContracts.SCENE_LOCAL_AREA)
 		return
 	if scene_router != null and scene_router.has_method("goto_regional"):

@@ -29,20 +29,20 @@ func color_for_biome(biome: int, is_beach: bool) -> Color:
 				return Color(0.65, 0.25, 0.22)
 			216: # Interior: Table
 				return Color(0.55, 0.45, 0.30)
-				217: # Interior: Hearth
-					return Color(0.75, 0.35, 0.15)
-				218: # NPC: Man
-					return Color(0.35, 0.60, 0.95)
-				219: # NPC: Woman
-					return Color(0.95, 0.45, 0.55)
-				220: # Player marker (optional)
-					return Color(0.98, 0.90, 0.30)
-				221: # NPC: Child
-					return Color(0.92, 0.86, 0.40)
-				222: # NPC: Shopkeeper
-					return Color(0.35, 0.90, 0.55)
-				_:
-					return Color(1.0, 1.0, 1.0)
+			217: # Interior: Hearth
+				return Color(0.75, 0.35, 0.15)
+			218: # NPC: Man
+				return Color(0.35, 0.60, 0.95)
+			219: # NPC: Woman
+				return Color(0.95, 0.45, 0.55)
+			220: # Player marker (optional)
+				return Color(0.98, 0.90, 0.30)
+			221: # NPC: Child
+				return Color(0.92, 0.86, 0.40)
+			222: # NPC: Shopkeeper
+				return Color(0.35, 0.90, 0.55)
+			_:
+				return Color(1.0, 1.0, 1.0)
 	match biome:
 		BiomeClassifier.Biome.ICE_SHEET:
 			return Color(0.95, 0.98, 1.0)

@@ -27,6 +27,7 @@ func reset_default_party() -> void:
 	_clear_all_bags()
 	add_item("Potion", 3)
 	add_item("Herb", 2)
+	add_item("Bomb", 1)
 	add_item("Bronze Sword", 1)
 	add_item("Leather Armor", 1)
 	gold = 120

@@ -364,6 +364,49 @@ func _apply_party_action(party_idx: int, cmd: String, arg: String = "", target_i
 			logs.append("%s tried to use %s, but it had no effect." % [actor_name, item_name])
 			_consume_item(item_name, 1)
 			return logs
+		var effect_type: String = String(effect.get("type", ""))
+		var tgt_kind: String = String(effect.get("target", item.get("target", "party"))).to_lower()
+		if tgt_kind.is_empty():
+			tgt_kind = "enemy" if effect_type == "damage" else "party"
+		if tgt_kind == "any":
+			if not target_id.is_empty():
+				var pe: int = _find_enemy_index_by_id(target_id)
+				var pp: int = _find_party_index_by_id(target_id)
+				if pe >= 0:
+					tgt_kind = "enemy"
+				elif pp >= 0:
+					tgt_kind = "party"
+				else:
+					tgt_kind = "enemy" if effect_type == "damage" else "party"
+			else:
+				tgt_kind = "enemy" if effect_type == "damage" else "party"
+
+		if tgt_kind == "enemy":
+			var tgt_e: int = _first_alive_enemy()
+			if not target_id.is_empty():
+				var picked_e: int = _find_enemy_index_by_id(target_id)
+				if picked_e >= 0 and picked_e < enemies.size() and int(enemies[picked_e].get("hp", 0)) > 0:
+					tgt_e = picked_e
+			if tgt_e < 0:
+				return logs
+			if effect_type == "damage":
+				var tgt3: Dictionary = enemies[tgt_e]
+				var dmg_base: int = max(1, int(effect.get("power", 10)))
+				var strv: int = int(actor.get("str", 6))
+				var jitter3: int = int(round(_roll("idmg|%s|turn=%d" % [String(actor.get("id", "")), turn_index]) * 4.0))
+				var dmg3: int = max(1, dmg_base + int(round(float(strv) * 0.35)) + jitter3)
+				tgt3["hp"] = max(0, int(tgt3.get("hp", 0)) - dmg3)
+				enemies[tgt_e] = tgt3
+				_consume_item(item_name, 1)
+				logs.append("%s uses %s for %d damage." % [actor_name, item_name, dmg3])
+				if int(tgt3.get("hp", 0)) <= 0:
+					logs.append("%s was defeated." % String(tgt3.get("name", "Enemy")))
+				return logs
+			_consume_item(item_name, 1)
+			logs.append("%s uses %s, but nothing happened." % [actor_name, item_name])
+			return logs
+
+		# Party (default).
 		var tgt_idx: int = party_idx
 		if not target_id.is_empty():
 			var picked: int = _find_party_index_by_id(target_id)
@@ -371,7 +414,7 @@ func _apply_party_action(party_idx: int, cmd: String, arg: String = "", target_i
 				tgt_idx = picked
 		var tgt: Dictionary = party[tgt_idx]
 		var tgt_name: String = String(tgt.get("name", "Member"))
-		if String(effect.get("type", "")) == "heal_hp":
+		if effect_type == "heal_hp":
 			var amount: int = max(1, int(effect.get("amount", 10)))
 			var hp_before: int = int(tgt.get("hp", 0))
 			var hp_after: int = clamp(hp_before + amount, 0, int(tgt.get("hp_max", 1)))

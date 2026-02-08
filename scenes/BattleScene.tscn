@@ -69,26 +69,30 @@ custom_minimum_size = Vector2(0, 140)
 bbcode_enabled = true
 scroll_active = true
 
-[node name="CommandRow" type="HBoxContainer" parent="Margin/VBox"]
+[node name="CommandRow" type="PanelContainer" parent="Margin/VBox"]
+custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
-theme_override_constants/separation = 8
 
-[node name="AttackButton" type="Button" parent="Margin/VBox/CommandRow"]
+[node name="CommandVBox" type="VBoxContainer" parent="Margin/VBox/CommandRow"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="AttackButton" type="Button" parent="Margin/VBox/CommandRow/CommandVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Attack"
 
-[node name="MagicButton" type="Button" parent="Margin/VBox/CommandRow"]
+[node name="MagicButton" type="Button" parent="Margin/VBox/CommandRow/CommandVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Magic"
 
-[node name="ItemButton" type="Button" parent="Margin/VBox/CommandRow"]
+[node name="ItemButton" type="Button" parent="Margin/VBox/CommandRow/CommandVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Item"
 
-[node name="FleeButton" type="Button" parent="Margin/VBox/CommandRow"]
+[node name="FleeButton" type="Button" parent="Margin/VBox/CommandRow/CommandVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Flee"

@@ -550,6 +550,64 @@ func move_bag_item(from_member_id: String, from_idx: int, to_member_id: String, 
 	_emit_party_changed()
 	return {"ok": true, "message": "Moved."}
 
+func give_bag_item(from_member_id: String, from_idx: int, to_member_id: String) -> Dictionary:
+	# Give an item to another party member (auto-place). Used by drag-to-character UI.
+	from_member_id = String(from_member_id)
+	to_member_id = String(to_member_id)
+	if from_member_id.is_empty() or to_member_id.is_empty():
+		return {"ok": false, "message": "Invalid party member."}
+	if from_member_id == to_member_id:
+		return {"ok": false, "message": "That character already has the item."}
+	var from_member: Variant = _find_member_by_id(from_member_id)
+	var to_member: Variant = _find_member_by_id(to_member_id)
+	if from_member == null or to_member == null:
+		return {"ok": false, "message": "Party member not found."}
+	from_member.ensure_bag()
+	to_member.ensure_bag()
+	if from_idx < 0 or from_idx >= from_member.bag.size():
+		return {"ok": false, "message": "Invalid source slot."}
+	var slot_data: Dictionary = from_member.get_bag_slot(from_idx)
+	var item_name: String = String(slot_data.get("name", ""))
+	var count: int = int(slot_data.get("count", 0))
+	if item_name.is_empty() or count <= 0:
+		return {"ok": false, "message": "Source slot is empty."}
+	if not String(slot_data.get("equipped_slot", "")).is_empty():
+		return {"ok": false, "message": "Unequip items before giving them away."}
+	slot_data.erase("equipped_slot")
+
+	var item: Dictionary = ItemCatalog.get_item(item_name)
+	var stackable: bool = bool(item.get("stackable", true))
+	if stackable:
+		for i in range(to_member.bag.size()):
+			var dst: Dictionary = to_member.get_bag_slot(i)
+			if String(dst.get("name", "")) != item_name:
+				continue
+			if int(dst.get("count", 0)) <= 0:
+				continue
+			if not String(dst.get("equipped_slot", "")).is_empty():
+				continue
+			dst["count"] = int(dst.get("count", 0)) + count
+			to_member.set_bag_slot(i, dst)
+			from_member.set_bag_slot(from_idx, {})
+			party.rebuild_inventory_view()
+			_emit_inventory_changed()
+			_emit_party_changed()
+			return {"ok": true, "message": "Gave %s to %s." % [item_name, String(to_member.display_name)]}
+
+	var empty_idx: int = -1
+	for j in range(to_member.bag.size()):
+		if to_member.is_bag_slot_empty(j):
+			empty_idx = j
+			break
+	if empty_idx < 0:
+		return {"ok": false, "message": "%s has no free inventory slots." % String(to_member.display_name)}
+	to_member.set_bag_slot(empty_idx, {"name": item_name, "count": count})
+	from_member.set_bag_slot(from_idx, {})
+	party.rebuild_inventory_view()
+	_emit_inventory_changed()
+	_emit_party_changed()
+	return {"ok": true, "message": "Gave %s to %s." % [item_name, String(to_member.display_name)]}
+
 func drop_bag_item(member_id: String, idx: int) -> Dictionary:
 	member_id = String(member_id)
 	var member: Variant = _find_member_by_id(member_id)

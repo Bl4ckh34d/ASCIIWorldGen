@@ -233,15 +233,15 @@ static func _build_encounter_from_key(world_seed_hash: int, key_root: String, wo
 	}
 
 static func _danger_gain_for_biome(biome_id: int) -> float:
-	# Calibrated for a relatively low encounter cadence on the 1m regional map:
-	# default ~110-140 steps, forests ~70-95, mountains ~85-115, deserts ~95-125 (at x1.0 rate).
+	# Calibrated for a lower encounter cadence on the 1m regional map (at x1.0 rate):
+	# default ~200+ steps, forests ~140-180, mountains ~160-210, deserts ~170-220.
 	if _is_forest_biome(biome_id):
-		return 0.024
+		return 0.011
 	if _is_mountain_biome(biome_id):
-		return 0.020
+		return 0.010
 	if _is_desert_biome(biome_id):
-		return 0.018
-	return 0.016
+		return 0.0095
+	return 0.0085
 
 static func _roll_next_threshold(world_seed_hash: int, encounter_index: int, world_x: int, world_y: int, biome_id: int, minute_of_day: int) -> float:
 	world_seed_hash = 1 if world_seed_hash == 0 else world_seed_hash

@@ -69,13 +69,17 @@ scroll_active = true
 
 [node name="PartyTab" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs"]
 layout_mode = 2
+size_flags_vertical = 3
 
-[node name="PartyText" type="RichTextLabel" parent="RootPanel/Margin/VBox/Tabs/PartyTab"]
+[node name="PartyScroll" type="ScrollContainer" parent="RootPanel/Margin/VBox/Tabs/PartyTab"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="PartyMemberList" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs/PartyTab/PartyScroll"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
-bbcode_enabled = false
-scroll_active = true
+theme_override_constants/separation = 8
 
 [node name="InventoryTab" type="VBoxContainer" parent="RootPanel/Margin/VBox/Tabs"]
 layout_mode = 2

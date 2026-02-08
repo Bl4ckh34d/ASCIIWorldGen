@@ -11,6 +11,7 @@ static func all_items() -> Dictionary:
 			"use_effect": {
 				"type": "heal_hp",
 				"amount": 20,
+				"target": "party",
 			},
 		},
 		"Herb": {
@@ -21,6 +22,18 @@ static func all_items() -> Dictionary:
 			"use_effect": {
 				"type": "heal_hp",
 				"amount": 12,
+				"target": "party",
+			},
+		},
+		"Bomb": {
+			"kind": "consumable",
+			"description": "An explosive that damages one enemy.",
+			"value": 30,
+			"stackable": true,
+			"use_effect": {
+				"type": "damage",
+				"power": 16,
+				"target": "enemy",
 			},
 		},
 		"Bronze Sword": {

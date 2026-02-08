@@ -31,6 +31,7 @@ var world_seed_hash: int = 1
 var world_width: int = 1
 var world_height: int = 1
 var world_biome_ids: PackedInt32Array = PackedInt32Array()
+var biome_overrides: Dictionary = {} # Vector2i(wx, wy) -> biome_id override
 var region_size: int = 96
 
 var blend_band_m: int = 8
@@ -51,10 +52,18 @@ func configure(seed_hash: int, world_w: int, world_h: int, biome_ids: PackedInt3
 	world_width = max(1, world_w)
 	world_height = max(1, world_h)
 	world_biome_ids = biome_ids.duplicate()
+	biome_overrides.clear()
 	region_size = max(16, region_size_m)
 	_world_period_x_m = world_width * region_size
 	_world_radius_x_m = float(_world_period_x_m) / TAU
 	_seed_noises()
+
+func set_biome_overrides(overrides: Dictionary) -> void:
+	# Optional: used to patch snapshot mismatches at runtime (e.g., click-selected biome).
+	if typeof(overrides) != TYPE_DICTIONARY or overrides.is_empty():
+		biome_overrides.clear()
+		return
+	biome_overrides = overrides.duplicate(true)
 
 func _seed_noises() -> void:
 	_noise_elev.seed = world_seed_hash ^ 0x1A2B3C
@@ -240,6 +249,9 @@ func get_world_biome_id(wx: int, wy: int) -> int:
 		return 7
 	var x: int = posmod(wx, world_width)
 	var y: int = clamp(wy, 0, world_height - 1)
+	var key := Vector2i(x, y)
+	if biome_overrides.has(key):
+		return int(biome_overrides.get(key, 7))
 	var i: int = x + y * world_width
 	if i < 0 or i >= world_biome_ids.size():
 		return 7

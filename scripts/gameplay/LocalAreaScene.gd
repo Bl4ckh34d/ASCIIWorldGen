@@ -374,47 +374,47 @@ func _render_local_map() -> void:
 			if t == Tile.WALL:
 				b = 210
 				h = 0.20
-				elif t == Tile.DOOR:
-					b = 212
-					h = 0.08
-				else:
-					var o: int = _obj_at(x, y)
-					# NPCs are rendered as gameplay-only biome markers (GPU palette IDs >= 200).
-					if o == Obj.NONE and actors.size() == size:
-						var ak: int = int(actors[idx])
-						match ak:
-							Actor.MAN:
-								b = 218
-								h = 0.11
-							Actor.WOMAN:
-								b = 219
-								h = 0.11
-							Actor.CHILD:
-								b = 221
-								h = 0.10
-							Actor.SHOPKEEPER:
-								b = 222
-								h = 0.11
-							_:
-								pass
-					match o:
-						Obj.BOSS:
-							b = 214
-							h = 0.14
-						Obj.MAIN_CHEST:
-							b = 213
+			elif t == Tile.DOOR:
+				b = 212
+				h = 0.08
+			else:
+				var o: int = _obj_at(x, y)
+				# NPCs are rendered as gameplay-only biome markers (GPU palette IDs >= 200).
+				if o == Obj.NONE and actors.size() == size:
+					var ak: int = int(actors[idx])
+					match ak:
+						Actor.MAN:
+							b = 218
+							h = 0.11
+						Actor.WOMAN:
+							b = 219
+							h = 0.11
+						Actor.CHILD:
+							b = 221
 							h = 0.10
-						Obj.BED:
-							b = 215
-							h = 0.09
-						Obj.TABLE:
-							b = 216
-							h = 0.09
-						Obj.HEARTH:
-							b = 217
-							h = 0.10
+						Actor.SHOPKEEPER:
+							b = 222
+							h = 0.11
 						_:
 							pass
+				match o:
+					Obj.BOSS:
+						b = 214
+						h = 0.14
+					Obj.MAIN_CHEST:
+						b = 213
+						h = 0.10
+					Obj.BED:
+						b = 215
+						h = 0.09
+					Obj.TABLE:
+						b = 216
+						h = 0.09
+					Obj.HEARTH:
+						b = 217
+						h = 0.10
+					_:
+						pass
 			height_raw[idx] = h
 			biome[idx] = b
 			land[idx] = 1
@@ -702,6 +702,10 @@ func _register_npc(kind: int, x: int, y: int, role: String) -> void:
 		"x": x,
 		"y": y,
 		"role": role,
+		"dest_x": -1,
+		"dest_y": -1,
+		"path": [],
+		"path_i": 0,
 	})
 
 func _can_place_npc(x: int, y: int) -> bool:
@@ -740,32 +744,183 @@ func _can_npc_move_to(x: int, y: int) -> bool:
 func _step_npcs() -> bool:
 	if _npcs.is_empty() or actors.size() != room_w * room_h:
 		return false
-	var moved: bool = false
-	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var moved := false
 	for i in range(_npcs.size()):
 		var npc: Dictionary = _npcs[i]
 		var kind: int = int(npc.get("kind", Actor.NONE))
 		if kind == Actor.NONE or kind == Actor.SHOPKEEPER:
 			continue
-		# Not everyone moves every tick.
-		if _npc_rng.randf() > 0.65:
-			continue
 		var x: int = int(npc.get("x", 0))
 		var y: int = int(npc.get("y", 0))
-		for _attempt in range(4):
-			var d: Vector2i = dirs[_npc_rng.randi_range(0, dirs.size() - 1)]
-			var nx: int = x + d.x
-			var ny: int = y + d.y
-			if not _can_npc_move_to(nx, ny):
+		var start := Vector2i(x, y)
+		var path: Array = npc.get("path", [])
+		var path_i: int = int(npc.get("path_i", 0))
+		var dest := Vector2i(int(npc.get("dest_x", -1)), int(npc.get("dest_y", -1)))
+
+		var needs_plan: bool = false
+		if dest.x < 0 or dest.y < 0:
+			needs_plan = true
+		elif typeof(path) != TYPE_ARRAY or path.is_empty() or path_i <= 0 or path_i >= path.size():
+			needs_plan = true
+		if needs_plan:
+			var new_path: Array[Vector2i] = _npc_pick_path(start)
+			if new_path.size() < 2:
 				continue
+			npc["path"] = new_path
+			npc["path_i"] = 1
+			var goal: Vector2i = new_path[new_path.size() - 1]
+			npc["dest_x"] = int(goal.x)
+			npc["dest_y"] = int(goal.y)
+			path = new_path
+			path_i = 1
+			dest = goal
+
+		var next: Vector2i = path[path_i]
+		if _can_npc_move_to(next.x, next.y):
 			actors[_idx(x, y)] = Actor.NONE
-			actors[_idx(nx, ny)] = kind
-			npc["x"] = nx
-			npc["y"] = ny
-			_npcs[i] = npc
+			actors[_idx(next.x, next.y)] = kind
+			npc["x"] = next.x
+			npc["y"] = next.y
+			npc["path_i"] = path_i + 1
 			moved = true
-			break
+			if int(npc["path_i"]) >= path.size():
+				# Arrived: pick a new destination next tick.
+				npc["dest_x"] = -1
+				npc["dest_y"] = -1
+				npc["path"] = []
+				npc["path_i"] = 0
+		else:
+			# Blocked: try re-pathing to the same destination once; otherwise abandon.
+			if dest.x >= 0 and dest.y >= 0 and _can_npc_move_to(dest.x, dest.y):
+				var repath: Array[Vector2i] = _astar_path(start, dest)
+				if repath.size() >= 2:
+					npc["path"] = repath
+					npc["path_i"] = 1
+				else:
+					npc["dest_x"] = -1
+					npc["dest_y"] = -1
+					npc["path"] = []
+					npc["path_i"] = 0
+			else:
+				npc["dest_x"] = -1
+				npc["dest_y"] = -1
+				npc["path"] = []
+				npc["path_i"] = 0
+
+		_npcs[i] = npc
 	return moved
+
+func _npc_pick_path(start: Vector2i) -> Array[Vector2i]:
+	for _t in range(NPC_MAX_DEST_TRIES):
+		var gx: int = _npc_rng.randi_range(2, room_w - 3)
+		var gy: int = _npc_rng.randi_range(2, room_h - 3)
+		if abs(gx - start.x) + abs(gy - start.y) < NPC_MIN_DEST_DIST:
+			continue
+		if not _can_npc_move_to(gx, gy):
+			continue
+		var goal := Vector2i(gx, gy)
+		var path: Array[Vector2i] = _astar_path(start, goal)
+		if path.size() >= 2:
+			return path
+	return []
+
+func _astar_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
+	# Lightweight A* for small interior grids.
+	if start == goal:
+		return [start]
+	if not _in_bounds(start.x, start.y) or not _in_bounds(goal.x, goal.y):
+		return []
+	if not _astar_walkable(goal.x, goal.y, start):
+		return []
+
+	var start_id: int = _idx(start.x, start.y)
+	var goal_id: int = _idx(goal.x, goal.y)
+	var open: Array[int] = [start_id]
+	var open_set: Dictionary = {start_id: true}
+	var came_from: Dictionary = {}
+	var g_score: Dictionary = {start_id: 0}
+	var f_score: Dictionary = {start_id: _manhattan(start.x, start.y, goal.x, goal.y)}
+	var closed: Dictionary = {}
+	var iters: int = 0
+	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+
+	while not open.is_empty() and iters < NPC_ASTAR_MAX_ITERS:
+		iters += 1
+		# Pick open node with lowest f-score.
+		var best_idx: int = 0
+		var current_id: int = int(open[0])
+		var best_f: int = int(f_score.get(current_id, 1 << 30))
+		for j in range(1, open.size()):
+			var cand_id: int = int(open[j])
+			var cand_f: int = int(f_score.get(cand_id, 1 << 30))
+			if cand_f < best_f:
+				best_f = cand_f
+				current_id = cand_id
+				best_idx = j
+		open.remove_at(best_idx)
+		open_set.erase(current_id)
+
+		if current_id == goal_id:
+			return _reconstruct_astar_path(came_from, current_id, start_id)
+
+		closed[current_id] = true
+		var cx: int = int(current_id % room_w)
+		var cy: int = int(current_id / room_w)
+		for d in dirs:
+			var nx: int = cx + d.x
+			var ny: int = cy + d.y
+			if not _astar_walkable(nx, ny, start):
+				continue
+			var nid: int = _idx(nx, ny)
+			if closed.has(nid):
+				continue
+			var tentative_g: int = int(g_score.get(current_id, 1 << 30)) + 1
+			if tentative_g >= int(g_score.get(nid, 1 << 30)):
+				continue
+			came_from[nid] = current_id
+			g_score[nid] = tentative_g
+			f_score[nid] = tentative_g + _manhattan(nx, ny, goal.x, goal.y)
+			if not open_set.has(nid):
+				open.append(nid)
+				open_set[nid] = true
+
+	return []
+
+func _astar_walkable(x: int, y: int, start: Vector2i) -> bool:
+	# Treat the NPC's start cell as walkable even though it's occupied.
+	if x == start.x and y == start.y:
+		return true
+	if not _in_bounds(x, y):
+		return false
+	if _tile_at(x, y) != Tile.FLOOR:
+		return false
+	if _obj_at(x, y) != Obj.NONE:
+		return false
+	if x == player_x and y == player_y:
+		return false
+	if actors.size() == room_w * room_h and int(actors[_idx(x, y)]) != Actor.NONE:
+		return false
+	return true
+
+func _manhattan(ax: int, ay: int, bx: int, by: int) -> int:
+	return abs(ax - bx) + abs(ay - by)
+
+func _reconstruct_astar_path(came_from: Dictionary, current_id: int, start_id: int) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var cur: int = int(current_id)
+	var safety: int = 0
+	while true:
+		out.append(Vector2i(int(cur % room_w), int(cur / room_w)))
+		if cur == start_id:
+			break
+		if not came_from.has(cur):
+			return []
+		cur = int(came_from[cur])
+		safety += 1
+		if safety > room_w * room_h + 8:
+			return []
+	out.reverse()
+	return out
 
 func _npc_at_or_adjacent(px: int, py: int) -> Dictionary:
 	for npc in _npcs:

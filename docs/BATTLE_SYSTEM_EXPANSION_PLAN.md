@@ -3,18 +3,27 @@
 ## Summary
 Expand the current battle scaffold into a classic turn-based RPG battle:
 - Party on one side, enemies on the other.
-- Menu commands: Attack, Magic, Item, Flee.
+- Menu commands: Attack, Magic, Item, Flee (FF-style command window).
 - Target selection where appropriate.
 - Multiple party members and (eventually) multiple enemies.
 - Post-battle rewards screen: EXP, items, gold, level-ups.
 - Deterministic outcomes from seed + encounter context.
+- **Battle backgrounds per biome** that reflect day/night + weather, rendered GPU-only (shader-driven scaffold for now).
 
 ## Current Scaffold (What Exists Today)
 - `scenes/BattleScene.tscn` + `scripts/gameplay/BattleScene.gd`
-  - Buttons for Attack/Magic/Item/Flee.
+  - FF-like command menu:
+    - vertical command window with pointer and keyboard Up/Down navigation
+    - uppercased labels based on focus
   - Battle log output.
   - Result panel (victory shows reward logs: EXP, items, level-ups).
   - Applies rewards to `GameState` on Continue.
+  - Item and Magic submenus with target selection.
+    - Item targets are driven by item definition (`party` vs `enemy` vs `any`).
+  - GPU-only procedural battle background shader:
+    - biome palette base color
+    - day/night from `GameState.world_time`
+    - deterministic cloud coverage / rain and up to 3 moons (seeded)
 - `scripts/gameplay/BattleStateMachine.gd`
   - Per-actor party and enemies (multi-enemy count-based).
   - FF9-like flow: select commands for alive party members, then resolve in initiative order (openers: preemptive/back attack).
@@ -41,7 +50,7 @@ Expand the current battle scaffold into a classic turn-based RPG battle:
 ## Non-Goals (For This Phase)
 - ATB / real-time systems.
 - Complex AI tactics.
-- Complex UI polish (sprites/animations). We keep a clean “text-first” UI.
+- Full sprite animation / VFX. We keep a clean “text-first” UI, but do allow GPU shader backgrounds for biome/time/weather mood.
 
 ## Key Design Decisions (Need to Lock In)
 Decisions per your direction:
@@ -129,10 +138,16 @@ At minimum:
   - Name, HP/MP, status.
 - Enemy panel listing enemies:
   - Name, HP (optional to hide exact HP later).
-- Command menu:
-  - Attack, Magic, Item, Flee
+- Command menu (FF-like):
+  - vertical command window: Attack, Magic, Item, Flee
+  - pointer shows focused command; Up/Down cycles focus; Enter activates
 - Target selection:
   - When command requires target, move selection cursor over enemy/party list.
+- Background:
+  - GPU-only procedural battle background keyed by:
+    - biome kind (forest/hills/mountains/desert/beach/swamp/snow)
+    - day/night
+    - cloud coverage + rain (later: snow)
 
 ### Result / Win Screen
 Split “result panel” into two modes:

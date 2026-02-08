@@ -5,6 +5,9 @@ Expand the current `MenuOverlay` scaffold into a real in-game menu system:
 - Overlay UI (not a separate scene flow) usable in regional + local area maps (and optionally in battle).
 - **Valheim-like slot inventory per party member** (equipment occupies inventory slots).
 - Drag & drop between slots (snap-to-slot) and right-click context actions.
+- Drag-to-character behavior:
+  - drop onto another character: give the item
+  - drop onto the same character row: use the consumable on them
 - HP/MP bars shown in the menu (for targeting consumables).
 - Party stats pages (derived stats, resistances later).
 - Settings, save/load, and a clean “return to world map / quit” flow.
@@ -14,7 +17,9 @@ This plan is deliberately incremental and keeps the **time system minimal**: no 
 ## Current Scaffold (What Exists Today)
 - UI:
   - `scenes/ui/MenuOverlay.tscn` + `scripts/gameplay/MenuOverlay.gd`
-  - TabContainer with: Overview, Party, **Characters** (inventory+equipment), Stats, Quests, Settings
+  - TabContainer with: Overview, Party, **Characters** (slot-bag inventory + equipment unified), Quests, Settings
+    - Legacy `Equipment` and `Stats` tabs still exist in the scene but are hidden (to reduce clutter).
+  - Party tab shows HP/MP bars and core stats (STR/DEF/AGI/INT) per member.
   - Settings: encounter rate multiplier, auto-battle, text speed
   - Save/load: 3 slots via `GameState.save_to_path/load_from_path`
   - `Quit` exits to desktop (world map overlay is on `M`).
@@ -131,25 +136,25 @@ Implementation note:
    - Time (compact), seed, location, discovered/cleared counts.
    - “Return to world map” (and/or “Quit game”) actions.
 2. **Party**
-   - List members; select a member to view details (later: portraits, etc).
-   - (Later) reorder party, swap active party.
+   - List members with HP/MP bars + core stats (STR/DEF/AGI/INT).
+   - (Later) reorder party, swap active party, derived stats, resistances.
 3. **Characters** (Inventory + Equipment unified)
    - Left: party members with HP/MP bars.
    - Right: selected member slot grid (`bag_cols * bag_rows`) where equipment lives alongside items.
    - Slot interaction:
      - Drag & drop to rearrange (swap or stack-merge if same stackable item).
+     - Drag & drop onto a character row:
+       - other character: give the item (auto-place into their bag)
+       - same character: use the item on them (consumables only)
      - Right-click context menu:
        - `Use` (consumables): opens a target picker showing all party members with HP/MP bars.
        - `Equip/Unequip` (equipment): toggles equipment and updates derived stats.
        - `Drop`: removes item from slot (blocked if equipped).
    - Item details panel:
      - Kind, description, effect/bonuses, and last action message.
-4. **Stats**
-   - Base stats + equipment bonuses + totals.
-   - (Later) resistances, status.
-5. **Quests**
+4. **Quests**
    - Show `QuestStateModel` summary; details later.
-6. **Settings**
+5. **Settings**
    - Encounter rate multiplier, auto battle, text speed (existing).
    - Volume sliders already exist in `SettingsStateModel` but are not wired to UI yet.
 

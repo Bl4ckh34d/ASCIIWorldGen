@@ -39,11 +39,13 @@ var world_width: int = 275
 var world_height: int = 62
 var world_seed_hash: int = 0
 var world_biome_ids: PackedInt32Array = PackedInt32Array()
+var _location_biome_override_id: int = -1
 
 var _chunk_gen: RegionalChunkGenerator = null
 var _chunk_cache: RegionalChunkCache = null
 var _gpu_view: Object = null
 var _player_marker: ColorRect = null
+var _marker_initialized: bool = false
 
 var _player_gx: float = 0.0
 var _player_gy: float = 0.0
@@ -61,6 +63,7 @@ func _ready() -> void:
 	scene_router = get_node_or_null("/root/SceneRouter")
 	_load_location_from_state()
 	_init_regional_generation()
+	_ensure_valid_spawn()
 	_install_menu_overlay()
 	_install_world_map_overlay()
 	_init_gpu_rendering()
@@ -80,8 +83,48 @@ func _init_regional_generation() -> void:
 		world_biome_ids = PackedInt32Array()
 	_chunk_gen = RegionalChunkGenerator.new()
 	_chunk_gen.configure(world_seed_hash, world_width, world_height, world_biome_ids, REGION_SIZE)
+	if _location_biome_override_id >= 0 and "set_biome_overrides" in _chunk_gen:
+		_chunk_gen.set_biome_overrides({
+			Vector2i(world_tile_x, world_tile_y): int(_location_biome_override_id),
+		})
 	_chunk_cache = RegionalChunkCache.new()
 	_chunk_cache.configure(_chunk_gen, 32, 256)
+
+func _ensure_valid_spawn() -> void:
+	# If the saved spawn lands on blocked terrain (deep water/cliff), nudge to the nearest open cell.
+	if _chunk_cache == null:
+		return
+	var gx0: int = _wrap_global_x(int(floor(_player_gx)))
+	var gy0: int = _clamp_global_y(int(floor(_player_gy)))
+	if not _is_blocked_cell(gx0, gy0):
+		return
+	var found: bool = false
+	var best: Vector2i = Vector2i(gx0, gy0)
+	for r in range(1, 17):
+		# Scan the square ring.
+		for dy in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if abs(dx) != r and abs(dy) != r:
+					continue
+				var gx: int = _wrap_global_x(gx0 + dx)
+				var gy: int = _clamp_global_y(gy0 + dy)
+				if not _is_blocked_cell(gx, gy):
+					best = Vector2i(gx, gy)
+					found = true
+					break
+			if found:
+				break
+		if found:
+			break
+	if not found:
+		return
+	_player_gx = float(best.x) + 0.5
+	_player_gy = float(best.y) + 0.5
+	_wrap_player_pos()
+	_sync_location_from_player_pos()
+	_save_position_to_state()
+	if footer_label:
+		footer_label.text = "Spawn adjusted to nearest passable terrain."
 
 func _install_menu_overlay() -> void:
 	var packed: PackedScene = load(SceneContracts.SCENE_MENU_OVERLAY)
@@ -147,6 +190,7 @@ func _load_location_from_state() -> void:
 		world_tile_y = int(loc.get("world_y", world_tile_y))
 		local_x = int(loc.get("local_x", local_x))
 		local_y = int(loc.get("local_y", local_y))
+		_location_biome_override_id = int(loc.get("biome_id", -1))
 		world_width = max(1, int(game_state.world_width)) if game_has_snapshot else world_width
 		world_height = max(1, int(game_state.world_height)) if game_has_snapshot else world_height
 		world_seed_hash = int(game_state.world_seed_hash)
@@ -157,6 +201,7 @@ func _load_location_from_state() -> void:
 		world_tile_y = int(startup_state.selected_world_tile.y)
 		local_x = int(startup_state.regional_local_pos.x)
 		local_y = int(startup_state.regional_local_pos.y)
+		_location_biome_override_id = int(startup_state.selected_world_tile_biome_id)
 		world_width = max(1, int(startup_state.world_width)) if int(startup_state.world_width) > 0 else world_width
 		world_height = max(1, int(startup_state.world_height)) if int(startup_state.world_height) > 0 else world_height
 		world_seed_hash = int(startup_state.world_seed_hash)
@@ -236,6 +281,9 @@ func _toggle_world_map() -> void:
 func _process(delta: float) -> void:
 	if delta <= 0.0:
 		return
+	# Ensure the player marker is visible even if layout happens after _ready().
+	if not _marker_initialized:
+		_update_player_marker()
 	# Pause movement while overlays are open.
 	if world_map_overlay != null and world_map_overlay.visible:
 		_apply_scroll_offset()
@@ -854,6 +902,7 @@ func _update_player_marker() -> void:
 	var cy: int = VIEW_H / 2
 	_player_marker.size = cs
 	_player_marker.position = Vector2(float(cx) * cs.x, float(cy) * cs.y)
+	_marker_initialized = true
 
 func _get_solar_params() -> Dictionary:
 	var day_of_year: float = 0.0

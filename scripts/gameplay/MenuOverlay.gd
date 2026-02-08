@@ -3,6 +3,7 @@ extends CanvasLayer
 const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
 const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
 const InventorySlotButton = preload("res://scripts/gameplay/ui/InventorySlotButton.gd")
+const MemberRowDropTarget = preload("res://scripts/gameplay/ui/MemberRowDropTarget.gd")
 const StatBar = preload("res://scripts/gameplay/ui/StatBar.gd")
 
 signal closed
@@ -11,8 +12,7 @@ signal closed
 @onready var status_label: Label = %StatusLabel
 @onready var tabs: TabContainer = %Tabs
 @onready var overview_text: RichTextLabel = %OverviewText
-@onready var party_text: RichTextLabel = %PartyText
-@onready var stats_text: RichTextLabel = %StatsText
+@onready var party_member_list: VBoxContainer = %PartyMemberList
 @onready var quests_text: RichTextLabel = %QuestsText
 @onready var settings_text: Label = %SettingsText
 @onready var encounter_slider: HSlider = %EncounterSlider
@@ -122,9 +122,13 @@ func _apply_tab_titles() -> void:
 	# Hide legacy equipment tab (inventory is unified with equipment now).
 	if tabs.get_tab_count() > 3:
 		tabs.set_tab_hidden(3, true)
-	tabs.set_tab_title(4, "Stats")
-	tabs.set_tab_title(5, "Quests")
-	tabs.set_tab_title(6, "Settings")
+	# Hide legacy stats tab (stats are shown in Party tab now).
+	if tabs.get_tab_count() > 4:
+		tabs.set_tab_hidden(4, true)
+	if tabs.get_tab_count() > 5:
+		tabs.set_tab_title(5, "Quests")
+	if tabs.get_tab_count() > 6:
+		tabs.set_tab_title(6, "Settings")
 
 func open_overlay(context_title: String = "Menu") -> void:
 	_context_title = context_title
@@ -238,8 +242,7 @@ func _refresh_snapshot() -> void:
 		return
 	var snap: Dictionary = game_state.get_menu_snapshot()
 	_set_text(overview_text, snap.get("overview_lines", PackedStringArray()))
-	_set_text(party_text, snap.get("party_lines", PackedStringArray()))
-	_set_text(stats_text, snap.get("stats_lines", PackedStringArray()))
+	_refresh_party_tab()
 	_set_text(quests_text, snap.get("quest_lines", PackedStringArray()))
 	if settings_text:
 		settings_text.text = "\n".join(_to_lines(snap.get("settings_lines", PackedStringArray())))
@@ -262,6 +265,65 @@ func _to_lines(lines_variant: Variant) -> PackedStringArray:
 		for item in lines_variant:
 			lines.append(String(item))
 	return lines
+
+func _refresh_party_tab() -> void:
+	if party_member_list == null:
+		return
+	for child in party_member_list.get_children():
+		child.queue_free()
+	var members: Array = _party_members()
+	if members.is_empty():
+		var empty := Label.new()
+		empty.text = "No party members."
+		party_member_list.add_child(empty)
+		return
+	for entry in members:
+		if entry == null:
+			continue
+		var row := PanelContainer.new()
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.custom_minimum_size = Vector2(0, 98)
+		var margin := MarginContainer.new()
+		margin.add_theme_constant_override("margin_left", 10)
+		margin.add_theme_constant_override("margin_right", 10)
+		margin.add_theme_constant_override("margin_top", 10)
+		margin.add_theme_constant_override("margin_bottom", 10)
+		row.add_child(margin)
+		var vbox := VBoxContainer.new()
+		vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vbox.add_theme_constant_override("separation", 4)
+		margin.add_child(vbox)
+
+		var name_label := Label.new()
+		name_label.text = "%s (Lv %d)" % [String(entry.display_name), int(entry.level)]
+		vbox.add_child(name_label)
+
+		var hp_label := Label.new()
+		hp_label.text = "HP %d/%d" % [int(entry.hp), int(entry.max_hp)]
+		vbox.add_child(hp_label)
+		var hp := StatBar.new()
+		hp.kind = "hp"
+		hp.set_values(int(entry.hp), int(entry.max_hp), "hp")
+		vbox.add_child(hp)
+
+		var mp_label := Label.new()
+		mp_label.text = "MP %d/%d" % [int(entry.mp), int(entry.max_mp)]
+		vbox.add_child(mp_label)
+		var mp := StatBar.new()
+		mp.kind = "mp"
+		mp.set_values(int(entry.mp), int(entry.max_mp), "mp")
+		vbox.add_child(mp)
+
+		var stats_label := Label.new()
+		stats_label.text = "STR %d  DEF %d  AGI %d  INT %d" % [
+			int(entry.strength),
+			int(entry.defense),
+			int(entry.agility),
+			int(entry.intellect),
+		]
+		vbox.add_child(stats_label)
+
+		party_member_list.add_child(row)
 
 func _party_members() -> Array:
 	if game_state == null:
@@ -306,32 +368,41 @@ func _build_member_list(members: Array) -> void:
 		if entry == null:
 			continue
 		var member_id: String = String(entry.member_id)
-		var row := PanelContainer.new()
+		var row := MemberRowDropTarget.new()
+		row.member_id = member_id
 		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.custom_minimum_size = Vector2(0, 62)
 		row.mouse_filter = Control.MOUSE_FILTER_STOP
 		row.gui_input.connect(_on_member_row_gui_input.bind(member_id))
+		if not row.item_dropped.is_connected(_on_member_row_item_dropped):
+			row.item_dropped.connect(_on_member_row_item_dropped)
+
 		var margin := MarginContainer.new()
 		margin.add_theme_constant_override("margin_left", 8)
 		margin.add_theme_constant_override("margin_right", 8)
 		margin.add_theme_constant_override("margin_top", 8)
 		margin.add_theme_constant_override("margin_bottom", 8)
 		row.add_child(margin)
+
 		var vbox := VBoxContainer.new()
 		vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		vbox.add_theme_constant_override("separation", 4)
 		margin.add_child(vbox)
+
 		var name_label := Label.new()
 		name_label.text = String(entry.display_name)
 		vbox.add_child(name_label)
+
 		var hp := StatBar.new()
 		hp.kind = "hp"
 		hp.set_values(int(entry.hp), int(entry.max_hp), "hp")
 		vbox.add_child(hp)
+
 		var mp := StatBar.new()
 		mp.kind = "mp"
 		mp.set_values(int(entry.mp), int(entry.max_mp), "mp")
 		vbox.add_child(mp)
+
 		member_list.add_child(row)
 		_member_rows[member_id] = row
 	_update_member_list_selection_visuals()
@@ -350,6 +421,31 @@ func _select_member(member_id: String) -> void:
 	_selected_member_id = member_id
 	_selected_slot_idx = -1
 	_last_action_message = ""
+	_refresh_inventory_v2()
+
+func _on_member_row_item_dropped(target_member_id: String, drag_data: Dictionary) -> void:
+	if typeof(drag_data) != TYPE_DICTIONARY:
+		return
+	target_member_id = String(target_member_id)
+	var from_id: String = String(drag_data.get("from_member_id", ""))
+	var from_idx: int = int(drag_data.get("from_idx", -1))
+	if from_id.is_empty() or from_idx < 0 or target_member_id.is_empty():
+		return
+	if game_state == null:
+		return
+	var res: Dictionary = {}
+	if from_id == target_member_id:
+		# Dragging onto the same character uses the item on them (consumables only).
+		if game_state.has_method("use_consumable_from_bag_slot"):
+			res = game_state.use_consumable_from_bag_slot(from_id, from_idx, target_member_id)
+	else:
+		# Dragging onto another character gives the item (auto-place into their bag).
+		if game_state.has_method("give_bag_item"):
+			res = game_state.give_bag_item(from_id, from_idx, target_member_id)
+	_last_action_message = String(res.get("message", "")) if typeof(res) == TYPE_DICTIONARY else ""
+	if from_id != target_member_id:
+		_selected_member_id = target_member_id
+		_selected_slot_idx = -1
 	_refresh_inventory_v2()
 
 func _update_member_list_selection_visuals() -> void:
