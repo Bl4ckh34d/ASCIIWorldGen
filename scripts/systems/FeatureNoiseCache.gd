@@ -53,62 +53,59 @@ func build(params: Dictionary) -> void:
 	noise_x_scale = float(params.get("noise_x_scale", 1.0))
 	var shore_freq: float = max(0.01, base_freq * 4.0)
 	_allocate()
-	# Try GPU first
-	_ensure()
-	if _pipeline.is_valid():
-		var size: int = max(0, width * height)
-		var out_d: PackedFloat32Array = PackedFloat32Array(); out_d.resize(size)
-		var out_i: PackedFloat32Array = PackedFloat32Array(); out_i.resize(size)
-		var out_s: PackedFloat32Array = PackedFloat32Array(); out_s.resize(size)
-		var out_v: PackedFloat32Array = PackedFloat32Array(); out_v.resize(size)
-		var buf_d := _rd.storage_buffer_create(out_d.to_byte_array().size(), out_d.to_byte_array())
-		var buf_i := _rd.storage_buffer_create(out_i.to_byte_array().size(), out_i.to_byte_array())
-		var buf_s := _rd.storage_buffer_create(out_s.to_byte_array().size(), out_s.to_byte_array())
-		var buf_v := _rd.storage_buffer_create(out_v.to_byte_array().size(), out_v.to_byte_array())
-		var uniforms: Array = []
-		var u: RDUniform
-		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(buf_d); uniforms.append(u)
-		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(buf_i); uniforms.append(u)
-		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(buf_s); uniforms.append(u)
-		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_v); uniforms.append(u)
-		var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
-		var pc := PackedByteArray()
-		var ints := PackedInt32Array([width, height, rng_seed])
-		var floats := PackedFloat32Array([noise_x_scale, base_freq, shore_freq])
-		pc.append_array(ints.to_byte_array()); pc.append_array(floats.to_byte_array())
-		# Align to 16 bytes
-		var pad := (16 - (pc.size() % 16)) % 16
-		if pad > 0:
-			var zeros := PackedByteArray(); zeros.resize(pad)
-			pc.append_array(zeros)
-		var gx: int = int(ceil(float(width) / 16.0))
-		var gy: int = int(ceil(float(height) / 16.0))
-		var cl := _rd.compute_list_begin()
-		_rd.compute_list_bind_compute_pipeline(cl, _pipeline)
-		_rd.compute_list_bind_uniform_set(cl, u_set, 0)
-		_rd.compute_list_set_push_constant(cl, pc, pc.size())
-		_rd.compute_list_dispatch(cl, gx, gy, 1)
-		_rd.compute_list_end()
-		# Read back
-		var d_bytes := _rd.buffer_get_data(buf_d)
-		var i_bytes := _rd.buffer_get_data(buf_i)
-		var s_bytes := _rd.buffer_get_data(buf_s)
-		var v_bytes := _rd.buffer_get_data(buf_v)
-		desert_noise_field = d_bytes.to_float32_array()
-		ice_wiggle_field = i_bytes.to_float32_array()
-		shore_noise_field = s_bytes.to_float32_array()
-		shelf_value_noise_field = v_bytes.to_float32_array()
-		_rd.free_rid(u_set)
-		_rd.free_rid(buf_d)
-		_rd.free_rid(buf_i)
-		_rd.free_rid(buf_s)
-		_rd.free_rid(buf_v)
-		return
-	# Fallback CPU
+	# CPU cache builder for legacy consumers/debug paths.
 	_fill_desert_noise(rng_seed)
 	_fill_ice_wiggle(rng_seed)
 	_fill_shore_noise(rng_seed, shore_freq)
 	_fill_shelf_value_noise(rng_seed ^ 0x5E1F)
+
+func build_to_buffers(
+		params: Dictionary,
+		desert_buf: RID,
+		ice_buf: RID,
+		shore_buf: RID,
+		shelf_buf: RID
+	) -> bool:
+	width = int(params.get("width", 256))
+	height = int(params.get("height", 128))
+	rng_seed = int(params.get("seed", 0))
+	var base_freq: float = float(params.get("frequency", 0.02))
+	noise_x_scale = float(params.get("noise_x_scale", 1.0))
+	var shore_freq: float = max(0.01, base_freq * 4.0)
+	if width <= 0 or height <= 0:
+		return false
+	_ensure()
+	if not _pipeline.is_valid():
+		return false
+	if not desert_buf.is_valid() or not ice_buf.is_valid() or not shore_buf.is_valid() or not shelf_buf.is_valid():
+		return false
+	var uniforms: Array = []
+	var u: RDUniform
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(desert_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(ice_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(shore_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(shelf_buf); uniforms.append(u)
+	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	var pc := PackedByteArray()
+	var ints := PackedInt32Array([width, height, rng_seed])
+	var floats := PackedFloat32Array([noise_x_scale, base_freq, shore_freq])
+	pc.append_array(ints.to_byte_array())
+	pc.append_array(floats.to_byte_array())
+	var pad := (16 - (pc.size() % 16)) % 16
+	if pad > 0:
+		var zeros := PackedByteArray()
+		zeros.resize(pad)
+		pc.append_array(zeros)
+	var gx: int = int(ceil(float(width) / 16.0))
+	var gy: int = int(ceil(float(height) / 16.0))
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _pipeline)
+	_rd.compute_list_bind_uniform_set(cl, u_set, 0)
+	_rd.compute_list_set_push_constant(cl, pc, pc.size())
+	_rd.compute_list_dispatch(cl, gx, gy, 1)
+	_rd.compute_list_end()
+	_rd.free_rid(u_set)
+	return true
 
 func _allocate() -> void:
 	var n: int = max(0, width * height)

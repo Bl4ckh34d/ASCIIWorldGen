@@ -23,24 +23,17 @@ layout(push_constant) uniform Params {
     int octaves;
 } PC;
 
-// Hash utilities (tileable along X by using modulo with width)
-uint hash_u32(uvec2 p){
-    // From https://www.shadertoy.com/view/4djSRW style hash
-    p = p * uvec2(1664525u, 1013904223u) + uvec2(uint(PC.seed), 374761393u);
-    p ^= (p.yx >> 16);
-    p *= uvec2(2246822519u, 3266489917u);
-    p ^= (p.yx >> 13);
-    p *= uvec2(668265263u, 2246822519u);
-    p ^= (p.yx >> 16);
-    return p.x ^ p.y;
-}
-
+// Hash utility robust for negative lattice coordinates.
+// Keep X wrapping periodic when wrap_x is enabled.
 float hash_f(vec2 p){
-    uvec2 pi = uvec2(p);
+    float xf = floor(p.x);
+    float yf = floor(p.y);
     if (PC.wrap_x == 1) {
-        pi.x = pi.x % uint(PC.width);
+        float w = max(1.0, float(PC.width));
+        xf = mod(mod(xf, w) + w, w);
     }
-    return float(hash_u32(pi)) * (1.0 / 4294967296.0);
+    vec2 q = vec2(xf, yf) + float(PC.seed) * vec2(0.06711056, 0.00583715);
+    return fract(sin(dot(q, vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
 vec2 grad2(vec2 p){
@@ -90,12 +83,6 @@ float fbm2(vec2 p, float freq, int octaves, float lacunarity, float gain){
     return sum;
 }
 
-mat2 rot2(float a){
-    float c = cos(a);
-    float s = sin(a);
-    return mat2(c, -s, s, c);
-}
-
 void main(){
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
@@ -103,50 +90,41 @@ void main(){
     int W = PC.width; int H = PC.height;
     int i = int(x) + int(y) * W;
 
-    vec2 p = vec2(float(x), float(y));
-    vec2 p0 = p * vec2(PC.noise_x_scale, 1.0);
-    vec2 p1 = rot2(0.71) * p0;
-    vec2 p2 = rot2(-1.13) * p0;
+    float xf = float(x);
+    float yf = float(y);
+    float t = xf / float(max(1, W));
 
-    // Multi-domain warp suppresses directional "wavy" artifacts.
-    float wx = (
-        fbm2(p1 * 0.70, PC.base_freq, PC.octaves, PC.lacunarity, PC.gain) * 0.62 +
-        fbm2(p2 * 1.25 + vec2(113.0, -71.0), PC.base_freq * 1.75, min(PC.octaves, 4), PC.lacunarity * 1.12, PC.gain * 0.84) * 0.38
-    ) * PC.warp_amount;
-    float wy = (
-        fbm2(p2 * 0.70 + vec2(53.0, 139.0), PC.base_freq, PC.octaves, PC.lacunarity, PC.gain) * 0.62 +
-        fbm2(p1 * 1.35 + vec2(-97.0, 211.0), PC.base_freq * 1.65, min(PC.octaves, 4), PC.lacunarity * 1.10, PC.gain * 0.86) * 0.38
-    ) * PC.warp_amount;
-    OutWarpX.out_warp_x[i] = wx;
-    OutWarpY.out_warp_y[i] = wy;
+    // CPU-parity domain warp (warp_noise: simplex-ish FBM, fixed settings).
+    float wx0 = fbm2(vec2(xf * 0.8 * PC.noise_x_scale, yf * 0.8), PC.base_freq * 1.5, 3, 2.0, 0.5);
+    float wy0 = fbm2(vec2((xf + 1000.0) * 0.8 * PC.noise_x_scale, (yf - 777.0) * 0.8), PC.base_freq * 1.5, 3, 2.0, 0.5);
+    float wx = wx0;
+    float wy = wy0;
+    if (PC.wrap_x == 1) {
+        float wx1 = fbm2(vec2((xf + float(W)) * 0.8 * PC.noise_x_scale, yf * 0.8), PC.base_freq * 1.5, 3, 2.0, 0.5);
+        float wy1 = fbm2(vec2((xf + 1000.0 + float(W)) * 0.8 * PC.noise_x_scale, (yf - 777.0) * 0.8), PC.base_freq * 1.5, 3, 2.0, 0.5);
+        wx = mix(wx0, wx1, t);
+        wy = mix(wy0, wy1, t);
+    }
+    OutWarpX.out_warp_x[i] = wx * PC.warp_amount;
+    OutWarpY.out_warp_y[i] = wy * PC.warp_amount;
 
-    // Base FBM (warped coords)
-    float sx = float(x) + wx;
-    float sy = float(y) + wy;
-    vec2 sp0 = vec2(sx * PC.noise_x_scale, sy);
-    vec2 sp1 = rot2(0.57) * sp0;
-    vec2 sp2 = rot2(-0.93) * sp0;
-    float fbm_val = 0.58 * fbm2(sp1, PC.base_freq, PC.octaves, PC.lacunarity, PC.gain)
-        + 0.42 * fbm2(sp2, PC.base_freq * 1.17, PC.octaves, PC.lacunarity * 1.03, PC.gain * 0.97);
-    // Higher-frequency detail + ridged component for natural rugged structure.
-    int det_oct = min(PC.octaves, 3);
-    float detail_val = fbm2(sp0 * 2.9, PC.base_freq * 2.3, det_oct, PC.lacunarity * 1.30, PC.gain * 0.82);
-    float ridge_val = 1.0 - abs(fbm2(sp0 * 1.9 + vec2(37.0, -59.0), PC.base_freq * 1.8, det_oct + 1, PC.lacunarity * 1.22, PC.gain * 0.80));
-    ridge_val = ridge_val * 2.0 - 1.0;
-    float fbm_combined = fbm_val * 0.60 + detail_val * 0.24 + ridge_val * 0.16;
+    // Base terrain field (unwarped) and continental scaffold (unwarped),
+    // sampled later in terrain_gen with warp-aware bilinear lookup.
+    float n0 = fbm2(vec2(xf * PC.noise_x_scale, yf), PC.base_freq, PC.octaves, PC.lacunarity, PC.gain);
+    float n = n0;
+    if (PC.wrap_x == 1) {
+        float n1 = fbm2(vec2((xf + float(W)) * PC.noise_x_scale, yf), PC.base_freq, PC.octaves, PC.lacunarity, PC.gain);
+        n = mix(n0, n1, t);
+    }
 
-    // Continental scaffold: two low-frequency fields and a broad ridge mask.
-    vec2 cp0 = p0 * 0.5;
-    vec2 cp1 = rot2(0.41) * cp0;
-    vec2 cp2 = rot2(-0.67) * cp0;
-    float cont_a = fbm2(cp1, PC.cont_freq, PC.octaves, PC.lacunarity, PC.gain);
-    float cont_b = fbm2(cp2 + vec2(221.0, -133.0), PC.cont_freq * 0.82, max(2, PC.octaves - 1), PC.lacunarity * 1.02, PC.gain * 0.95);
-    float cont_ridge = 1.0 - abs(fbm2(cp0 + vec2(-301.0, 87.0), PC.cont_freq * 0.92, max(2, PC.octaves - 1), PC.lacunarity * 1.08, PC.gain * 0.90));
-    cont_ridge = cont_ridge * 2.0 - 1.0;
-    float cont_val = cont_a * 0.52 + cont_b * 0.33 + cont_ridge * 0.15;
+    float cont_freq = max(0.002, PC.cont_freq);
+    float c0 = fbm2(vec2(xf * 0.5 * PC.noise_x_scale, yf * 0.5), cont_freq, 4, 2.0, 0.5);
+    float c = c0;
+    if (PC.wrap_x == 1) {
+        float c1 = fbm2(vec2((xf + float(W)) * 0.5 * PC.noise_x_scale, yf * 0.5), cont_freq, 4, 2.0, 0.5);
+        c = mix(c0, c1, t);
+    }
 
-    // Clamp to [-1,1] for safety
-    OutFBM.out_fbm[i] = clamp(fbm_combined, -1.0, 1.0);
-    OutCont.out_cont[i] = clamp(cont_val, -1.0, 1.0);
+    OutFBM.out_fbm[i] = clamp(n, -1.0, 1.0);
+    OutCont.out_cont[i] = clamp(c, -1.0, 1.0);
 }
-

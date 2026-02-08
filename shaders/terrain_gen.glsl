@@ -135,17 +135,15 @@ void main(){
     float fbm;
     float cont;
     if (PC.wrap_x == 1) {
-        fbm = sample_bilinear_wrapx_fbm(W, H, sx * PC.noise_x_scale, sy);
-        cont = sample_bilinear_wrapx_cont(W, H, float(x) * 0.5 * PC.noise_x_scale, float(y) * 0.5);
+        fbm = sample_bilinear_wrapx_fbm(W, H, sx, sy);
+        cont = sample_bilinear_wrapx_cont(W, H, float(x), float(y));
     } else {
-        fbm = sample_bilinear_fbm(W, H, sx * PC.noise_x_scale, sy);
-        cont = sample_bilinear_cont(W, H, float(x) * 0.5 * PC.noise_x_scale, float(y) * 0.5);
+        fbm = sample_bilinear_fbm(W, H, sx, sy);
+        cont = sample_bilinear_cont(W, H, float(x), float(y));
     }
 
-    // Height shaping: broad continents + rugged detail, avoiding regular wave bands.
-    float ridge_hint = 1.0 - abs(cont);
-    ridge_hint = ridge_hint * ridge_hint;
-    float hval = 0.58 * fbm + 0.50 * cont + 0.16 * (ridge_hint - 0.5);
+    // CPU-parity height shaping.
+    float hval = 0.65 * fbm + 0.45 * cont;
     // Basic circular falloff when not wrapping X
     if (PC.wrap_x == 0) {
         float cx = float(W) * 0.5;
@@ -157,8 +155,8 @@ void main(){
         float falloff = clamp(1.0 - r * 0.85, 0.0, 1.0);
         hval = hval * 0.85 + falloff * 0.15;
     }
-    // Preserve macro continents while keeping natural relief variation.
-    float gamma = 0.67;
+    // Signed-power shaping and contrast boost (matches TerrainNoise CPU path).
+    float gamma = 0.65;
     float a = abs(hval);
     hval = (hval >= 0.0 ? 1.0 : -1.0) * pow(a, gamma);
     hval *= 1.10;
@@ -167,4 +165,3 @@ void main(){
     OutH.out_height[i] = hval;
     OutLand.out_land[i] = (hval > PC.sea_level) ? 1u : 0u;
 }
-

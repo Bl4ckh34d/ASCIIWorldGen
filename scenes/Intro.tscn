@@ -1,8 +1,8 @@
-[gd_scene load_steps=2 format=3 uid="uid://bq6fnigbh6cc8"]
+[gd_scene format=3 uid="uid://bq6fnigbh6cc8"]
 
 [ext_resource type="Script" uid="uid://c88j8hneqf4g6" path="res://scripts/intro/Intro.gd" id="1"]
 
-[node name="Intro" type="Control"]
+[node name="Intro" type="Control" unique_id=1389067333]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -10,19 +10,19 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="PixelContainer" type="SubViewportContainer" parent="."]
+[node name="PixelContainer" type="SubViewportContainer" parent="." unique_id=1881817900]
 layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 stretch = true
 
-[node name="PixelViewport" type="SubViewport" parent="PixelContainer"]
+[node name="PixelViewport" type="SubViewport" parent="PixelContainer" unique_id=2129509986]
 disable_3d = true
 handle_input_locally = false
 size = Vector2i(1770, 830)
 render_target_update_mode = 4
 
-[node name="PixelRoot" type="Control" parent="PixelContainer/PixelViewport"]
+[node name="PixelRoot" type="Control" parent="PixelContainer/PixelViewport" unique_id=1096073836]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0

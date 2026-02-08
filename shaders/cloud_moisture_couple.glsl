@@ -33,6 +33,7 @@ float clamp01(float v) { return clamp(v, 0.0, 1.0); }
 float biome_veg_factor(int b){
     switch (b) {
         case 10:
+            return 0.95;
         case 11:
         case 12:
         case 13:
@@ -40,35 +41,44 @@ float biome_veg_factor(int b){
         case 15:
             return 1.0;
         case 22:
+            return 0.28;
         case 23:
-            return 0.75;
+            return 0.22;
+        case 27:
+            return 0.08;
         case 6:
         case 7:
         case 21:
+            return 0.48;
         case 29:
         case 30:
         case 33:
+            return 0.16;
         case 36:
         case 37:
         case 40:
-            return 0.55;
+            return 0.12;
         case 16:
         case 18:
         case 19:
+            return 0.20;
         case 34:
+            return 0.10;
         case 41:
-            return 0.22;
+            return 0.08;
+        case 20:
+            return 0.18;
         case 2:
-            return 0.15;
+            return 0.12;
         case 3:
         case 4:
         case 5:
         case 25:
         case 26:
         case 28:
-            return 0.05;
+            return 0.04;
         default:
-            return 0.18;
+            return 0.16;
     }
 }
 
@@ -91,17 +101,21 @@ void main() {
 
     float evap_base = is_land ? PC.evap_land : PC.evap_ocean;
     float rain_base = is_land ? PC.rain_land : PC.rain_ocean;
+    float land_evap_supply = is_land ? mix(0.25, 1.18, veg) : 1.0;
+    float veg_dense = smoothstep(0.20, 0.95, veg);
+    float thermal_evap = is_land ? (0.28 + 1.00 * warm) : (0.45 + 0.95 * warm);
 
     float evap_surface = evap_base
-                       * (0.45 + 1.05 * warm)
+                       * thermal_evap
                        * (is_land ? (0.30 + 0.90 * day) : (0.55 + 0.60 * day))
-                       * (1.0 - 0.30 * c);
+                       * (1.0 - 0.30 * c)
+                       * land_evap_supply;
     float transp = is_land
-        ? evap_base * PC.vegetation_boost * veg * (0.30 + 0.70 * warm) * (0.25 + 0.75 * day) * (1.0 - 0.25 * c)
+        ? evap_base * PC.vegetation_boost * mix(0.08, 1.30, veg_dense) * (0.15 + 0.85 * warm) * (0.25 + 0.75 * day) * (1.0 - 0.25 * c)
         : 0.0;
 
     float target = is_land
-        ? clamp01(0.28 + 0.20 * warm + 0.30 * veg + 0.12 * night)
+        ? clamp01(0.20 + 0.20 * warm + 0.40 * veg + 0.12 * night - 0.10 * (1.0 - veg))
         : clamp01(0.60 + 0.28 * warm + 0.08 * night);
     float relax = (PC.relax_rate + PC.mix_rate) * (target - m);
 

@@ -13,6 +13,7 @@ layout(std430, set = 0, binding = 4) buffer BeachBuf { uint beach_mask[]; } Beac
 layout(std430, set = 0, binding = 5) buffer DesertFieldBuf { float desert_field[]; } DesertField; // optional (0..1)
 layout(std430, set = 0, binding = 6) buffer OutBiomeBuf { int out_biome[]; } Out;
 layout(std430, set = 0, binding = 7) readonly buffer FertilityBuf { float fertility[]; } Fertility;
+layout(std430, set = 0, binding = 8) readonly buffer BiomeNoiseFieldBuf { float biome_noise_field[]; } BiomeNoise;
 
 layout(push_constant) uniform Params {
     int width;
@@ -31,6 +32,7 @@ layout(push_constant) uniform Params {
     float min_h;                      // global min height for normalization
     float max_h;                      // global max height for normalization
     int has_desert_field; // 1 if buffer filled
+    int has_biome_noise_field; // 1 if CPU-generated biome-noise buffer is bound
 } PC;
 
 // Biome IDs mirroring BiomeClassifier.gd enum
@@ -87,12 +89,21 @@ void main() {
     float t_c0 = PC.temp_min_c + t_norm * (PC.temp_max_c - PC.temp_min_c);
     // Apply small animated jitter to reduce horizontal banding (temperature)
     float n1 = tri_noise(x, y, PC.biome_phase);
+    if (PC.has_biome_noise_field == 1) {
+        n1 = clamp01(BiomeNoise.biome_noise_field[i]);
+    }
     t_c0 += (PC.biome_noise_strength_c) * (n1 - 0.5) * 2.0;
     // Moisture variability: multi-frequency jitter + neighbor-driven islanding + topo dryness
     float raw_m = Moist.moist_norm[i];
     // secondary noise (different frequency blend)
     float n2 = sin((float(x) * 0.087 + float(y) * 0.023) - PC.biome_phase * 1.7);
     float n2u = clamp(n2 * 0.5 + 0.5, 0.0, 1.0);
+    if (PC.has_biome_noise_field == 1) {
+        int x2 = (int(x) + max(1, W / 3)) % W;
+        int y2 = (int(y) + max(1, PC.height / 5)) % PC.height;
+        int j2 = x2 + y2 * W;
+        n2u = clamp01(BiomeNoise.biome_noise_field[j2]);
+    }
     float m_j = clamp01(raw_m + PC.moist_noise_strength * (n1 - 0.5) + PC.moist_noise_strength2 * (n2u - 0.5));
     // neighbor average to introduce split/merge islands
     float sum_nb = 0.0; int cnt = 0;
@@ -149,6 +160,12 @@ void main() {
     if (elev_norm >= 0.94) { Out.out_biome[i] = BIOME_MOUNTAINS; return; }    // next 5%
     // Apply temperature/noise-driven jitter to break up homogenous hills/foothills
     float hnoise = tri_noise(x * 2u, y * 2u, PC.biome_phase * 0.7 + 1.234);
+    if (PC.has_biome_noise_field == 1) {
+        int x3 = (int(x) * 5 + int(y) * 3 + 17) % W;
+        int y3 = (int(y) * 7 + int(x) * 2 + 11) % PC.height;
+        int j3 = x3 + y3 * W;
+        hnoise = clamp01(BiomeNoise.biome_noise_field[j3]);
+    }
     float t_mid = clamp(1.0 - abs((t_c0 - 15.0) / 25.0), 0.0, 1.0); // strongest near ~15C
     float jitter = 0.03 * t_mid * ((hnoise - 0.5) * 2.0);
     float elev_j = clamp01(elev_norm + jitter);

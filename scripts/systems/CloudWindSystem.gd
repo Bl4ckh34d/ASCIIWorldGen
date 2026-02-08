@@ -65,7 +65,6 @@ var _wind_pipeline: RID
 var _moist_shader: RDShaderFile = load("res://shaders/cloud_moisture_couple.glsl")
 var _moist_shader_rid: RID
 var _moist_pipeline: RID
-var _warned_gpu: bool = false
 var _cloud_tex: Object = null
 var _cloud_buf_a: RID
 var _cloud_buf_b: RID
@@ -198,9 +197,12 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		var land_buf: RID = generator.get_persistent_buffer("is_land") if "get_persistent_buffer" in generator else RID()
 		var light_buf: RID = generator.get_persistent_buffer("light") if "get_persistent_buffer" in generator else RID()
 		var biome_buf: RID = generator.get_persistent_buffer("biome_id") if "get_persistent_buffer" in generator else RID()
+		var height_buf: RID = generator.get_persistent_buffer("height") if "get_persistent_buffer" in generator else RID()
+		var wind_u_buf: RID = generator.get_persistent_buffer("wind_u") if "get_persistent_buffer" in generator else RID()
+		var wind_v_buf: RID = generator.get_persistent_buffer("wind_v") if "get_persistent_buffer" in generator else RID()
 		source_buf_override = generator.get_persistent_buffer("cloud_source") if "get_persistent_buffer" in generator else RID()
 		var ok_src: bool = false
-		if temp_buf.is_valid() and moist_buf.is_valid() and land_buf.is_valid() and light_buf.is_valid() and biome_buf.is_valid() and source_buf_override.is_valid():
+		if temp_buf.is_valid() and moist_buf.is_valid() and land_buf.is_valid() and light_buf.is_valid() and biome_buf.is_valid() and height_buf.is_valid() and wind_u_buf.is_valid() and wind_v_buf.is_valid() and source_buf_override.is_valid():
 			ok_src = cloud_compute.compute_clouds_to_buffer(
 				w,
 				h,
@@ -209,6 +211,9 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				land_buf,
 				light_buf,
 				biome_buf,
+				height_buf,
+				wind_u_buf,
+				wind_v_buf,
 				phase,
 				int(generator.config.rng_seed),
 				source_buf_override
@@ -302,9 +307,12 @@ func _apply_cloud_moisture_coupling(dt_days: float, w: int, h: int, rain_mult: f
 		if land:
 			var bid: int = biomes[i] if i < biomes.size() else 0
 			veg = _biome_vegetation_factor(bid)
-		var evap_rate: float = (evap_rate_land if land else evap_rate_ocean) * (0.45 + 1.05 * warm) * ((0.30 + 0.90 * day) if land else (0.55 + 0.60 * day)) * (1.0 - 0.30 * cloud_cov)
-		var transp: float = (evap_rate_land * vegetation_evap_boost * veg * (0.30 + 0.70 * warm) * (0.25 + 0.75 * day) * (1.0 - 0.25 * cloud_cov)) if land else 0.0
-		var target: float = clamp(0.28 + 0.20 * warm + 0.30 * veg + 0.12 * night, 0.0, 1.0) if land else clamp(0.60 + 0.28 * warm + 0.08 * night, 0.0, 1.0)
+		var land_evap_supply: float = lerp(0.25, 1.18, veg) if land else 1.0
+		var thermal_evap: float = (0.28 + 1.00 * warm) if land else (0.45 + 0.95 * warm)
+		var evap_rate: float = (evap_rate_land if land else evap_rate_ocean) * thermal_evap * ((0.30 + 0.90 * day) if land else (0.55 + 0.60 * day)) * (1.0 - 0.30 * cloud_cov) * land_evap_supply
+		var veg_dense: float = _smoothstep(0.20, 0.95, veg)
+		var transp: float = (evap_rate_land * vegetation_evap_boost * lerp(0.08, 1.30, veg_dense) * (0.15 + 0.85 * warm) * (0.25 + 0.75 * day) * (1.0 - 0.25 * cloud_cov)) if land else 0.0
+		var target: float = clamp(0.20 + 0.20 * warm + 0.40 * veg + 0.12 * night - 0.10 * (1.0 - veg), 0.0, 1.0) if land else clamp(0.60 + 0.28 * warm + 0.08 * night, 0.0, 1.0)
 		var relax: float = relax_rate * (target - moist_val)
 		var condense: float = condensation_rate_per_day * cloud_cov * (0.35 + 0.65 * night + max(0.0, moist_val - target) * 0.5)
 		var rain_rate: float = rain_rate_land if land else rain_rate_ocean
@@ -595,7 +603,7 @@ func _advect_and_mix_clouds(dt_days: float, w: int, h: int, source: PackedFloat3
 				_tmp_clouds[i4] = clamp(c4, 0.0, 1.0)
 	generator.last_clouds = _tmp_clouds.duplicate()
 
-func _advect_and_mix_clouds_gpu(dt_days: float, w: int, h: int, source: PackedFloat32Array, source_buf_override: RID = RID()) -> void:
+func _advect_and_mix_clouds_gpu(dt_days: float, w: int, h: int, _source: PackedFloat32Array, source_buf_override: RID = RID()) -> void:
 	var rd := RenderingServer.get_rendering_device()
 	if not _advec_pipeline.is_valid():
 		return
@@ -741,20 +749,36 @@ func _smoothstep(edge0: float, edge1: float, x: float) -> float:
 
 func _biome_vegetation_factor(biome_id: int) -> float:
 	match biome_id:
-		10, 11, 12, 13, 14, 15:
+		10:
+			return 0.95
+		11, 12, 13, 14, 15:
 			return 1.0
-		22, 23:
-			return 0.75
-		6, 7, 21, 29, 30, 33, 36, 37, 40:
-			return 0.55
-		16, 18, 19, 34, 41:
+		22:
+			return 0.28
+		23:
 			return 0.22
-		2:
-			return 0.15
-		3, 4, 5, 25, 26, 28:
-			return 0.05
-		_:
+		27:
+			return 0.08
+		6, 7, 21:
+			return 0.48
+		29, 30, 33:
+			return 0.16
+		36, 37, 40:
+			return 0.12
+		16, 18, 19:
+			return 0.20
+		34:
+			return 0.10
+		41:
+			return 0.08
+		20:
 			return 0.18
+		2:
+			return 0.12
+		3, 4, 5, 25, 26, 28:
+			return 0.04
+		_:
+			return 0.16
 
 func set_coupling_enabled(v: bool) -> void:
 	coupling_enabled = v

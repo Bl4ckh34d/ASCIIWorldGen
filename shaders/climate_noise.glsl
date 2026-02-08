@@ -18,23 +18,16 @@ layout(push_constant) uniform Params {
     float noise_x_scale;
 } PC;
 
-// Hash-based Perlin utilities
-uint hash_u32(uvec2 p){
-    p = p * uvec2(1664525u, 1013904223u) + uvec2(uint(PC.seed), 374761393u);
-    p ^= (p.yx >> 16);
-    p *= uvec2(2246822519u, 3266489917u);
-    p ^= (p.yx >> 13);
-    p *= uvec2(668265263u, 2246822519u);
-    p ^= (p.yx >> 16);
-    return p.x ^ p.y;
-}
-
+// Hash-based Perlin utilities (stable for negative coordinates).
 float hash_f(vec2 p){
-    uvec2 pi = uvec2(p);
+    float xf = floor(p.x);
+    float yf = floor(p.y);
     if (PC.wrap_x == 1) {
-        pi.x = pi.x % uint(PC.width);
+        float w = max(1.0, float(PC.width));
+        xf = mod(mod(xf, w) + w, w);
     }
-    return float(hash_u32(pi)) * (1.0 / 4294967296.0);
+    vec2 q = vec2(xf, yf) + float(PC.seed) * vec2(0.06711056, 0.00583715);
+    return fract(sin(dot(q, vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
 vec2 grad2(vec2 p){
@@ -92,4 +85,3 @@ void main(){
     OutU.flow_u[i] = clamp(u, -1.0, 1.0);
     OutV.flow_v[i] = clamp(v, -1.0, 1.0);
 }
-

@@ -86,7 +86,6 @@ func _derive_world_config(orbit: float) -> Dictionary:
 	# Left side of the habitable band is hotter, right side is colder.
 	# Use side-specific edge curves so extremes ramp up close to the zone limits,
 	# keeping mid-side placements broadly habitable.
-	var heat: float = 1.0 - orbit_n
 	var edge: float = clamp(abs(orbit_n - 0.5) * 2.0, 0.0, 1.0)
 	var habitability: float = 1.0 - edge
 	var hot_side: float = clamp((0.5 - orbit_n) * 2.0, 0.0, 1.0)

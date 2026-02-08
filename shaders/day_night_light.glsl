@@ -7,6 +7,7 @@
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) buffer LightBuf { float light[]; } Light;
+layout(std430, set = 0, binding = 1) readonly buffer HeightBuf { float height[]; } Height;
 
 layout(push_constant) uniform Params {
     int width;
@@ -170,51 +171,82 @@ void main(){
     float sun_lon = -TAU * PC.time_of_day;
     vec3 sun_dir = dir_from_lon_lat(sun_lon, delta);
 
-    // Sun elevation (dot with surface normal) creates the terminator curve.
+    // Sun elevation (dot with surface normal) drives the terminator geometry.
     float s = dot(n, sun_dir);
-    
-    // Enhanced terminator for dramatic seasonal visibility
+
     float daylight = 0.0;
     float lat_abs = abs(lat_norm) * 2.0;
     // Night floor is the darkest baseline; eclipse shading cannot go below this.
-    float night_floor = 0.1;
+    float night_floor = 0.035;
     // Smooth high-latitude winter darkening (avoids hard latitude "scissor" lines).
     float hemi_dot = lat_norm * delta;
     float opposite_hemi = 1.0 - smoothstep(-0.02, 0.02, hemi_dot);
     float polar_weight = smoothstep(0.45, 0.95, lat_abs);
     float season_weight = smoothstep(radians(10.0), radians(28.0), abs(delta));
     float winter_darkening = opposite_hemi * polar_weight * season_weight * clamp(lat_abs * abs(delta) * 1.35, 0.0, 1.0);
-    night_floor = mix(0.10, 0.05, winter_darkening);
+    night_floor = mix(0.035, 0.015, winter_darkening);
     
-    // Create extremely sharp terminator boundary
-    float terminator_threshold = 0.02; // Very thin twilight zone
-    
-    if (s > terminator_threshold) {
-        // Day side - bright
-        daylight = 1.0;
-        
-        // Add seasonal summer brightness boost at high latitudes  
-        bool same_hemisphere_as_sun = (lat_norm * delta) > 0.0;
-        if (same_hemisphere_as_sun && lat_abs > 0.6) {
-            // Summer hemisphere high latitudes get extra brightness
-            daylight = min(1.0, 1.0 + lat_abs * abs(delta) * 2.0);
-        }
-        
-    } else if (s > -terminator_threshold) {
-        // Twilight zone - creates the visible terminator line
-        float twilight = (s + terminator_threshold) / (2.0 * terminator_threshold);
-        daylight = mix(night_floor, 0.6, twilight); // Blend from night floor into dim twilight
-        
-    } else {
-        // Night side
-        daylight = night_floor;
-    }
+    // Physically driven light model:
+    // - direct beam from solar incidence
+    // - diffuse sky contribution
+    // - twilight scattering near/just below horizon
+    // This keeps the same overall silhouette while removing hard branch thresholds.
+    float mu = clamp01(s);
+    float air_mass = 1.0 / max(0.08, mu + 0.08);
+    float transmittance = exp(-0.18 * air_mass);
+    float direct_light = mu * transmittance;
+    float diffuse_light = (0.22 + 0.55 * mu) * (1.0 - transmittance);
+    float twilight_light = 0.24 * smoothstep(-0.12, 0.03, s);
+    float solar_lighting = clamp01(direct_light + diffuse_light + twilight_light);
+
+    // Mild summer polar brightening from atmosphere/long-day effect.
+    float summer_polar = smoothstep(0.55, 0.98, lat_abs)
+        * smoothstep(0.00, 0.28, hemi_dot)
+        * smoothstep(radians(8.0), radians(30.0), abs(delta));
+    solar_lighting = clamp01(solar_lighting + 0.08 * summer_polar);
+
+    daylight = night_floor + (1.0 - night_floor) * solar_lighting;
 
     // Eclipse darkening only affects daylight above the night baseline.
     // This makes moon shadows melt into the terminator without stacking past night darkness.
     float moon_shadow = moon_shadow_factor(n, sun_dir, s);
     float day_excess = max(0.0, daylight - night_floor);
-    daylight = night_floor + day_excess * (1.0 - moon_shadow);
+
+    // Terrain relief shading (hillshade): gentle, strongest near low sun.
+    // Keep this much weaker than the day/night baseline darkness.
+    int xi = int(x);
+    int yi = int(y);
+    int xm = (xi - 1 + W) % W;
+    int xp = (xi + 1) % W;
+    int ym = max(yi - 1, 0);
+    int yp = min(yi + 1, H - 1);
+    float h_l = Height.height[xm + yi * W];
+    float h_r = Height.height[xp + yi * W];
+    float h_d = Height.height[xi + ym * W];
+    float h_u = Height.height[xi + yp * W];
+    float dzdx = 0.5 * (h_r - h_l);
+    float dzdy = 0.5 * (h_u - h_d);
+    float slope_mag = clamp(length(vec2(dzdx, dzdy)) * 12.0, 0.0, 1.0);
+    vec3 east = vec3(-sin(lon), cos(lon), 0.0);
+    vec3 north = vec3(-sin(phi) * cos(lon), -sin(phi) * sin(lon), cos(phi));
+    vec3 sun_local = normalize(vec3(dot(sun_dir, east), dot(sun_dir, north), max(0.02, s)));
+    vec3 terrain_n = normalize(vec3(-dzdx * 11.0, -dzdy * 11.0, 1.0));
+    float relief_lambert = max(dot(terrain_n, sun_local), 0.0);
+    // Keep relief active into twilight so terrain shading blends into the terminator.
+    float twilight_relief = smoothstep(-0.20, 0.14, s);
+    float relief_shadow = (1.0 - relief_lambert)
+        * twilight_relief
+        * smoothstep(0.03, 0.50, slope_mag);
+    float low_sun_boost = 1.0 - smoothstep(0.10, 0.75, max(0.0, s));
+    float relief_strength = 0.10 + 0.20 * low_sun_boost;
+    float lit_excess = day_excess * (1.0 - moon_shadow);
+    float relief_blend = clamp(relief_strength * relief_shadow, 0.0, 0.92);
+    float daylight_lit = night_floor + lit_excess;
+    // Accumulate relief in darkness space and clamp at the night maximum.
+    float night_darkness_max = 1.0 - night_floor;
+    float base_darkness = clamp01(1.0 - daylight_lit);
+    float darkness = min(night_darkness_max, base_darkness + relief_blend);
+    daylight = 1.0 - darkness;
     
     // Apply base lighting and contrast
     float b = clamp01(PC.base + PC.contrast * daylight);

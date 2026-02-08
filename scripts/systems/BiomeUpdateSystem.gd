@@ -76,6 +76,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	var cryo_moist_buf: RID = generator.get_persistent_buffer("cryo_moist")
 	var beach_buf: RID = generator.get_persistent_buffer("beach")
 	var desert_buf: RID = generator.get_persistent_buffer("desert_noise")
+	var biome_noise_buf: RID = generator.get_persistent_buffer("shore_noise")
 	var rock_buf: RID = generator.get_persistent_buffer("rock_type")
 	var flow_buf: RID = generator.get_persistent_buffer("flow_accum")
 	var fertility_buf: RID = generator.get_persistent_buffer("fertility")
@@ -227,7 +228,8 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			desert_buf,
 			fertility_buf,
 			params,
-			biome_buf
+			biome_buf,
+			biome_noise_buf
 		)
 		if not ok_classify:
 			return {}

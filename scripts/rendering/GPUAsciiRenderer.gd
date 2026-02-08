@@ -225,6 +225,11 @@ func set_light_texture_override(tex: Texture2D) -> void:
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_light_texture_override"):
 		quad_renderer.set_light_texture_override(tex)
 
+func set_solar_params(day_of_year: float, time_of_day: float) -> void:
+	"""Provide solar cycle params for sun-angle-aware cloud shadows."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_solar_params"):
+		quad_renderer.set_solar_params(day_of_year, time_of_day)
+
 func set_river_texture_override(tex: Texture2D) -> void:
 	"""Provide a GPU-updated river texture (Texture2DRD) to the renderer."""
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_river_texture_override"):

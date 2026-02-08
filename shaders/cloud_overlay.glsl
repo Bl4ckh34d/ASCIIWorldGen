@@ -11,7 +11,10 @@ layout(std430, set = 0, binding = 1) buffer MoistBuf { float moist_norm[]; } Moi
 layout(std430, set = 0, binding = 2) buffer IsLandBuf { uint is_land[]; } Land;
 layout(std430, set = 0, binding = 3) buffer LightBuf { float light[]; } Light;
 layout(std430, set = 0, binding = 4) buffer BiomeBuf { int biome_id[]; } Biome;
-layout(std430, set = 0, binding = 5) buffer OutCloud { float cloud[]; } Cloud;
+layout(std430, set = 0, binding = 5) buffer HeightBuf { float height[]; } Height;
+layout(std430, set = 0, binding = 6) buffer WindUBuf { float wind_u[]; } WindU;
+layout(std430, set = 0, binding = 7) buffer WindVBuf { float wind_v[]; } WindV;
+layout(std430, set = 0, binding = 8) buffer OutCloud { float cloud[]; } Cloud;
 
 layout(push_constant) uniform Params {
     int width;
@@ -93,6 +96,7 @@ vec2 curl2(vec2 p){
 float biome_veg_factor(int b){
     switch (b) {
         case 10: // SWAMP
+            return 0.95;
         case 11: // TROPICAL_FOREST
         case 12: // BOREAL_FOREST
         case 13: // CONIFER_FOREST
@@ -100,35 +104,44 @@ float biome_veg_factor(int b){
         case 15: // RAINFOREST
             return 1.0;
         case 22: // FROZEN_FOREST
+            return 0.28;
         case 23: // FROZEN_MARSH
-            return 0.75;
+            return 0.22;
+        case 27: // SCORCHED_FOREST
+            return 0.08;
         case 7:  // GRASSLAND
         case 6:  // STEPPE
         case 21: // SAVANNA
+            return 0.48;
         case 29: // FROZEN_GRASSLAND
         case 30: // FROZEN_STEPPE
         case 33: // FROZEN_SAVANNA
+            return 0.16;
         case 36: // SCORCHED_GRASSLAND
         case 37: // SCORCHED_STEPPE
         case 40: // SCORCHED_SAVANNA
-            return 0.55;
+            return 0.12;
         case 16: // HILLS
         case 18: // MOUNTAINS
         case 19: // ALPINE
+            return 0.20;
         case 34: // FROZEN_HILLS
+            return 0.10;
         case 41: // SCORCHED_HILLS
-            return 0.22;
+            return 0.08;
+        case 20: // TUNDRA
+            return 0.18;
         case 2: // BEACH
-            return 0.15;
+            return 0.12;
         case 3:  // DESERT_SAND
         case 4:  // WASTELAND
         case 5:  // DESERT_ICE
         case 25: // LAVA_FIELD
         case 26: // VOLCANIC_BADLANDS
         case 28: // SALT_DESERT
-            return 0.05;
+            return 0.04;
         default:
-            return 0.18;
+            return 0.16;
     }
 }
 
@@ -151,6 +164,23 @@ void main(){
 
     float lat_signed = (float(y) / max(1.0, float(H) - 1.0) - 0.5) * 2.0;
     float abs_lat = abs(lat_signed);
+    int xi = int(x);
+    int yi = int(y);
+    int xm = (xi - 1 + W) % W;
+    int xp = (xi + 1) % W;
+    int ym = max(yi - 1, 0);
+    int yp = min(yi + 1, H - 1);
+    float h_l = Height.height[xm + yi * W];
+    float h_r = Height.height[xp + yi * W];
+    float h_d = Height.height[xi + ym * W];
+    float h_u = Height.height[xi + yp * W];
+    vec2 slope = vec2((h_r - h_l) * 0.5, (h_u - h_d) * 0.5);
+    float slope_mag = clamp(length(slope) * 14.0, 0.0, 1.0);
+    vec2 wind = vec2(WindU.wind_u[i], WindV.wind_v[i]);
+    float wind_mag = length(wind);
+    vec2 wind_dir = (wind_mag > 0.0001) ? (wind / wind_mag) : vec2(0.0, 0.0);
+    float upslope = clamp(dot(wind_dir, slope) * 20.0, 0.0, 1.0);
+    float relief_lift = smoothstep(0.08, 0.78, slope_mag + upslope * 0.65);
 
     float seed_f = float(PC.seed % 4096);
     vec2 p = vec2(float(x), float(y));
@@ -182,18 +212,26 @@ void main(){
     structure *= mix(0.70, 1.25, regime_mask);
 
     // Physical drivers for cloud formation.
-    float ocean_boost = land ? 0.0 : (0.14 + 0.18 * warm + 0.10 * night);
-    float veg_boost = land ? (0.22 * veg * (0.45 + 0.55 * warm)) : 0.0;
+    // Forested land recycles moisture (evapotranspiration), arid land suppresses cloud seed potential.
+    float ocean_boost = land ? 0.0 : (0.20 + 0.22 * warm + 0.12 * night);
+    float land_evap_supply = land ? mix(0.35, 1.30, veg) : 1.0;
+    float veg_boost = land ? (0.32 * smoothstep(0.25, 0.95, veg) * (0.35 + 0.65 * warm) * (0.35 + 0.65 * daylight)) : 0.0;
+    float arid_penalty = land ? (0.30 * (1.0 - veg) * (0.55 + 0.45 * daylight) * (0.45 + 0.55 * warm)) : 0.0;
+    float orographic_lift = land ? (0.22 * humid * relief_lift * (0.45 + 0.55 * daylight) * (0.40 + 0.60 * clamp01(wind_mag * 1.5))) : 0.0;
+    float polar_stratus = smoothstep(0.56, 0.98, abs_lat) * humidity * (0.08 + 0.18 * night + 0.10 * (1.0 - warm));
     float convective = land ? (0.18 * daylight * warm) : (0.10 * daylight * warm);
     float night_stratus = land ? (0.06 * night * humidity) : (0.16 * night * humidity);
-    float lat_dry = smoothstep(0.72, 1.0, abs_lat) * 0.12;
+    float lat_dry = smoothstep(0.72, 1.0, abs_lat) * 0.08 * (1.0 - 0.45 * humidity);
 
-    float potential = humid * (0.54 + 0.46 * warm)
+    float potential = humid * (0.54 + 0.46 * warm) * land_evap_supply
                     + ocean_boost
                     + veg_boost
+                    + orographic_lift
+                    + polar_stratus
                     + convective
                     + night_stratus
-                    - lat_dry;
+                    - lat_dry
+                    - arid_penalty;
     potential = clamp01(potential);
 
     float threshold = mix(0.66, 0.36, potential);

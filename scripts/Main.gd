@@ -3,7 +3,7 @@ extends Control
 class_name MainController
 
 const WorldConstants = preload("res://scripts/core/WorldConstants.gd")
-const HighSpeedValidator = preload("res://scripts/core/HighSpeedValidator.gd")
+const HighSpeedValidatorScript = preload("res://scripts/core/HighSpeedValidator.gd")
 
 # --- Performance toggles (turn off heavy systems for faster world map) ---
 const ENABLE_SEASONAL_CLIMATE: bool = true
@@ -198,7 +198,7 @@ var _scene_fade_tween: Tween = null
 var _pending_intro_reveal: bool = false
 var _intro_reveal_min_delay_elapsed: bool = false
 var _intro_reveal_first_tick_seen: bool = false
-var _high_speed_validator: HighSpeedValidator = HighSpeedValidator.new()
+var _high_speed_validator: HighSpeedValidator = HighSpeedValidatorScript.new()
 
 func _initialize_ui_nodes() -> void:
 	"""Initialize all UI node references with the new layout"""
@@ -1412,7 +1412,10 @@ func _generate_and_draw() -> void:
 	# as a structural foundation (coastline/mountain alignment).
 	if _plates_sys and "_build_plates" in _plates_sys:
 		_plates_sys._build_plates()
-	generator.generate()
+	var generated: PackedByteArray = generator.generate()
+	if generated.is_empty():
+		push_error("Main: world generation failed; redraw skipped to avoid invalid map state.")
+		return
 	_acclimate_generated_world()
 	_prime_startup_cloud_overrides()
 	_refresh_plate_masks_for_current_size()
@@ -1516,6 +1519,18 @@ func _prime_startup_cloud_overrides() -> void:
 		gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
 	if "light_texture_override" in generator and generator.light_texture_override:
 		gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
+	_sync_gpu_solar_params()
+
+func _sync_gpu_solar_params() -> void:
+	if not use_gpu_rendering or gpu_ascii_renderer == null or generator == null:
+		return
+	var day_of_year: float = 0.0
+	var time_of_day: float = 0.0
+	if generator.config != null:
+		day_of_year = fposmod(float(generator.config.season_phase), 1.0)
+		time_of_day = fposmod(float(generator.config.time_of_day), 1.0)
+	if gpu_ascii_renderer.has_method("set_solar_params"):
+		gpu_ascii_renderer.set_solar_params(day_of_year, time_of_day)
 
 func _refresh_plate_masks_for_current_size() -> void:
 	"""Rebuild plate masks immediately after generation so boundary overlay matches current map size."""
@@ -1549,12 +1564,13 @@ func _on_sim_tick(_dt_days: float) -> void:
 		generator._world_state.simulation_time_days = float(time_system.simulation_time_days)
 		generator._world_state.time_scale = float(time_system.time_scale)
 		generator._world_state.tick_days = float(time_system.tick_days)
-		if year_label:
-			year_label.text = "Year: %.2f" % float(time_system.get_year_float())
-		# Always update GPU light when available
-		if gpu_ascii_renderer:
-			if "light_texture_override" in generator and generator.light_texture_override:
-				gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
+	if year_label:
+		year_label.text = "Year: %.2f" % float(time_system.get_year_float())
+	# Always update GPU light when available
+	if gpu_ascii_renderer:
+		if "light_texture_override" in generator and generator.light_texture_override:
+			gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
+		_sync_gpu_solar_params()
 		
 	
 	# CRITICAL: Always run essential systems like day-night cycle, even if frame budget is tight
@@ -1578,6 +1594,7 @@ func _on_sim_tick(_dt_days: float) -> void:
 		# GPU light texture override (no CPU readback path)
 		if use_gpu_rendering and gpu_ascii_renderer and "light_texture_override" in generator and generator.light_texture_override:
 			gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
+			_sync_gpu_solar_params()
 		# GPU river texture override (no CPU readback path)
 		if use_gpu_rendering and gpu_ascii_renderer and "river_texture_override" in generator and generator.river_texture_override:
 			gpu_ascii_renderer.set_river_texture_override(generator.river_texture_override)
@@ -1632,17 +1649,17 @@ func _on_sim_tick(_dt_days: float) -> void:
 
 func _reset_high_speed_validation_state() -> void:
 	if _high_speed_validator == null:
-		_high_speed_validator = HighSpeedValidator.new()
+		_high_speed_validator = HighSpeedValidatorScript.new()
 	_high_speed_validator.reset_state()
 
 func _collect_total_system_debt_days() -> float:
 	if _high_speed_validator == null:
-		_high_speed_validator = HighSpeedValidator.new()
+		_high_speed_validator = HighSpeedValidatorScript.new()
 	return _high_speed_validator.collect_total_system_debt_days(simulation)
 
 func _run_high_speed_validation() -> void:
 	if _high_speed_validator == null:
-		_high_speed_validator = HighSpeedValidator.new()
+		_high_speed_validator = HighSpeedValidatorScript.new()
 	var result: Dictionary = _high_speed_validator.run(
 		simulation,
 		time_system,
@@ -1814,11 +1831,12 @@ func _redraw_ascii_from_current_state() -> void:
 				gpu_ascii_renderer.set_world_data_1_override(generator.world_data_1_override)
 			if "world_data_2_override" in generator:
 				gpu_ascii_renderer.set_world_data_2_override(generator.world_data_2_override)
-			# Clear optional GPU texture overrides on full redraw to avoid stale textures after reset
+			# Clear optional GPU texture overrides on full redraw to avoid stale textures after reset.
 			if "cloud_texture_override" in generator:
 				gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
 			if "light_texture_override" in generator:
 				gpu_ascii_renderer.set_light_texture_override(generator.light_texture_override)
+			_sync_gpu_solar_params()
 			if "river_texture_override" in generator:
 				gpu_ascii_renderer.set_river_texture_override(generator.river_texture_override)
 			if "biome_texture_override" in generator:

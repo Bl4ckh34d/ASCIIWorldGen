@@ -1,12 +1,12 @@
 #[compute]
 #version 450
 // File: res://shaders/light_buffer_to_tex.glsl
-// Pack light buffer into a GPU texture (R32F) for rendering without CPU readback.
+// Pack light buffer into a GPU texture (RGBA32F) for rendering without CPU readback.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) buffer LightBuf { float light[]; } Light;
-layout(r32f, set = 0, binding = 1) uniform image2D out_tex;
+layout(rgba32f, set = 0, binding = 1) uniform image2D out_tex;
 
 layout(push_constant) uniform Params {
     int width;
@@ -21,5 +21,5 @@ void main() {
     if (x >= uint(PC.width) || y >= uint(PC.height)) return;
     int i = int(x) + int(y) * PC.width;
     float c = clamp01(Light.light[i]);
-    imageStore(out_tex, ivec2(int(x), int(y)), vec4(c, 0.0, 0.0, 1.0));
+    imageStore(out_tex, ivec2(int(x), int(y)), vec4(c, c, c, 1.0));
 }

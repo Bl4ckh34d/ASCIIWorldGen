@@ -14,13 +14,17 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 	var versions: Array = file.get_version_list()
 	if versions.is_empty():
 		return null
-	var chosen_version = versions[0]
+	var chosen_version = null
 	for v in versions:
+		if v == null:
+			continue
 		if String(v) == "vulkan":
 			chosen_version = v
 			break
+		if chosen_version == null:
+			chosen_version = v
 	if chosen_version == null:
-		return null
+		chosen_version = &""
 	return file.get_spirv(chosen_version)
 
 func _ensure() -> void:
@@ -31,18 +35,32 @@ func _ensure() -> void:
 	if not _shader.is_valid():
 		var spirv: RDShaderSPIRV = _get_spirv(TERRAIN_SHADER)
 		if spirv == null:
+			push_error("TerrainCompute: terrain_gen.glsl SPIR-V unavailable")
 			return
 		_shader = _rd.shader_create_from_spirv(spirv)
+		if not _shader.is_valid():
+			push_error("TerrainCompute: failed to create terrain_gen shader from SPIR-V")
+			return
 	if not _pipeline.is_valid() and _shader.is_valid():
 		_pipeline = _rd.compute_pipeline_create(_shader)
+		if not _pipeline.is_valid():
+			push_error("TerrainCompute: failed to create terrain_gen compute pipeline")
 
-func generate(w: int, h: int, params: Dictionary) -> Dictionary:
+func generate_to_buffers(
+		w: int,
+		h: int,
+		params: Dictionary,
+		out_height_buf: RID,
+		out_land_buf: RID
+	) -> bool:
 	_ensure()
 	if not _shader.is_valid() or not _pipeline.is_valid():
-		return {}
+		return false
 	var size: int = max(0, w * h)
 	if size == 0:
-		return {}
+		return false
+	if not out_height_buf.is_valid() or not out_land_buf.is_valid():
+		return false
 	var sea_level: float = float(params.get("sea_level", 0.0))
 	var wrap_x: bool = bool(params.get("wrap_x", true))
 	var noise_x_scale: float = float(params.get("noise_x_scale", 1.0))
@@ -56,16 +74,16 @@ func generate(w: int, h: int, params: Dictionary) -> Dictionary:
 	var fbm_spirv: RDShaderSPIRV = _get_spirv(FBM_SHADER_FILE)
 	if fbm_spirv == null:
 		push_error("TerrainCompute: noise_fbm shader unavailable; CPU terrain fallback is disabled in GPU-only mode.")
-		return {}
+		return false
 	var fbm_shader: RID = _rd.shader_create_from_spirv(fbm_spirv)
 	if not fbm_shader.is_valid():
 		push_error("TerrainCompute: failed to create noise_fbm shader; CPU terrain fallback is disabled in GPU-only mode.")
-		return {}
+		return false
 	var fbm_pipeline: RID = _rd.compute_pipeline_create(fbm_shader)
 	if not fbm_pipeline.is_valid():
 		push_error("TerrainCompute: failed to create noise_fbm pipeline; CPU terrain fallback is disabled in GPU-only mode.")
 		_rd.free_rid(fbm_shader)
-		return {}
+		return false
 	# Allocate outputs
 	var out_fbm := PackedFloat32Array(); out_fbm.resize(size)
 	var out_cont := PackedFloat32Array(); out_cont.resize(size)
@@ -85,7 +103,7 @@ func generate(w: int, h: int, params: Dictionary) -> Dictionary:
 	var u_set_n := _rd.uniform_set_create(uniforms_n, fbm_shader, 0)
 	var pc_n := PackedByteArray()
 	# Order must match shader push constant struct exactly
-	var ints_n := PackedInt32Array([w, h, 1, int(params.get("seed", 0))])
+	var ints_n := PackedInt32Array([w, h, (1 if wrap_x else 0), int(params.get("seed", 0))])
 	var floats_n := PackedFloat32Array([
 		float(params.get("frequency", 0.02)),
 		max(0.002, float(params.get("frequency", 0.02)) * 0.4),
@@ -112,12 +130,6 @@ func generate(w: int, h: int, params: Dictionary) -> Dictionary:
 	_rd.compute_list_dispatch(cl_n, gx_n, gy_n, 1)
 	_rd.compute_list_end()
 	_rd.free_rid(u_set_n)
-	_rd.free_rid(fbm_pipeline)
-	_rd.free_rid(fbm_shader)
-	var out_height := PackedFloat32Array(); out_height.resize(size)
-	var out_land_u32 := PackedInt32Array(); out_land_u32.resize(size)
-	var buf_out_height := _rd.storage_buffer_create(out_height.to_byte_array().size(), out_height.to_byte_array())
-	var buf_out_land := _rd.storage_buffer_create(out_land_u32.to_byte_array().size(), out_land_u32.to_byte_array())
 
 	var uniforms: Array = []
 	var u: RDUniform
@@ -125,8 +137,8 @@ func generate(w: int, h: int, params: Dictionary) -> Dictionary:
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(buf_warp_y); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(buf_fbm); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_cont); uniforms.append(u)
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_out_height); uniforms.append(u)
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(buf_out_land); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(out_height_buf); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(out_land_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 
 	var pc := PackedByteArray()
@@ -148,26 +160,16 @@ func generate(w: int, h: int, params: Dictionary) -> Dictionary:
 	_rd.compute_list_set_push_constant(cl, pc, pc.size())
 	_rd.compute_list_dispatch(cl, gx, gy, 1)
 	_rd.compute_list_end()
-	# On main device, no explicit submit/sync
-
-	var h_bytes := _rd.buffer_get_data(buf_out_height)
-	var land_bytes := _rd.buffer_get_data(buf_out_land)
-	var height_out: PackedFloat32Array = h_bytes.to_float32_array()
-	var land_u32: PackedInt32Array = land_bytes.to_int32_array()
-	var is_land := PackedByteArray()
-	is_land.resize(size)
-	for i2 in range(size):
-		is_land[i2] = 1 if (i2 < land_u32.size() and land_u32[i2] != 0) else 0
 
 	_rd.free_rid(u_set)
 	_rd.free_rid(buf_warp_x)
 	_rd.free_rid(buf_warp_y)
 	_rd.free_rid(buf_fbm)
 	_rd.free_rid(buf_cont)
-	_rd.free_rid(buf_out_height)
-	_rd.free_rid(buf_out_land)
+	_rd.free_rid(fbm_pipeline)
+	_rd.free_rid(fbm_shader)
+	return true
 
-	return {
-		"height": height_out,
-		"is_land": is_land,
-	}
+func generate(_w: int, _h: int, _params: Dictionary) -> Dictionary:
+	push_error("TerrainCompute.generate() is disabled in GPU-only mode; use generate_to_buffers().")
+	return {}

@@ -38,12 +38,12 @@ func blend_to_buffer(
 		h: int,
 		old_biome_buf: RID,
 		new_biome_buf: RID,
-		out_biome_buf: RID,
-		step_general: float,
-		step_cryosphere: float,
-		seed: int,
-		epoch: int
-	) -> bool:
+			out_biome_buf: RID,
+			step_general: float,
+			step_cryosphere: float,
+			rng_seed: int,
+			epoch: int
+		) -> bool:
 	_ensure()
 	if not _pipeline.is_valid():
 		return false
@@ -58,7 +58,7 @@ func blend_to_buffer(
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(out_biome_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
 	var pc := PackedByteArray()
-	var ints := PackedInt32Array([w, h, seed, epoch])
+	var ints := PackedInt32Array([w, h, rng_seed, epoch])
 	var floats := PackedFloat32Array([
 		clamp(step_general, 0.0, 1.0),
 		clamp(step_cryosphere, 0.0, 1.0),
@@ -82,4 +82,3 @@ func blend_to_buffer(
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
 	return true
-

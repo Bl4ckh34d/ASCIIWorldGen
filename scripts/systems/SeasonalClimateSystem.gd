@@ -36,11 +36,11 @@ func tick(_dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	# Compute season phase from world time if available; otherwise no-op
 	var season_phase: float = 0.0
 	if world != null:
-		var sim_days := 0.0
+		var sim_days_for_phase: float = 0.0
 		if "simulation_time_days" in world:
-			sim_days = float(world.simulation_time_days)
+			sim_days_for_phase = float(world.simulation_time_days)
 		var days_per_year = time_system.get_days_per_year() if time_system and "get_days_per_year" in time_system else 365.0
-		season_phase = fposmod(sim_days / days_per_year, 1.0)
+		season_phase = fposmod(sim_days_for_phase / days_per_year, 1.0)
 	# Update seasonal and diurnal phases/amps
 	var time_of_day: float = 0.0
 	var sim_days: float = 0.0
@@ -84,10 +84,10 @@ func _apply_paleoclimate(sim_days: float) -> void:
 		# Respect user/runtime edits to base temp offset (slider, presets, etc.).
 		if abs(current_offset - _paleo_last_applied_offset) > 0.0001:
 			_paleo_base_offset = current_offset
-	var seed: int = int(cfg.rng_seed)
-	var phase0: float = _hash11(float(seed) * 0.137 + 11.7) * TAU
-	var phase1: float = _hash11(float(seed) * 0.173 + 23.4) * TAU
-	var phase2: float = _hash11(float(seed) * 0.211 + 37.9) * TAU
+	var rng_seed: int = int(cfg.rng_seed)
+	var phase0: float = _hash11(float(rng_seed) * 0.137 + 11.7) * TAU
+	var phase1: float = _hash11(float(rng_seed) * 0.173 + 23.4) * TAU
+	var phase2: float = _hash11(float(rng_seed) * 0.211 + 37.9) * TAU
 	var cyc0: float = sin(sim_days / PALEO_PRIMARY_PERIOD_DAYS * TAU + phase0) * PALEO_PRIMARY_AMP_C
 	var cyc1: float = sin(sim_days / PALEO_SECONDARY_PERIOD_DAYS * TAU + phase1) * PALEO_SECONDARY_AMP_C
 	var drift_n: float = _value_noise_1d(sim_days / PALEO_DRIFT_PERIOD_DAYS + phase2 * 0.15) * 2.0 - 1.0
@@ -155,9 +155,10 @@ func _update_light_field(world: Object) -> void:
 	if "ensure_persistent_buffers" in generator:
 		generator.ensure_persistent_buffers(false)
 	var light_buf: RID = generator.get_persistent_buffer("light") if "get_persistent_buffer" in generator else RID()
-	if not light_buf.is_valid():
+	var height_buf: RID = generator.get_persistent_buffer("height") if "get_persistent_buffer" in generator else RID()
+	if not light_buf.is_valid() or not height_buf.is_valid():
 		return
-	var ok_gpu: bool = climate_compute.evaluate_light_field_gpu(w, h, light_params, light_buf)
+	var ok_gpu: bool = climate_compute.evaluate_light_field_gpu(w, h, light_params, height_buf, light_buf)
 	if ok_gpu and _light_tex:
 		var tex: Texture2D = _light_tex.update_from_buffer(w, h, light_buf)
 		if tex and "set_light_texture_override" in generator:

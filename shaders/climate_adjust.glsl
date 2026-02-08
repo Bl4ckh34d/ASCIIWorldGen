@@ -18,6 +18,7 @@ layout(std430, set = 0, binding = 6) buffer FlowVBuf { float flow_v_data[]; } Fl
 layout(std430, set = 0, binding = 7) buffer OutTempBuf { float out_temp[]; } OutTemp;
 layout(std430, set = 0, binding = 8) buffer OutMoistBuf { float out_moist[]; } OutMoist;
 layout(std430, set = 0, binding = 9) buffer OutPrecipBuf { float out_precip[]; } OutPrecip;
+layout(std430, set = 0, binding = 10) buffer LightBuf { float light_data[]; } Light;
 
 layout(push_constant) uniform Params {
     int width;
@@ -80,44 +81,67 @@ void main() {
 
     float lat_norm_signed = 0.5 - (float(y) / max(1.0, float(H) - 1.0)); // -0.5..+0.5 (north positive)
     float lat = abs(lat_norm_signed) * 2.0;
-    // Apply elevation cooling only above sea level (temperature-neutral below sea level)
-    // Anchored baseline: approximate by median/mean land height pre-computed on CPU -- here we use a neutral 0.0 and rely on CPU path for parity,
-    // but we clamp relative elevation to a narrow band to avoid global freezes when sea level changes.
-    // For GPU parity, keep sensitivity smaller to reduce visual jumps.
+    bool land_px = (IsLand.is_land_data[i] != 0u);
+    float local_time_solar = fract(PC.time_of_day + float(x) / float(max(1, W)));
+
+    // Base climatology (latitude + elevation + seed noise) used as a stabilizing background.
     float rel_elev = max(0.0, Height.height_data[i] - 0.0);
     float elev_cool = clamp(rel_elev * 0.6, 0.0, 1.0);
-    // Keep only a gentle zonal modulation to avoid artificial latitude striping.
     float zonal = 0.5 + 0.5 * sin(6.28318 * (float(y) / float(H) + 0.11));
     float u = 1.0 - lat;
     float t_lat = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6);
-    bool land_px = (IsLand.is_land_data[i] != 0u);
-    float lat_amp = land_px ? 1.0 : 0.82; // damp lat gradient over ocean
-
-    float local_time_solar = fract(PC.time_of_day + float(x) / float(max(1, W)));
-    // Keep baseline climate zone logic latitude-driven (cold poles / warm equator),
-    // with only limited day/night modulation applied later.
+    float lat_amp = land_px ? 1.0 : 0.82;
     float t_base = t_lat * 0.82 * lat_amp + zonal * 0.06 - elev_cool * 0.9;
     float t_noise = 0.18 * TempNoise.temp_noise_data[i];
-    float t_raw = t_base + t_noise;
+    float t_climatology = clamp01(t_base + t_noise);
+
+    // Sun-driven forcing model (same geometry intent as cycle_apply/day_night_light).
+    const float PI = 3.14159265359;
+    const float TAU = 6.28318530718;
+    const float SOLAR_TILT = radians(30.0);
+    float phi = lat_norm_signed * PI;
+    float decl = SOLAR_TILT * cos(TAU * PC.season_phase);
+    float hour_angle = TAU * local_time_solar;
+    float sun_dot = sin(phi) * sin(decl) + cos(phi) * cos(decl) * cos(hour_angle);
+    float insol_inst = clamp01(max(0.0, sun_dot));
+    float phi_safe = clamp(phi, -1.55334, 1.55334);
+    float cos_h0 = -tan(phi_safe) * tan(decl);
+    float day_fraction = 0.5;
+    if (cos_h0 >= 1.0) {
+        day_fraction = 0.0;
+    } else if (cos_h0 <= -1.0) {
+        day_fraction = 1.0;
+    } else {
+        day_fraction = acos(cos_h0) / PI;
+    }
+    float daylight = smoothstep(-0.05, 0.05, sun_dot);
+    float transition_strength = 1.0 - smoothstep(0.90, 1.10, abs(cos_h0));
+    float day_norm = max(0.08, max(day_fraction, 1.0 - day_fraction));
+    float diurnal_driver = clamp((daylight - day_fraction) / day_norm, -1.0, 1.0) * transition_strength;
 
     float dc_norm = clamp(Dist.dist_data[i] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
-    float cont_gain = land_px ? 0.8 : 0.2; // much smaller anomalies over open ocean
-    float factor = (1.0 + cont_gain * dc_norm);
-    float t = clamp01(t_base + (t_raw - t_base) * factor);
-    // Seasonal term: amplitude grows with latitude and continentality; damped over oceans
     float amp_lat = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat, 1.2));
     float cont_amp = land_px ? (0.2 + 0.8 * dc_norm) : 0.0;
     float amp_cont = mix(PC.season_ocean_damp, 1.0, cont_amp);
-    // Smooth hemispheric opposition with equatorial fade avoids hard equator cuts.
-    float hemi = clamp(lat_norm_signed * 2.0, -1.0, 1.0);
-    float equator_fade = smoothstep(0.03, 0.20, lat);
-    float season = amp_lat * amp_cont * cos(6.28318 * PC.season_phase) * hemi * equator_fade;
-    // Diurnal term: latitude and ocean damped
+    float season_driver = clamp((day_fraction - 0.5) * 2.0, -1.0, 1.0);
+    float season = amp_lat * amp_cont * season_driver * 0.75;
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat, 1.2));
-    float amp_cont_d = land_px ? 1.0 : PC.diurnal_ocean_damp;
-    float local_time = local_time_solar;
-    float diurnal = amp_lat_d * amp_cont_d * cos(6.28318 * local_time) * 0.28;
-    t = clamp01(t + season + diurnal);
+    float coast_dist01 = clamp(dc_norm, 0.0, 1.0);
+    float land_diurnal_gain = mix(0.55, 1.35, coast_dist01);
+    float amp_cont_d = land_px ? land_diurnal_gain : PC.diurnal_ocean_damp;
+    float diurnal = amp_lat_d * amp_cont_d * diurnal_driver;
+
+    float cryo_hint = smoothstep(0.36, 0.14, t_climatology);
+    float albedo = mix(0.20, 0.58, cryo_hint);
+    float noon_incidence = clamp01(max(0.0, cos(phi - decl)));
+    float mean_energy = day_fraction * noon_incidence;
+    float solar_energy = clamp01(mix(mean_energy, insol_inst, 0.72));
+    float light_local = clamp01(Light.light_data[i]);
+    float relief_shadow_hint = max(0.0, insol_inst - light_local);
+    float relief_temp_cool = 0.035 * relief_shadow_hint * smoothstep(0.06, 0.40, insol_inst) * (land_px ? 1.0 : 0.45);
+    float t_solar = clamp01(pow(solar_energy, 0.72) * (1.0 - 0.42 * albedo) + 0.06 + season + diurnal - relief_temp_cool);
+    float cont_blend = land_px ? mix(0.58, 0.88, coast_dist01) : 0.42;
+    float t = clamp01(mix(t_climatology, t_solar, cont_blend));
     // FIXED: Reduce extreme temperature scaling to prevent lava everywhere
     // Apply gentler temperature transformation to avoid extreme artifacts
     float temp_offset = clamp(PC.temp_base_offset, -0.3, 0.3);  // Limit offset

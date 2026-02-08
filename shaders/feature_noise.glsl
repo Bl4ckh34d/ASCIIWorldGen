@@ -18,21 +18,14 @@ layout(push_constant) uniform Params {
     float shore_freq;
 } PC;
 
-// Hash utilities (tileable along X by modulo width)
-uint hash_u32(uvec2 p){
-    p = p * uvec2(1664525u, 1013904223u) + uvec2(uint(PC.seed), 374761393u);
-    p ^= (p.yx >> 16);
-    p *= uvec2(2246822519u, 3266489917u);
-    p ^= (p.yx >> 13);
-    p *= uvec2(668265263u, 2246822519u);
-    p ^= (p.yx >> 16);
-    return p.x ^ p.y;
-}
-
+// Hash utilities (tileable along X by modulo width, stable for negative coords)
 float hash_f(vec2 p){
-    uvec2 pi = uvec2(p);
-    pi.x = pi.x % uint(max(1, PC.width));
-    return float(hash_u32(pi)) * (1.0 / 4294967296.0);
+    float xf = floor(p.x);
+    float yf = floor(p.y);
+    float w = max(1.0, float(PC.width));
+    xf = mod(mod(xf, w) + w, w);
+    vec2 q = vec2(xf, yf) + float(PC.seed) * vec2(0.06711056, 0.00583715);
+    return fract(sin(dot(q, vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
 vec2 grad2(vec2 p){
@@ -127,4 +120,3 @@ void main(){
     float sv = mix(sv0, sv1, t);
     Shelf.shelf_value[i] = clamp(sv, 0.0, 1.0);
 }
-

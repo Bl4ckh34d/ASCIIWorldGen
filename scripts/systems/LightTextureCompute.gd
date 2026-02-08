@@ -1,7 +1,7 @@
 # File: res://scripts/systems/LightTextureCompute.gd
 extends RefCounted
 
-# Packs a light buffer into an RD texture for GPU-only rendering.
+	# Packs a light buffer into an RD texture for GPU-only rendering.
 
 var LIGHT_TEX_SHADER: RDShaderFile = load("res://shaders/light_buffer_to_tex.glsl")
 
@@ -45,7 +45,8 @@ func _ensure_texture(w: int, h: int) -> void:
 	_width = w
 	_height = h
 	var fmt := RDTextureFormat.new()
-	fmt.format = RenderingDevice.DATA_FORMAT_R32_SFLOAT
+	# Use RGBA32F for robust sampling across backends (avoids single-channel artifacts).
+	fmt.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
 	fmt.width = w
 	fmt.height = h
 	fmt.depth = 1

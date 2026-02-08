@@ -12,6 +12,7 @@ layout(std430, set = 0, binding = 0) buffer TempBuf { float temp_in[]; } Temp;
 layout(std430, set = 0, binding = 1) buffer IsLandBuf { uint is_land_data[]; } IsLand;
 layout(std430, set = 0, binding = 2) buffer DistBuf { float dist_data[]; } Dist;
 layout(std430, set = 0, binding = 3) buffer TempOutBuf { float temp_out[]; } OutT;
+layout(std430, set = 0, binding = 4) buffer LightBuf { float light_data[]; } Light;
 
 layout(push_constant) uniform Params {
     int width;
@@ -50,46 +51,69 @@ void main(){
     float dc_norm = clamp(Dist.dist_data[i] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
     float cont_amp = land ? (0.2 + 0.8 * dc_norm) : 0.0;
 
-    // Amplitudes by latitude and continentality / ocean damp
+    // Sun-driven forcing model:
+    // temperature follows incoming solar energy (latitude + season + actual daylight)
+    // and is stabilized by atmospheric/ocean thermal inertia.
+    const float PI = 3.14159265359;
+    const float TAU = 6.28318530718;
+    const float SOLAR_TILT = radians(30.0); // Keep in sync with day_night_light.glsl
+
+    float local_time = fract(PC.time_of_day + float(x) / float(max(1, W)));
+    float phi = lat_norm_signed * PI;
+    float decl = SOLAR_TILT * cos(TAU * PC.season_phase);
+    float hour_angle = TAU * local_time;
+    float sun_dot = sin(phi) * sin(decl) + cos(phi) * cos(decl) * cos(hour_angle);
+    float insol_inst = clamp01(max(0.0, sun_dot));
+
+    // Day-length fraction controls seasonal energy and disables diurnal cycle during
+    // continuous polar day/night.
+    float phi_safe = clamp(phi, -1.55334, 1.55334);
+    float cos_h0 = -tan(phi_safe) * tan(decl);
+    float day_fraction = 0.5;
+    if (cos_h0 >= 1.0) {
+        day_fraction = 0.0;
+    } else if (cos_h0 <= -1.0) {
+        day_fraction = 1.0;
+    } else {
+        day_fraction = acos(cos_h0) / PI;
+    }
+    float daylight = smoothstep(-0.05, 0.05, sun_dot);
+    float transition_strength = 1.0 - smoothstep(0.90, 1.10, abs(cos_h0));
+    float day_norm = max(0.08, max(day_fraction, 1.0 - day_fraction));
+    float diurnal_driver = clamp((daylight - day_fraction) / day_norm, -1.0, 1.0) * transition_strength;
+
+    // Seasonal and diurnal amplitudes retain continentality behavior, but are now
+    // driven by real sunlight geometry.
     float amp_lat = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat_abs, 1.2));
     float amp_cont = mix(PC.season_ocean_damp, 1.0, cont_amp);
-
-    // Smooth hemispheric opposition (no hard equator seam).
-    float hemi = clamp(lat_norm_signed * 2.0, -1.0, 1.0);
-    float equator_fade = smoothstep(0.03, 0.20, lat_abs);
-    float season_driver = cos(6.2831853 * PC.season_phase);
-    float dT_season = amp_lat * amp_cont * season_driver * hemi * equator_fade;
+    float season_driver = clamp((day_fraction - 0.5) * 2.0, -1.0, 1.0);
+    float dT_season = amp_lat * amp_cont * season_driver * 0.75;
 
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat_abs, 1.2));
-    // Continental interiors (farther from coast) get stronger day/night swing.
     float coast_dist01 = clamp(dc_norm, 0.0, 1.0);
     float land_diurnal_gain = mix(0.55, 1.35, coast_dist01);
     float amp_cont_d = land ? land_diurnal_gain : PC.diurnal_ocean_damp;
-    float local_time = fract(PC.time_of_day + float(x) / float(max(1, W)));
-    float dT_diurnal = amp_lat_d * amp_cont_d * cos(6.2831853 * local_time);
+    float dT_diurnal = amp_lat_d * amp_cont_d * diurnal_driver;
 
-    float t = Temp.temp_in[i];
-    float t_out = clamp01(t + dT_season + dT_diurnal);
-
-    // Insolation-driven relaxation (energy-density proxy from solar zenith angle).
-    const float PI = 3.14159265359;
-    const float TAU = 6.28318530718;
-    float phi = lat_norm_signed * PI;
-    float decl = radians(23.44) * cos(TAU * PC.season_phase);
-    float hour_angle = TAU * local_time;
-    float sun_dot = sin(phi) * sin(decl) + cos(phi) * cos(decl) * cos(hour_angle);
-    float insol = clamp01(max(0.0, sun_dot));
-
-    // Simple albedo proxy: brighter surfaces (snow/ice) hold lower equilibrium temps.
-    float cryo_hint = smoothstep(0.36, 0.14, t_out);
+    float t_prev = Temp.temp_in[i];
+    float cryo_hint = smoothstep(0.36, 0.14, t_prev);
     float albedo = mix(0.20, 0.58, cryo_hint);
-    float eq_temp = clamp01(pow(insol, 0.72) * (1.0 - 0.42 * albedo) + 0.06);
 
-    // Thermal inertia: oceans react slower than continental interiors.
-    float ocean_inertia = mix(0.012, 0.030, clamp(dc_norm, 0.0, 1.0));
-    float land_inertia = mix(0.022, 0.060, clamp(dc_norm, 0.0, 1.0));
-    float inertia = land ? land_inertia : ocean_inertia;
-    t_out = clamp01(mix(t_out, eq_temp, inertia));
+    // Blend instantaneous insolation (day/night shadow) with day-length energy budget.
+    float noon_incidence = clamp01(max(0.0, cos(phi - decl)));
+    float mean_energy = day_fraction * noon_incidence;
+    float solar_energy = clamp01(mix(mean_energy, insol_inst, 0.72));
+    float light_local = clamp01(Light.light_data[i]);
+    float relief_shadow_hint = max(0.0, insol_inst - light_local);
+    float relief_temp_cool = 0.035 * relief_shadow_hint * smoothstep(0.06, 0.40, insol_inst) * (land ? 1.0 : 0.45);
+    float eq_temp = clamp01(pow(solar_energy, 0.72) * (1.0 - 0.42 * albedo) + 0.06);
+    eq_temp = clamp01(eq_temp + dT_season + dT_diurnal - relief_temp_cool);
+
+    // Thermal response per climate tick (ocean slower, interior land faster).
+    float ocean_response = mix(0.0012, 0.0040, coast_dist01);
+    float land_response = mix(0.0030, 0.0120, coast_dist01);
+    float response = land ? land_response : ocean_response;
+    float t_out = clamp01(mix(t_prev, eq_temp, response));
 
     // Re-anchor fast-path output against the baseline temperature buffer.
     // This lets long-term paleoclimate drift (warm/ice ages) show up without

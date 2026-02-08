@@ -25,6 +25,8 @@ uniform float sea_level = 0.0;
 uniform float cloud_shadow_strength = 0.25;
 uniform float cloud_light_strength = 0.25;
 uniform vec2 cloud_shadow_offset = vec2(1.5, 1.0);
+uniform float day_of_year = 0.0;
+uniform float time_of_day = 0.0;
 uniform int use_glyphs = 0;
 uniform int bedrock_only_mode = 0;
 
@@ -48,6 +50,8 @@ const vec3 BEACH_COLOR = vec3(1.0, 0.98, 0.90);
 const vec3 ICE_COLOR = vec3(0.85, 0.90, 0.95);
 // Dark basalt-like lava field appearance (cool crust), not bright red.
 const vec3 LAVA_COLOR = vec3(0.14, 0.13, 0.12);
+const float SOLAR_TILT = 0.5235987756; // 30 deg
+const float NIGHT_BRIGHTNESS_FLOOR = 0.14;
 
 vec2 get_atlas_uv(float char_index, vec2 char_uv) {
     // Calculate grid position from character index
@@ -168,6 +172,11 @@ float _lake_neighbor_count(vec2 cell) {
     return c;
 }
 
+vec3 _dir_from_lon_lat(float lon, float lat) {
+    float cl = cos(lat);
+    return vec3(cl * cos(lon), cl * sin(lon), sin(lat));
+}
+
 void fragment() {
     if (debug_mode == 1) {
         // Debug gradient to verify shader execution (use SCREEN_UV to avoid UV=0 issues)
@@ -218,7 +227,9 @@ void fragment() {
     float biome_id = biome_id_norm * 255.0;
     float char_index = char_index_norm * 255.0;
     
-    bool is_land_tile = (is_land >= 0.5);
+    // Robustness: in GPU-only mode, if packed land-mask texture is missing/stale,
+    // infer land from relief so terrain does not disappear into full-ocean rendering.
+    bool is_land_tile = (is_land >= 0.5) || (height_raw > sea_level);
     bool bedrock_mode = (bedrock_only_mode != 0);
     bool hide_ocean_in_bedrock = (bedrock_mode && !is_land_tile);
     bool lake_here = (lake_flag > 0.5);
@@ -285,18 +296,54 @@ void fragment() {
         }
     }
 
-    // Cloud shadows (sample offset) + cloud brightening
+    // Cloud shadows: sun-angle aware projection.
+    // Near low sun angles (sunrise/sunset), shadows lengthen.
+    float light_mod = light;
     if (cloud_shadow_strength > 0.0) {
-        vec2 shadow_cell = _wrap_cell_x(world_cell + cloud_shadow_offset);
+        float lon = TAU * (world_cell.x / max(1.0, map_dimensions.x));
+        float lat_norm_signed = 0.5 - (world_cell.y / max(1.0, map_dimensions.y - 1.0));
+        float phi = lat_norm_signed * PI;
+        float decl = SOLAR_TILT * cos(TAU * day_of_year);
+        float sun_lon = -TAU * time_of_day;
+        vec3 n = _dir_from_lon_lat(lon, phi);
+        vec3 sun_dir = _dir_from_lon_lat(sun_lon, decl);
+        float sun_dot = dot(n, sun_dir);
+        // Keep cloud shadows visible across twilight instead of popping at the terminator.
+        float shadow_vis = smoothstep(-0.24, 0.18, sun_dot);
+        float shadow_geom_blend = smoothstep(-0.08, 0.28, sun_dot);
+
+        vec3 east = vec3(-sin(lon), cos(lon), 0.0);
+        vec3 north = vec3(-sin(phi) * cos(lon), -sin(phi) * sin(lon), cos(phi));
+        vec2 sun_tan = vec2(dot(sun_dir, east), dot(sun_dir, north));
+        vec2 shadow_dir = vec2(-sun_tan.x, sun_tan.y); // map coords: +x east, +y south
+        float dir_len = length(shadow_dir);
+        if (dir_len < 0.001) {
+            shadow_dir = normalize(cloud_shadow_offset + vec2(0.0001, 0.0001));
+        } else {
+            shadow_dir /= dir_len;
+        }
+        float low_sun = 1.0 - smoothstep(0.10, 0.75, max(0.0, sun_dot));
+        float base_len = max(0.75, length(cloud_shadow_offset));
+        float shadow_len = clamp(base_len * mix(0.7, 4.5, low_sun), 0.5, 10.0);
+        vec2 dynamic_offset = shadow_dir * shadow_len;
+        vec2 offset_cells = mix(cloud_shadow_offset, dynamic_offset, shadow_geom_blend);
+        // Sample cloud from the up-sun side of this ground cell so cast shadows
+        // project away from the sun (toward the day/night boundary at low sun).
+        vec2 shadow_cell = _wrap_cell_x(world_cell - offset_cells);
         vec2 shadow_uv = (shadow_cell + vec2(0.5)) / map_dimensions;
         float cloud_shadow = (use_cloud_texture != 0) ? texture(cloud_texture, shadow_uv).r : texture(world_data_3, shadow_uv).b;
-        base_color *= (1.0 - cloud_shadow * cloud_shadow_strength);
+        float cloud_shadow_effect = cloud_shadow * cloud_shadow_strength * shadow_vis;
+        // Add cloud shadow in darkness space and clamp at night-floor darkness.
+        float dark_base = clamp(1.0 - light_mod, 0.0, 1.0);
+        float dark_cap = 1.0 - NIGHT_BRIGHTNESS_FLOOR;
+        float dark_out = min(dark_cap, dark_base + cloud_shadow_effect);
+        light_mod = 1.0 - dark_out;
     }
     if (cloud_cov > 0.0) {
         base_color = mix(base_color, vec3(1.0), cloud_cov * cloud_light_strength);
     }
 
-    vec3 lit_color = base_color * light;
+    vec3 lit_color = base_color * light_mod;
     
     // Apply hover overlay as a 7-tile crosshair (center + 3 tiles each side),
     // inverting the underlying tile color for high contrast without fixed tint.

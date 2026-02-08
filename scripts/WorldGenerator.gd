@@ -7,16 +7,13 @@ var ClimateNoise = load("res://scripts/generation/ClimateNoise.gd")
 const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 const WorldState = preload("res://scripts/core/WorldState.gd")
 const FeatureNoiseCache = preload("res://scripts/systems/FeatureNoiseCache.gd")
-const DistanceTransform = preload("res://scripts/systems/DistanceTransform.gd")
 const DistanceTransformCompute = preload("res://scripts/systems/DistanceTransformCompute.gd")
-const ContinentalShelf = preload("res://scripts/systems/ContinentalShelf.gd")
 const ContinentalShelfCompute = preload("res://scripts/systems/ContinentalShelfCompute.gd")
 const ClimatePostCompute = preload("res://scripts/systems/ClimatePostCompute.gd")
 const PoolingSystem = preload("res://scripts/systems/PoolingSystem.gd")
 const ClimateBase = preload("res://scripts/systems/ClimateBase.gd")
 const ClimateAdjustCompute = preload("res://scripts/systems/ClimateAdjustCompute.gd")
 const BiomeCompute = preload("res://scripts/systems/BiomeCompute.gd")
-var BiomePost = load("res://scripts/systems/BiomePost.gd")
 const BiomePostCompute = preload("res://scripts/systems/BiomePostCompute.gd")
 const LithologyCompute = preload("res://scripts/systems/LithologyCompute.gd")
 const FertilityLithologyCompute = preload("res://scripts/systems/FertilityLithologyCompute.gd")
@@ -24,7 +21,6 @@ var FlowErosionSystem = load("res://scripts/systems/FlowErosionSystem.gd")
 const FlowCompute = preload("res://scripts/systems/FlowCompute.gd")
 const RiverCompute = preload("res://scripts/systems/RiverCompute.gd")
 const RiverPostCompute = preload("res://scripts/systems/RiverPostCompute.gd")
-const RiverMeanderCompute = preload("res://scripts/systems/RiverMeanderCompute.gd")
 const RiverFreezeCompute = preload("res://scripts/systems/RiverFreezeCompute.gd")
 const VolcanismCompute = preload("res://scripts/systems/VolcanismCompute.gd")
 const CloudOverlayCompute = preload("res://scripts/systems/CloudOverlayCompute.gd")
@@ -32,7 +28,6 @@ const LandMaskCompute = preload("res://scripts/systems/LandMaskCompute.gd")
 const LakeLabelCompute = preload("res://scripts/systems/LakeLabelCompute.gd")
 const DepressionFillCompute = preload("res://scripts/systems/DepressionFillCompute.gd")
 const LakeLabelFromMaskCompute = preload("res://scripts/systems/LakeLabelFromMaskCompute.gd")
-const PourPointReduceCompute = preload("res://scripts/systems/PourPointReduceCompute.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 const WorldData1TextureCompute = preload("res://scripts/systems/WorldData1TextureCompute.gd")
 const WorldData2TextureCompute = preload("res://scripts/systems/WorldData2TextureCompute.gd")
@@ -53,7 +48,6 @@ var _climate_post_compute: Object = null
 var _volcanism_compute: Object = null
 var _cloud_overlay_compute: Object = null
 var _river_post_compute: Object = null
-var _river_meander_compute: Object = null
 var _river_freeze_compute: Object = null
 
 class Config:
@@ -105,8 +99,8 @@ class Config:
 	var diurnal_ocean_damp: float = 0.28
 	var time_of_day: float = 0.0
 	# Day-night visual settings
-	var day_night_contrast: float = 0.75
-	var day_night_base: float = 0.25
+	var day_night_contrast: float = 0.86
+	var day_night_base: float = 0.14
 	# Intro-scene moon system propagated into world light field
 	var moon_count: int = 0
 	var moon_seed: float = 0.0
@@ -135,10 +129,6 @@ class Config:
 var config := Config.new()
 var debug_parity: bool = false
 const CLIMATE_CPU_MIRROR_MAX_CELLS: int = 250000
-
-var _noise := FastNoiseLite.new()
-var _warp_noise := FastNoiseLite.new()
-var _shore_noise := FastNoiseLite.new()
 
 var last_height: PackedFloat32Array = PackedFloat32Array()
 var last_height_final: PackedFloat32Array = PackedFloat32Array()
@@ -228,7 +218,6 @@ func _init() -> void:
 	config.rng_seed = randi()
 	biome_phase = _compute_biome_phase(config.rng_seed)
 	_apply_seeded_physical_defaults(true)
-	_setup_noises()
 	_setup_temperature_extremes()
 	# Initialize refactor scaffolding (kept unused in behavior for now)
 	_world_state = WorldState.new()
@@ -352,7 +341,6 @@ func apply_config(dict: Dictionary) -> void:
 	if seed_changed:
 		biome_phase = _compute_biome_phase(config.rng_seed)
 	_apply_seeded_physical_defaults(seed_changed)
-	_setup_noises()
 	# Keep temperature extremes stable across partial config updates.
 	# Re-roll only on explicit seed changes when caller did not provide temperature values.
 	var caller_set_temp_range: bool = dict.has("temp_min_c") or dict.has("temp_max_c")
@@ -390,31 +378,6 @@ func _apply_seeded_physical_defaults(force: bool = false) -> void:
 	config.diurnal_ocean_damp = clamp(0.28 + rng.randf_range(-0.06, 0.06), 0.16, 0.40)
 	_physical_defaults_seed = int(config.rng_seed)
 
-func _setup_noises() -> void:
-	_noise.seed = config.rng_seed
-	_noise.noise_type = FastNoiseLite.TYPE_PERLIN
-	_noise.frequency = config.frequency
-	_noise.fractal_type = FastNoiseLite.FRACTAL_FBM
-	_noise.fractal_octaves = config.octaves
-	_noise.fractal_lacunarity = config.lacunarity
-	_noise.fractal_gain = config.gain
-
-	_warp_noise.seed = config.rng_seed ^ 0x9E3779B9
-	_warp_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	_warp_noise.frequency = config.frequency * 1.5
-	_warp_noise.fractal_type = FastNoiseLite.FRACTAL_FBM
-	_warp_noise.fractal_octaves = 3
-	_warp_noise.fractal_lacunarity = 2.0
-	_warp_noise.fractal_gain = 0.5
-
-	_shore_noise.seed = config.rng_seed ^ 0xA5F1523D
-	_shore_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	_shore_noise.frequency = max(0.01, config.frequency * 4.0)
-	_shore_noise.fractal_type = FastNoiseLite.FRACTAL_FBM
-	_shore_noise.fractal_octaves = 3
-	_shore_noise.fractal_lacunarity = 2.0
-	_shore_noise.fractal_gain = 0.5
-
 func _setup_temperature_extremes() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(config.rng_seed) ^ 0x1234ABCD
@@ -423,9 +386,9 @@ func _setup_temperature_extremes() -> void:
 	# Keep lava threshold independent of current extremes; enforce a hard minimum of 120 degC
 	config.lava_temp_threshold_c = max(120.0, config.lava_temp_threshold_c)
 
-func _compute_biome_phase(seed: int) -> float:
+func _compute_biome_phase(rng_seed: int) -> float:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = int(seed) ^ 0xB16B00B5
+	rng.seed = int(rng_seed) ^ 0xB16B00B5
 	return rng.randf()
 
 func _lake_fill_iterations(w: int, h: int, ocean_frac: float) -> int:
@@ -467,6 +430,24 @@ func _clamp_sea_level_for_min_ocean(height_values: PackedFloat32Array, desired_s
 	if result < min_level:
 		result = min_level
 	return result
+
+func _height_mirror_has_signal(height_values: PackedFloat32Array) -> bool:
+	if height_values.is_empty():
+		return false
+	var min_h: float = 1e20
+	var max_h: float = -1e20
+	for hv in height_values:
+		if hv < min_h:
+			min_h = hv
+		if hv > max_h:
+			max_h = hv
+	return (max_h - min_h) > 0.0001
+
+func _estimate_ocean_fraction_from_sea_level(sea_level: float) -> float:
+	var est: float = 0.5 + 0.45 * clamp(sea_level, -1.0, 1.0)
+	if config.min_ocean_fraction > 0.0:
+		est = max(est, config.min_ocean_fraction)
+	return clamp(est, 0.02, 0.98)
 
 func _compute_river_seed_threshold(
 		_flow_accum: PackedFloat32Array,
@@ -628,18 +609,58 @@ func _evaluate_climate_gpu_only(
 		var dist_buf: RID = get_persistent_buffer("distance")
 		var temp_buf: RID = get_persistent_buffer("temperature")
 		var moist_buf: RID = get_persistent_buffer("moisture")
+		var light_buf: RID = get_persistent_buffer("light")
 		var precip_buf: RID = ensure_gpu_storage_buffer("precip", size * 4)
-		if hbuf.is_valid() and land_buf.is_valid() and dist_buf.is_valid() and temp_buf.is_valid() and moist_buf.is_valid() and precip_buf.is_valid():
-			# Keep source fields synced in case caller mutated arrays without buffer updates.
-			update_persistent_buffer("height", last_height.to_byte_array())
-			update_persistent_buffer("is_land", _pack_bytes_to_u32(last_is_land).to_byte_array())
-			update_persistent_buffer("distance", distance_to_coast.to_byte_array())
-			var ok_gpu: bool = _climate_compute_gpu.evaluate_to_buffers_gpu(w, h, hbuf, land_buf, dist_buf, params, ocean_frac, temp_buf, moist_buf, precip_buf)
+		if hbuf.is_valid() and land_buf.is_valid() and dist_buf.is_valid() and temp_buf.is_valid() and moist_buf.is_valid() and light_buf.is_valid() and precip_buf.is_valid():
+			# GPU-only mode: terrain/land buffers are authoritative and must never be
+			# overwritten from CPU mirrors (which may be intentionally stale/empty).
+			if distance_to_coast.size() == size:
+				update_persistent_buffer("distance", distance_to_coast.to_byte_array())
+			var ok_gpu: bool = _climate_compute_gpu.evaluate_to_buffers_gpu(w, h, hbuf, land_buf, dist_buf, light_buf, params, ocean_frac, temp_buf, moist_buf, precip_buf)
 			if ok_gpu:
 				_climate_cpu_mirror_dirty = true
 				return true
 	push_error("Climate GPU evaluate failed in GPU-only mode.")
 	return false
+
+func _build_feature_noise_gpu_buffers(w: int, h: int, size: int) -> bool:
+	if _gpu_buffer_manager == null:
+		return false
+	if w <= 0 or h <= 0 or size <= 0:
+		return false
+	if _feature_noise_cache == null:
+		_feature_noise_cache = FeatureNoiseCache.new()
+	if not ("build" in _feature_noise_cache):
+		return false
+	var desert_buf: RID = ensure_gpu_storage_buffer("desert_noise", size * 4)
+	var ice_buf: RID = ensure_gpu_storage_buffer("ice_wiggle_noise", size * 4)
+	var shore_buf: RID = ensure_gpu_storage_buffer("shore_noise", size * 4)
+	var shelf_buf: RID = ensure_gpu_storage_buffer("shelf_value_noise", size * 4)
+	if not desert_buf.is_valid() or not ice_buf.is_valid() or not shore_buf.is_valid() or not shelf_buf.is_valid():
+		return false
+	var noise_params := {
+		"width": w,
+		"height": h,
+		"seed": config.rng_seed,
+		"frequency": config.frequency,
+		"noise_x_scale": config.noise_x_scale,
+	}
+	_feature_noise_cache.build(noise_params)
+	var desert_noise: PackedFloat32Array = _feature_noise_cache.desert_noise_field
+	var ice_wiggle: PackedFloat32Array = _feature_noise_cache.ice_wiggle_field
+	var shore_noise: PackedFloat32Array = _feature_noise_cache.shore_noise_field
+	var shelf_noise: PackedFloat32Array = _feature_noise_cache.shelf_value_noise_field
+	if desert_noise.size() != size or ice_wiggle.size() != size or shore_noise.size() != size or shelf_noise.size() != size:
+		return false
+	# Keep CPU mirrors in sync for renderer/debug consumers while preserving GPU
+	# buffer authority for runtime simulation.
+	last_desert_noise_field = desert_noise
+	last_shelf_value_noise_field = shelf_noise
+	var ok_desert: bool = update_persistent_buffer("desert_noise", desert_noise.to_byte_array())
+	var ok_ice: bool = update_persistent_buffer("ice_wiggle_noise", ice_wiggle.to_byte_array())
+	var ok_shore: bool = update_persistent_buffer("shore_noise", shore_noise.to_byte_array())
+	var ok_shelf: bool = update_persistent_buffer("shelf_value_noise", shelf_noise.to_byte_array())
+	return ok_desert and ok_ice and ok_shore and ok_shelf
 
 func generate() -> PackedByteArray:
 	var w: int = config.width
@@ -693,36 +714,34 @@ func generate() -> PackedByteArray:
 		"sim_days": config.season_phase * 365.0 + config.time_of_day,
 	}
 
-	# Step 1: terrain (GPU) with wrapper reuse
-	var terrain := {}
-	if _terrain_compute == null:
-		_terrain_compute = TerrainCompute.new()
-	terrain = _terrain_compute.generate(w, h, params)
-	if terrain.is_empty() or not terrain.has("height") or not terrain.has("is_land"):
-		push_error("Terrain generation failed in GPU-only mode.")
+	# Step 1: terrain (CPU noise generation for parity; upload once to GPU buffers)
+	var size_init: int = w * h
+	var terrain_cpu: Dictionary = TerrainNoise.new().generate(params)
+	var height_cpu: PackedFloat32Array = terrain_cpu.get("height", PackedFloat32Array())
+	var land_cpu: PackedByteArray = terrain_cpu.get("is_land", PackedByteArray())
+	if height_cpu.size() != size_init or land_cpu.size() != size_init:
+		push_error("Terrain generation failed (CPU noise path returned invalid sizes).")
 		return PackedByteArray()
-	last_height = terrain["height"]
-	# CPU tectonic foundation is disabled in GPU-only mode.
-	# Final surface height used for sea-level classification.
-	last_height_final = last_height
-	last_is_land = terrain["is_land"]
+	last_height = height_cpu
+	last_height_final = height_cpu
+	last_is_land = land_cpu
 	# Clamp sea level if it would eliminate nearly all oceans, then recompute land mask.
-	var effective_sea_level: float = _clamp_sea_level_for_min_ocean(last_height_final, config.sea_level)
+	var effective_sea_level: float = config.sea_level
+	if _height_mirror_has_signal(last_height_final):
+		effective_sea_level = _clamp_sea_level_for_min_ocean(last_height_final, config.sea_level)
 	if abs(effective_sea_level - config.sea_level) > 0.000001:
 		config.sea_level = effective_sea_level
-	var size_init: int = w * h
-	if last_is_land.size() != size_init:
-		last_is_land.resize(size_init)
-	for i_init in range(size_init):
-		last_is_land[i_init] = 1 if last_height_final[i_init] > config.sea_level else 0
-
-	# Parity disabled in GPU-only mode
-	# OPTIMIZED: Track ocean coverage fraction efficiently
-	# Use count() method instead of manual loop for better performance
-	var ocean_count: int = last_is_land.count(0)
-	last_ocean_fraction = float(ocean_count) / float(max(1, w * h))
-
-	# Land mask provided by GPU terrain; no CPU recompute
+		for i_land in range(size_init):
+			last_is_land[i_land] = 1 if last_height_final[i_land] > config.sea_level else 0
+	var ocean_ct_init: int = 0
+	for i_ocean in range(size_init):
+		if last_is_land[i_ocean] == 0:
+			ocean_ct_init += 1
+	last_ocean_fraction = float(ocean_ct_init) / float(max(1, size_init))
+	# Upload CPU-generated terrain to persistent buffers for downstream GPU systems.
+	_buffers_seeded = false
+	_buffer_seed_size = 0
+	ensure_persistent_buffers(true)
 
 	# PoolingSystem: generation path mirrors runtime GPU lake pipeline.
 	ensure_persistent_buffers(false)
@@ -771,61 +790,72 @@ func generate() -> PackedByteArray:
 	last_lake_id.resize(size_init)
 	last_lake_id.fill(0)
 
-	# Build shared feature noise cache (shore/shelf/desert/ice fields)
-	if _feature_noise_cache != null:
-		var cache_params := {
-			"width": w,
-			"height": h,
-			"seed": config.rng_seed,
-			"frequency": config.frequency,
-			"noise_x_scale": config.noise_x_scale,
-		}
-		_feature_noise_cache.build(cache_params)
-		last_shelf_value_noise_field = _feature_noise_cache.shelf_value_noise_field
-		last_desert_noise_field = _feature_noise_cache.desert_noise_field
-
-	# Step 2: shoreline features
+	# Step 2: feature noise + shoreline features (GPU buffer-to-buffer, no readback)
 	var size: int = w * h
 	last_turquoise_water.resize(size)
 	last_beach.resize(size)
 	last_water_distance.resize(size)
 	last_turquoise_strength.resize(size)
-	# Use cached shore noise field if available; else fall back to per-pixel noise
-	var shore_noise_field := PackedFloat32Array()
-	if _feature_noise_cache != null and _feature_noise_cache.shore_noise_field.size() == size:
-		shore_noise_field = _feature_noise_cache.shore_noise_field
-	else:
-		shore_noise_field.resize(size)
-		var sx_mul: float = max(0.0001, config.noise_x_scale)
-		for y in range(h):
-			for x in range(w):
-				var i2: int = x + y * w
-				var t: float = float(x) / float(max(1, w))
-				var n0: float = _shore_noise.get_noise_2d(float(x) * sx_mul, float(y))
-				var n1: float = _shore_noise.get_noise_2d((float(x) + float(w)) * sx_mul, float(y))
-				shore_noise_field[i2] = lerp(n0, n1, t) * 0.5 + 0.5
-	# GPU distance-to-coast
+	ensure_persistent_buffers(false)
+	var height_buf_step2: RID = get_persistent_buffer("height")
+	var land_buf_step2: RID = get_persistent_buffer("is_land")
+	var dist_buf_step2: RID = get_persistent_buffer("distance")
+	var dist_tmp_buf_step2: RID = get_persistent_buffer("distance_tmp")
+	var beach_buf_step2: RID = get_persistent_buffer("beach")
+	var turq_buf_step2: RID = get_persistent_buffer("turquoise")
+	var strength_buf_step2: RID = get_persistent_buffer("turquoise_strength")
+	if not height_buf_step2.is_valid() or not land_buf_step2.is_valid() or not dist_buf_step2.is_valid() or not dist_tmp_buf_step2.is_valid() or not beach_buf_step2.is_valid() or not turq_buf_step2.is_valid() or not strength_buf_step2.is_valid():
+		push_error("Generate: required GPU buffers unavailable for feature/shoreline pass.")
+		return PackedByteArray()
+	if not _build_feature_noise_gpu_buffers(w, h, size):
+		push_error("Generate: feature noise GPU pass failed.")
+		return PackedByteArray()
+	var shore_noise_buf_step2: RID = get_persistent_buffer("shore_noise")
+	if not shore_noise_buf_step2.is_valid():
+		push_error("Generate: shore noise GPU buffer missing after feature noise pass.")
+		return PackedByteArray()
+	# Distance-to-coast on GPU buffers
 	if _dt_compute == null:
 		_dt_compute = DistanceTransformCompute.new()
-	var d_gpu: PackedFloat32Array = _dt_compute.ocean_distance_to_land(w, h, last_is_land, true)
-	if d_gpu.size() == w * h:
-		last_water_distance = d_gpu
-	# GPU shelf features
+	var dt_ok: bool = _dt_compute.ocean_distance_to_land_gpu_buffers(w, h, land_buf_step2, true, dist_buf_step2, dist_tmp_buf_step2)
+	if not dt_ok:
+		push_error("Generate: distance transform GPU pass failed.")
+		return PackedByteArray()
+	# Shelf features on GPU buffers
 	if _shelf_compute == null:
 		_shelf_compute = ContinentalShelfCompute.new()
-	var out_gpu: Dictionary = _shelf_compute.compute(w, h, last_height, last_is_land, config.sea_level, last_water_distance, shore_noise_field, config.shallow_threshold, config.shore_band, true, config.noise_x_scale)
-	if out_gpu.size() > 0:
-		last_turquoise_water = out_gpu.get("turquoise_water", last_turquoise_water)
-		last_beach = out_gpu.get("beach", last_beach)
-		last_turquoise_strength = out_gpu.get("turquoise_strength", last_turquoise_strength)
+	var shelf_ok: bool = _shelf_compute.compute_to_buffers(
+		w,
+		h,
+		height_buf_step2,
+		land_buf_step2,
+		dist_buf_step2,
+		shore_noise_buf_step2,
+		config.sea_level,
+		config.shallow_threshold,
+		config.shore_band,
+		true,
+		config.noise_x_scale,
+		turq_buf_step2,
+		beach_buf_step2,
+		strength_buf_step2
+	)
+	if not shelf_ok:
+		push_error("Generate: continental shelf GPU pass failed.")
+		return PackedByteArray()
+	# Keep CPU mirrors sized but non-authoritative in GPU-only mode.
+	last_water_distance.fill(0.0)
+	last_turquoise_water.fill(0)
+	last_beach.fill(0)
+	last_turquoise_strength.fill(0.0)
 
 	# Step 3: climate via GPU
-	params["distance_to_coast"] = last_water_distance
+	params["distance_to_coast"] = PackedFloat32Array()
 	# time_of_day is set via SeasonalClimateSystem apply_config; nothing to do here
-	var climate_ok: bool = _evaluate_climate_gpu_only(w, h, params, last_water_distance, last_ocean_fraction)
+	var climate_ok: bool = _evaluate_climate_gpu_only(w, h, params, PackedFloat32Array(), last_ocean_fraction)
 	if not climate_ok:
 		push_error("Climate GPU evaluate failed during generate(); aborting world generation in GPU-only mode.")
-		return last_is_land
+		return PackedByteArray()
 	# CPU climate arrays are non-authoritative in GPU-only mode.
 	if last_temperature.size() != size:
 		last_temperature.resize(size)
@@ -833,15 +863,18 @@ func generate() -> PackedByteArray:
 	if last_moisture.size() != size:
 		last_moisture.resize(size)
 		last_moisture.fill(0.5)
-	last_distance_to_coast = last_water_distance
+	if last_distance_to_coast.size() != size:
+		last_distance_to_coast.resize(size)
+	last_distance_to_coast.fill(0.0)
 
 	# Build initial day/night light field directly in persistent GPU buffer.
 	var light_ok: bool = false
 	if _climate_compute_gpu != null and _gpu_buffer_manager != null:
 		ensure_persistent_buffers(false)
 		var light_buf_init: RID = get_persistent_buffer("light")
-		if light_buf_init.is_valid():
-			light_ok = _climate_compute_gpu.evaluate_light_field_gpu(w, h, params, light_buf_init)
+		var height_buf_init: RID = get_persistent_buffer("height")
+		if light_buf_init.is_valid() and height_buf_init.is_valid():
+			light_ok = _climate_compute_gpu.evaluate_light_field_gpu(w, h, params, height_buf_init, light_buf_init)
 	if not light_ok:
 		push_error("Generate: light field GPU pass failed (CPU fallback removed).")
 		return PackedByteArray()
@@ -893,11 +926,14 @@ func generate() -> PackedByteArray:
 	params2["biome_moist_jitter2"] = 0.03
 	params2["biome_moist_islands"] = 0.35
 	params2["biome_moist_elev_dry"] = 0.35
-	var min_h2: float = 1e20
-	var max_h2: float = -1e20
-	for hv2 in last_height:
-		min_h2 = min(min_h2, hv2)
-		max_h2 = max(max_h2, hv2)
+	var min_h2: float = -1.0
+	var max_h2: float = 1.0
+	if _height_mirror_has_signal(last_height):
+		min_h2 = 1e20
+		max_h2 = -1e20
+		for hv2 in last_height:
+			min_h2 = min(min_h2, hv2)
+			max_h2 = max(max_h2, hv2)
 	params2["min_h"] = min_h2
 	params2["max_h"] = max_h2
 	ensure_persistent_buffers(false)
@@ -907,6 +943,7 @@ func generate() -> PackedByteArray:
 	var moist_buf0: RID = get_persistent_buffer("moisture")
 	var beach_buf0: RID = get_persistent_buffer("beach")
 	var desert_buf0: RID = get_persistent_buffer("desert_noise")
+	var biome_noise_buf0: RID = get_persistent_buffer("shore_noise")
 	var fertility_buf0: RID = get_persistent_buffer("fertility")
 	var biome_buf0: RID = get_persistent_buffer("biome_id")
 	var biome_tmp_buf0: RID = get_persistent_buffer("biome_tmp")
@@ -918,7 +955,7 @@ func generate() -> PackedByteArray:
 	var post_ok0: bool = false
 	var gpu_ready0: bool = height_buf0.is_valid() and land_buf0.is_valid() and temp_buf0.is_valid() and moist_buf0.is_valid() and beach_buf0.is_valid() and fertility_buf0.is_valid() and biome_buf0.is_valid() and biome_tmp_buf0.is_valid() and lava_buf0.is_valid() and lake_buf0.is_valid() and rock_buf0.is_valid()
 	if gpu_ready0:
-		var classified_ok0: bool = bc.classify_to_buffer(w, h, height_buf0, land_buf0, temp_buf0, moist_buf0, beach_buf0, desert_buf0, fertility_buf0, params2, biome_tmp_buf0)
+		var classified_ok0: bool = bc.classify_to_buffer(w, h, height_buf0, land_buf0, temp_buf0, moist_buf0, beach_buf0, desert_buf0, fertility_buf0, params2, biome_tmp_buf0, biome_noise_buf0)
 		if classified_ok0:
 			post_ok0 = bp.apply_overrides_and_lava_gpu(
 				w,
@@ -955,18 +992,22 @@ func generate() -> PackedByteArray:
 		"hotspot_threshold": 0.995,
 	}, fposmod(float(Time.get_ticks_msec()) / 1000.0, 1.0), int(config.rng_seed))
 
-	# Hot/Cold overrides now live in BiomePost.
+	# Hot/cold biome overrides are applied in the GPU biome post pass.
 
 	# Initialize clouds after biomes/light are ready to avoid low-detail startup artifacts.
 	var cloud_compute: Object = ensure_cloud_overlay_compute()
 	var phase0: float = fposmod(config.season_phase, 1.0)
+	ensure_persistent_buffers(false)
 	var cloud_buf0: RID = get_persistent_buffer("clouds")
 	var temp_buf_cloud: RID = get_persistent_buffer("temperature")
 	var moist_buf_cloud: RID = get_persistent_buffer("moisture")
 	var land_buf_cloud: RID = get_persistent_buffer("is_land")
 	var light_buf_cloud: RID = get_persistent_buffer("light")
 	var biome_buf_cloud: RID = get_persistent_buffer("biome_id")
-	if cloud_buf0.is_valid() and temp_buf_cloud.is_valid() and moist_buf_cloud.is_valid() and land_buf_cloud.is_valid() and light_buf_cloud.is_valid() and biome_buf_cloud.is_valid():
+	var height_buf_cloud: RID = get_persistent_buffer("height")
+	var wind_u_buf_cloud: RID = get_persistent_buffer("wind_u")
+	var wind_v_buf_cloud: RID = get_persistent_buffer("wind_v")
+	if cloud_buf0.is_valid() and temp_buf_cloud.is_valid() and moist_buf_cloud.is_valid() and land_buf_cloud.is_valid() and light_buf_cloud.is_valid() and biome_buf_cloud.is_valid() and height_buf_cloud.is_valid() and wind_u_buf_cloud.is_valid() and wind_v_buf_cloud.is_valid():
 		cloud_compute.compute_clouds_to_buffer(
 			w, h,
 			temp_buf_cloud,
@@ -974,6 +1015,9 @@ func generate() -> PackedByteArray:
 			land_buf_cloud,
 			light_buf_cloud,
 			biome_buf_cloud,
+			height_buf_cloud,
+			wind_u_buf_cloud,
+			wind_v_buf_cloud,
 			phase0,
 			int(config.rng_seed),
 			cloud_buf0
@@ -1152,7 +1196,7 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	if last_height_final.size() != size:
 		last_height_final = last_height
 	var desired_sea_level: float = new_sea_level
-	if last_height_final.size() == size:
+	if _height_mirror_has_signal(last_height_final):
 		desired_sea_level = _clamp_sea_level_for_min_ocean(last_height_final, desired_sea_level)
 	config.sea_level = desired_sea_level
 	# 1) Recompute land mask
@@ -1177,16 +1221,22 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 				_land_mask_compute = LandMaskCompute.new()
 			land_updated_gpu = _land_mask_compute.update_from_height(w, h, height_buf, config.sea_level, land_buf)
 	# Keep a CPU mirror for systems still consuming last_is_land (no GPU readback).
-	for i in range(size):
-		last_is_land[i] = 1 if last_height_final[i] > config.sea_level else 0
+	if _height_mirror_has_signal(last_height_final):
+		for i in range(size):
+			last_is_land[i] = 1 if last_height_final[i] > config.sea_level else 0
+	else:
+		last_is_land.fill(1 if 0.0 > config.sea_level else 0)
 	if not land_updated_gpu and _gpu_buffer_manager != null:
 		update_persistent_buffer("is_land", _pack_bytes_to_u32(last_is_land).to_byte_array())
 	# Update ocean fraction
-	var ocean_ct: int = 0
-	for ii in range(size):
-		if last_is_land[ii] == 0:
-			ocean_ct += 1
-	last_ocean_fraction = float(ocean_ct) / float(max(1, size))
+	if _height_mirror_has_signal(last_height_final):
+		var ocean_ct: int = 0
+		for ii in range(size):
+			if last_is_land[ii] == 0:
+				ocean_ct += 1
+		last_ocean_fraction = float(ocean_ct) / float(max(1, size))
+	else:
+		last_ocean_fraction = _estimate_ocean_fraction_from_sea_level(config.sea_level)
 	# 2) Recompute shoreline features (turquoise, beaches) and distance to land
 	if last_turquoise_water.size() != size:
 		last_turquoise_water.resize(size)
@@ -1197,21 +1247,10 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	if last_turquoise_strength.size() != size:
 		last_turquoise_strength.resize(size)
 	# Recompute via GPU only.
-	var shore_noise_field := PackedFloat32Array()
-	if _feature_noise_cache != null and _feature_noise_cache.shore_noise_field.size() == size:
-		shore_noise_field = _feature_noise_cache.shore_noise_field
-	else:
-		shore_noise_field.resize(size)
-		for yy in range(h):
-			for xx in range(w):
-				var ii: int = xx + yy * w
-				var t2: float = float(xx) / float(max(1, w))
-				var n0b: float = _shore_noise.get_noise_2d(float(xx) * config.noise_x_scale, float(yy))
-				var n1b: float = _shore_noise.get_noise_2d((float(xx) + float(w)) * config.noise_x_scale, float(yy))
-				shore_noise_field[ii] = lerp(n0b, n1b, t2) * 0.5 + 0.5
-	var shore_noise_buf: RID = RID()
-	if _gpu_buffer_manager != null and shore_noise_field.size() == size:
-		shore_noise_buf = ensure_gpu_storage_buffer("shore_noise", size * 4, shore_noise_field.to_byte_array())
+	if not _build_feature_noise_gpu_buffers(w, h, size):
+		push_error("quick_update_sea_level: feature noise GPU pass failed.")
+		return last_is_land
+	var shore_noise_buf: RID = get_persistent_buffer("shore_noise")
 	# Distance to coast on GPU (buffer-to-buffer, no readback)
 	if _dt_compute == null:
 		_dt_compute = DistanceTransformCompute.new()
@@ -1359,7 +1398,6 @@ func quick_update_climate(skip_light: bool = false) -> void:
 	var temp_scale_ratio: float = config.temp_scale / max(0.001, _temperature_base_scale_ref)
 	params["temp_base_offset_delta"] = temp_offset_delta
 	params["temp_scale_ratio"] = temp_scale_ratio
-	params["distance_to_coast"] = last_water_distance
 
 	if _climate_compute_gpu == null:
 		_climate_compute_gpu = ClimateAdjustCompute.new()
@@ -1368,8 +1406,10 @@ func quick_update_climate(skip_light: bool = false) -> void:
 	var dist_buf: RID = get_persistent_buffer("distance")
 	var temp_buf: RID = get_persistent_buffer("temperature")
 	var temp_base_buf: RID = get_persistent_buffer("temperature_base")
+	var temp_tmp_buf: RID = get_persistent_buffer("temperature_tmp")
 	var moist_buf: RID = get_persistent_buffer("moisture")
-	if not height_buf.is_valid() or not land_buf.is_valid() or not dist_buf.is_valid() or not temp_buf.is_valid() or not moist_buf.is_valid():
+	var light_buf: RID = get_persistent_buffer("light")
+	if not height_buf.is_valid() or not land_buf.is_valid() or not dist_buf.is_valid() or not temp_buf.is_valid() or not moist_buf.is_valid() or not light_buf.is_valid():
 		return
 	if not temp_base_buf.is_valid():
 		temp_base_buf = temp_buf
@@ -1378,7 +1418,13 @@ func quick_update_climate(skip_light: bool = false) -> void:
 	var use_fast_path: bool = fast_baseline_ok and temp_base_buf.is_valid()
 	var climate_ok: bool = false
 	if use_fast_path:
-		climate_ok = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_base_buf, land_buf, dist_buf, params, temp_buf)
+		# Use previous runtime temperature as input so sunlight forcing has thermal memory.
+		if temp_tmp_buf.is_valid():
+			climate_ok = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_buf, land_buf, dist_buf, light_buf, params, temp_tmp_buf)
+			if climate_ok:
+				dispatch_copy_u32(temp_tmp_buf, temp_buf, size)
+		else:
+			climate_ok = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_buf, land_buf, dist_buf, light_buf, params, temp_buf)
 	else:
 		var precip_buf: RID = ensure_gpu_storage_buffer("precip", size * 4)
 		if precip_buf.is_valid():
@@ -1388,6 +1434,7 @@ func quick_update_climate(skip_light: bool = false) -> void:
 				height_buf,
 				land_buf,
 				dist_buf,
+				light_buf,
 				params,
 				last_ocean_fraction,
 				temp_buf,
@@ -1444,17 +1491,13 @@ func quick_update_climate(skip_light: bool = false) -> void:
 
 	# Always update light field unless caller skips.
 	if not skip_light:
-		var light_buf: RID = get_persistent_buffer("light")
-		if light_buf.is_valid():
-			_climate_compute_gpu.evaluate_light_field_gpu(w, h, params, light_buf)
+		var height_buf_light: RID = get_persistent_buffer("height")
+		if light_buf.is_valid() and height_buf_light.is_valid():
+			_climate_compute_gpu.evaluate_light_field_gpu(w, h, params, height_buf_light, light_buf)
 
 func _update_lithology_map(w: int, h: int) -> void:
 	var size: int = w * h
 	if size <= 0:
-		return
-	if last_height.size() != size or last_is_land.size() != size:
-		last_rock_type.resize(size)
-		last_rock_type.fill(LithologyCompute.ROCK_BASALTIC)
 		return
 	if _gpu_buffer_manager == null:
 		push_error("_update_lithology_map: GPU buffer manager unavailable (CPU fallback removed).")
@@ -1465,13 +1508,16 @@ func _update_lithology_map(w: int, h: int) -> void:
 		"seed": config.rng_seed,
 		"noise_x_scale": config.noise_x_scale,
 	}
-	var min_h: float = 1e20
-	var max_h: float = -1e20
-	for hv in last_height:
-		if hv < min_h:
-			min_h = hv
-		if hv > max_h:
-			max_h = hv
+	var min_h: float = -1.0
+	var max_h: float = 1.0
+	if _height_mirror_has_signal(last_height):
+		min_h = 1e20
+		max_h = -1e20
+		for hv in last_height:
+			if hv < min_h:
+				min_h = hv
+			if hv > max_h:
+				max_h = hv
 	lith_params["min_h"] = min_h
 	lith_params["max_h"] = max_h
 
@@ -1570,7 +1616,7 @@ func quick_update_biomes() -> void:
 	params2["biome_moist_elev_dry"] = 0.35
 	var min_h: float = -1.0
 	var max_h: float = 1.0
-	if last_height.size() == size:
+	if _height_mirror_has_signal(last_height):
 		min_h = 1e20
 		max_h = -1e20
 		for hv in last_height:
@@ -1585,6 +1631,7 @@ func quick_update_biomes() -> void:
 	var moist_buf: RID = get_persistent_buffer("moisture")
 	var beach_buf: RID = get_persistent_buffer("beach")
 	var desert_buf: RID = get_persistent_buffer("desert_noise")
+	var biome_noise_buf: RID = get_persistent_buffer("shore_noise")
 	var fertility_buf: RID = get_persistent_buffer("fertility")
 	var biome_buf: RID = get_persistent_buffer("biome_id")
 	var biome_tmp_buf: RID = get_persistent_buffer("biome_tmp")
@@ -1597,7 +1644,7 @@ func quick_update_biomes() -> void:
 		return
 
 	var bc: Object = ensure_biome_compute()
-	if bc == null or not bc.classify_to_buffer(w, h, height_buf, land_buf, temp_buf, moist_buf, beach_buf, desert_buf, fertility_buf, params2, biome_tmp_buf):
+	if bc == null or not bc.classify_to_buffer(w, h, height_buf, land_buf, temp_buf, moist_buf, beach_buf, desert_buf, fertility_buf, params2, biome_tmp_buf, biome_noise_buf):
 		push_error("quick_update_biomes: GPU classify failed (CPU fallback disabled).")
 		return
 	var bp: Object = ensure_biome_post_compute()
@@ -1819,8 +1866,10 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 			if bid2 != BiomeClassifier.Biome.LAVA_FIELD:
 				display_name = "Scorched " + display_name
 	var rock_name: String = _rock_to_string(rock_id)
+	var height_m: float = h_val * config.height_scale_m
 	return {
 		"height": h_val,
+		"height_m": height_m,
 		"is_land": land,
 		"is_beach": beach,
 		"is_turquoise_water": turq,
@@ -2121,11 +2170,6 @@ func ensure_river_post_compute() -> Object:
 	if _river_post_compute == null:
 		_river_post_compute = RiverPostCompute.new()
 	return _river_post_compute
-
-func ensure_river_meander_compute() -> Object:
-	if _river_meander_compute == null:
-		_river_meander_compute = RiverMeanderCompute.new()
-	return _river_meander_compute
 
 func ensure_river_freeze_compute() -> Object:
 	if _river_freeze_compute == null:

@@ -108,31 +108,3 @@ func ocean_distance_to_land_gpu_buffers(
 	if not _dispatch_mode(w, h, wrap_x, 1, land_buf, dist_tmp_buf, dist_out_buf):
 		return false
 	return true
-
-func ocean_distance_to_land(w: int, h: int, is_land: PackedByteArray, wrap_x: bool) -> PackedFloat32Array:
-	_ensure()
-	if not _shader.is_valid() or not _pipeline.is_valid():
-		return PackedFloat32Array()
-	var size: int = max(0, w * h)
-	# Convert land mask to u32 to match GLSL uint[]
-	var land_u32 := PackedInt32Array()
-	land_u32.resize(size)
-	for j in range(size):
-		land_u32[j] = 1 if (j < is_land.size() and is_land[j] != 0) else 0
-	var buf_land := _rd.storage_buffer_create(land_u32.to_byte_array().size(), land_u32.to_byte_array())
-	var zeros := PackedByteArray()
-	zeros.resize(size * 4)
-	var buf_out := _rd.storage_buffer_create(zeros.size(), zeros)
-	var buf_tmp := _rd.storage_buffer_create(zeros.size(), zeros)
-	var ok: bool = ocean_distance_to_land_gpu_buffers(w, h, buf_land, wrap_x, buf_out, buf_tmp)
-	if not ok:
-		_rd.free_rid(buf_land)
-		_rd.free_rid(buf_out)
-		_rd.free_rid(buf_tmp)
-		return PackedFloat32Array()
-	var out_bytes := _rd.buffer_get_data(buf_out)
-	var out_dist: PackedFloat32Array = out_bytes.to_float32_array()
-	_rd.free_rid(buf_land)
-	_rd.free_rid(buf_out)
-	_rd.free_rid(buf_tmp)
-	return out_dist
