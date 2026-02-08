@@ -19,11 +19,17 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 	var versions: Array = file.get_version_list()
 	if versions.is_empty():
 		return null
-	var chosen_version = versions[0]
+	var chosen_version: Variant = null
 	for v in versions:
+		if v == null:
+			continue
+		if chosen_version == null:
+			chosen_version = v
 		if String(v) == "vulkan":
 			chosen_version = v
 			break
+	if chosen_version == null:
+		return null
 	return file.get_spirv(chosen_version)
 
 func _ensure_pipeline() -> void:

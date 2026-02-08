@@ -141,7 +141,7 @@ func _create_material() -> void:
 		quad_material.set_shader_parameter("cell_size", cell_size)
 		quad_material.set_shader_parameter("atlas_uv_size", Vector2(1.0/16.0, 1.0/6.0))
 		quad_material.set_shader_parameter("sea_level", 0.0)
-		quad_material.set_shader_parameter("cloud_shadow_strength", 0.25)
+		quad_material.set_shader_parameter("cloud_shadow_strength", 0.14)
 		quad_material.set_shader_parameter("cloud_light_strength", 0.25)
 		quad_material.set_shader_parameter("cloud_shadow_offset", Vector2(1.5, 1.0))
 		quad_material.set_shader_parameter("day_of_year", _solar_day_of_year)
@@ -186,12 +186,14 @@ func _create_material() -> void:
 				cloud_mat.set_shader_parameter("world_data_1", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("world_data_3", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
-				cloud_mat.set_shader_parameter("cloud_opacity", 0.90)
+				cloud_mat.set_shader_parameter("cloud_opacity", 0.95)
 				cloud_mat.set_shader_parameter("cloud_min", 0.18)
 				cloud_mat.set_shader_parameter("cloud_levels", 10.0)
 				cloud_mat.set_shader_parameter("cloud_power", 0.95)
 				cloud_mat.set_shader_parameter("cloud_brightness", 1.0)
-				cloud_mat.set_shader_parameter("cloud_night_alpha", 0.08)
+				cloud_mat.set_shader_parameter("cloud_night_alpha", 0.28)
+				cloud_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
+				cloud_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
 				cloud_mat.set_shader_parameter("cloud_texture", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("light_texture", _fallback_black_tex)
 				cloud_mat.set_shader_parameter("use_cloud_texture", 0)
@@ -400,6 +402,8 @@ func _update_cloud_uniforms() -> void:
 		if cloud_rect:
 			cloud_rect.visible = (t3 != null) or (cloud_texture_override != null)
 		cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
+		cloud_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
+		cloud_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
 
 func _update_light_uniform() -> void:
 	"""Update only the light texture uniform"""
@@ -439,6 +443,8 @@ func _update_light_uniform() -> void:
 		var cloud_mat := cloud_material as ShaderMaterial
 		var t1c = world_data_1_override if world_data_1_override else texture_manager.get_data_texture_1()
 		cloud_mat.set_shader_parameter("world_data_1", _safe_tex(t1c, _fallback_black_tex))
+		cloud_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
+		cloud_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
 		if light_texture_override and is_instance_valid(light_texture_override):
 			cloud_mat.set_shader_parameter("light_texture", light_texture_override)
 			cloud_mat.set_shader_parameter("use_light_texture", 1)
@@ -469,6 +475,10 @@ func set_solar_params(day_of_year: float, time_of_day: float) -> void:
 		var shader_mat := quad_material as ShaderMaterial
 		shader_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 		shader_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
+	if cloud_material and cloud_material is ShaderMaterial:
+		var cloud_mat := cloud_material as ShaderMaterial
+		cloud_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
+		cloud_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
 
 func set_river_texture_override(tex: Texture2D) -> void:
 	river_texture_override = tex

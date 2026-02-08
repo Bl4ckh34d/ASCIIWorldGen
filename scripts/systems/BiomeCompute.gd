@@ -21,8 +21,12 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 	if versions.is_empty():
 		push_error("BiomeCompute: No shader versions available")
 		return null
-	var chosen_version = versions[0]
+	var chosen_version: Variant = null
 	for v in versions:
+		if v == null:
+			continue
+		if chosen_version == null:
+			chosen_version = v
 		if String(v) == "vulkan":
 			chosen_version = v
 			break

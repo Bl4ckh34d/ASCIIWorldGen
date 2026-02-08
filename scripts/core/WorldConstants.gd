@@ -46,8 +46,8 @@ const DIURNAL_AMP_POLE: float = 0.09
 const DIURNAL_OCEAN_DAMP: float = 0.28
 
 # Day-night visual settings
-const DAY_NIGHT_CONTRAST: float = 0.75
-const DAY_NIGHT_BASE: float = 0.25
+const DAY_NIGHT_CONTRAST: float = 0.992
+const DAY_NIGHT_BASE: float = 0.008
 
 # === PERFORMANCE CONSTANTS ===
 

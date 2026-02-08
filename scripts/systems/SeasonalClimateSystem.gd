@@ -142,8 +142,8 @@ func _update_light_field(world: Object) -> void:
 	var light_params = {
 		"day_of_year": day_of_year,
 		"time_of_day": time_of_day,
-		"day_night_base": generator.config.day_night_base if generator.config else 0.25,
-		"day_night_contrast": generator.config.day_night_contrast if generator.config else 0.75,
+		"day_night_base": generator.config.day_night_base if generator.config else 0.008,
+		"day_night_contrast": generator.config.day_night_contrast if generator.config else 0.992,
 		"moon_count": float(generator.config.moon_count) if generator.config else 0.0,
 		"moon_seed": generator.config.moon_seed if generator.config else 0.0,
 		"moon_shadow_strength": generator.config.moon_shadow_strength if generator.config else 0.55,

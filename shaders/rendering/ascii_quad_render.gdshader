@@ -22,7 +22,7 @@ uniform sampler2D world_data_4; // lake, river, lava, lake_level_norm
 uniform sampler2D color_palette;
 uniform int debug_mode = 0;
 uniform float sea_level = 0.0;
-uniform float cloud_shadow_strength = 0.25;
+uniform float cloud_shadow_strength = 0.14;
 uniform float cloud_light_strength = 0.25;
 uniform vec2 cloud_shadow_offset = vec2(1.5, 1.0);
 uniform float day_of_year = 0.0;
@@ -51,7 +51,7 @@ const vec3 ICE_COLOR = vec3(0.85, 0.90, 0.95);
 // Dark basalt-like lava field appearance (cool crust), not bright red.
 const vec3 LAVA_COLOR = vec3(0.14, 0.13, 0.12);
 const float SOLAR_TILT = 0.5235987756; // 30 deg
-const float NIGHT_BRIGHTNESS_FLOOR = 0.14;
+const float NIGHT_BRIGHTNESS_FLOOR = 0.02;
 
 vec2 get_atlas_uv(float char_index, vec2 char_uv) {
     // Calculate grid position from character index
@@ -177,6 +177,12 @@ vec3 _dir_from_lon_lat(float lon, float lat) {
     return vec3(cl * cos(lon), cl * sin(lon), sin(lat));
 }
 
+float _hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
 void fragment() {
     if (debug_mode == 1) {
         // Debug gradient to verify shader execution (use SCREEN_UV to avoid UV=0 issues)
@@ -296,20 +302,23 @@ void fragment() {
         }
     }
 
+    // Shared solar geometry for cloud shadows and water glint.
+    float lon = TAU * (world_cell.x / max(1.0, map_dimensions.x));
+    float lat_norm_signed = 0.5 - (world_cell.y / max(1.0, map_dimensions.y - 1.0));
+    float phi = lat_norm_signed * PI;
+    float decl = SOLAR_TILT * cos(TAU * day_of_year);
+    float sun_lon = -TAU * time_of_day;
+    vec3 n = _dir_from_lon_lat(lon, phi);
+    vec3 sun_dir = _dir_from_lon_lat(sun_lon, decl);
+    float sun_dot = dot(n, sun_dir);
+
     // Cloud shadows: sun-angle aware projection.
     // Near low sun angles (sunrise/sunset), shadows lengthen.
     float light_mod = light;
     if (cloud_shadow_strength > 0.0) {
-        float lon = TAU * (world_cell.x / max(1.0, map_dimensions.x));
-        float lat_norm_signed = 0.5 - (world_cell.y / max(1.0, map_dimensions.y - 1.0));
-        float phi = lat_norm_signed * PI;
-        float decl = SOLAR_TILT * cos(TAU * day_of_year);
-        float sun_lon = -TAU * time_of_day;
-        vec3 n = _dir_from_lon_lat(lon, phi);
-        vec3 sun_dir = _dir_from_lon_lat(sun_lon, decl);
-        float sun_dot = dot(n, sun_dir);
-        // Keep cloud shadows visible across twilight instead of popping at the terminator.
-        float shadow_vis = smoothstep(-0.24, 0.18, sun_dot);
+        // Keep cloud shadows visible across twilight and avoid washing out
+        // near the bright edge of the terminator.
+        float shadow_vis = smoothstep(-0.30, 0.04, sun_dot);
         float shadow_geom_blend = smoothstep(-0.08, 0.28, sun_dot);
 
         vec3 east = vec3(-sin(lon), cos(lon), 0.0);
@@ -339,11 +348,49 @@ void fragment() {
         float dark_out = min(dark_cap, dark_base + cloud_shadow_effect);
         light_mod = 1.0 - dark_out;
     }
+
+    // Water glint around subsolar region with sparkle breakup.
+    bool water_surface = (!hide_ocean_in_bedrock) && (!is_land_tile || lake_here);
+    float glint_add = 0.0;
+    if (water_surface) {
+        float sun_vis = max(0.0, sun_dot);
+        float abs_lat = abs(lat_norm_signed) * 2.0;
+        float polar_tighten = smoothstep(0.60, 0.98, abs_lat);
+        // Smaller central blob, but sparkles can spread farther from center.
+        float core = pow(sun_vis, mix(220.0, 304.0, polar_tighten));
+        float halo = pow(sun_vis, mix(30.0, 50.0, polar_tighten));
+        float outer = pow(sun_vis, mix(14.0, 24.0, polar_tighten));
+        float sparkle_noise = _hash12(world_cell * vec2(1.73, 1.19) + vec2(time_of_day * 920.0, day_of_year * 410.0));
+        float sparkle_density = mix(0.885, 0.935, polar_tighten);
+        float sparkle = smoothstep(sparkle_density, 0.998, sparkle_noise) * halo;
+        float micro_noise = _hash12(world_cell * vec2(2.41, 0.93) + vec2(time_of_day * 1280.0 + 13.0, day_of_year * 560.0 - 5.0));
+        float micro_spark = smoothstep(mix(0.978, 0.989, polar_tighten), 1.0, micro_noise) * core;
+        float far_noise = _hash12(world_cell * vec2(0.89, 2.17) + vec2(time_of_day * 740.0 - 11.0, day_of_year * 300.0 + 9.0));
+        float far_spark = smoothstep(mix(0.955, 0.978, polar_tighten), 1.0, far_noise) * outer;
+        float day_gate = smoothstep(0.05, 0.34, sun_vis);
+        float glint = core * 0.90 + halo * 0.005 + sparkle * 0.24 + micro_spark * 0.16 + far_spark * 0.18;
+        glint *= day_gate;
+        glint *= smoothstep(0.07, 0.95, light_mod);
+        glint *= (1.0 - cloud_cov * 0.62);
+        glint *= 0.56;
+        glint_add = clamp(glint, 0.0, 0.62);
+    }
+
     if (cloud_cov > 0.0) {
+        // Suppress relief-scale ground contrast under cloud cover so terrain
+        // shadows don't visually leak through semi-transparent clouds.
+        float sky_day = smoothstep(-0.16, 0.58, sun_dot);
+        float sky_light = mix(NIGHT_BRIGHTNESS_FLOOR, 1.0, sky_day);
+        float cloud_relief_suppress = smoothstep(0.15, 0.85, cloud_cov);
+        light_mod = mix(light_mod, sky_light, cloud_relief_suppress * 0.82);
         base_color = mix(base_color, vec3(1.0), cloud_cov * cloud_light_strength);
     }
 
     vec3 lit_color = base_color * light_mod;
+    if (glint_add > 0.0) {
+        lit_color += vec3(1.0, 0.98, 0.90) * glint_add;
+        lit_color = clamp(lit_color, vec3(0.0), vec3(1.0));
+    }
     
     // Apply hover overlay as a 7-tile crosshair (center + 3 tiles each side),
     // inverting the underlying tile color for high contrast without fixed tint.

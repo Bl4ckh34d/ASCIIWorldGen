@@ -21,8 +21,12 @@ func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
 	var versions: Array = file.get_version_list()
 	if versions.is_empty():
 		return null
-	var chosen_version = versions[0]
+	var chosen_version: Variant = null
 	for v in versions:
+		if v == null:
+			continue
+		if chosen_version == null:
+			chosen_version = v
 		if String(v) == "vulkan":
 			chosen_version = v
 			break
@@ -342,8 +346,8 @@ func evaluate_light_field_gpu(w: int, h: int, params: Dictionary, height_buf: RI
 	var floats := PackedFloat32Array([
 		day_of_year,
 		time_of_day,
-		float(params.get("day_night_base", 0.25)),
-		float(params.get("day_night_contrast", 0.75)),
+		float(params.get("day_night_base", 0.008)),
+		float(params.get("day_night_contrast", 0.992)),
 		float(params.get("moon_count", 0.0)),
 		float(params.get("moon_seed", 0.0)),
 		float(params.get("moon_shadow_strength", 0.55)),

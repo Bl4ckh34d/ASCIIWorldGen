@@ -146,6 +146,67 @@ float moon_shadow_factor(vec3 n, vec3 sun_dir, float sun_dot) {
     return clamp01(strongest * clamp01(PC.moon_shadow_strength));
 }
 
+float sample_height_wrap_x(float fx, float fy, int W, int H) {
+    float xw = mod(fx, float(W));
+    if (xw < 0.0) {
+        xw += float(W);
+    }
+    float yc = clamp(fy, 0.0, float(H - 1));
+    int x0 = int(floor(xw));
+    int y0 = int(floor(yc));
+    int x1 = (x0 + 1) % max(1, W);
+    int y1 = min(y0 + 1, H - 1);
+    float tx = xw - float(x0);
+    float ty = yc - float(y0);
+    float h00 = Height.height[x0 + y0 * W];
+    float h10 = Height.height[x1 + y0 * W];
+    float h01 = Height.height[x0 + y1 * W];
+    float h11 = Height.height[x1 + y1 * W];
+    float hx0 = mix(h00, h10, tx);
+    float hx1 = mix(h01, h11, tx);
+    return mix(hx0, hx1, ty);
+}
+
+float terrain_horizon_occlusion(
+        int xi,
+        int yi,
+        float sun_dot,
+        vec3 sun_dir,
+        vec3 east,
+        vec3 north,
+        int W,
+        int H
+    ) {
+    if (sun_dot <= 0.0) {
+        return 0.0;
+    }
+    vec2 sun_h = vec2(dot(sun_dir, east), dot(sun_dir, north));
+    float hlen = length(sun_h);
+    if (hlen <= 0.0001) {
+        return 0.0;
+    }
+    vec2 dir = sun_h / hlen;
+    // Map coordinates: +x east, +y south.
+    float dx = dir.x;
+    float dy = -dir.y;
+    float h0 = max(0.0, Height.height[xi + yi * W]);
+    float max_horizon_slope = -1e6;
+    const int RAY_STEPS = 7;
+    const float HEIGHT_EXAG = 0.34;
+    for (int sidx = 1; sidx <= RAY_STEPS; sidx++) {
+        float dist = float(sidx);
+        float sx = float(xi) + dx * dist;
+        float sy = float(yi) + dy * dist;
+        float hs = max(0.0, sample_height_wrap_x(sx, sy, W, H));
+        float slope = ((hs - h0) * HEIGHT_EXAG) / max(1.0, dist);
+        max_horizon_slope = max(max_horizon_slope, slope);
+    }
+    float sun_slope = tan(max(0.0, asin(clamp(sun_dot, -1.0, 1.0))));
+    float excess = max_horizon_slope - sun_slope;
+    float occ = smoothstep(0.01, 0.08, excess);
+    return clamp01(occ);
+}
+
 void main(){
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
@@ -170,6 +231,8 @@ void main(){
     vec3 n = dir_from_lon_lat(lon, phi);
     float sun_lon = -TAU * PC.time_of_day;
     vec3 sun_dir = dir_from_lon_lat(sun_lon, delta);
+    vec3 east = vec3(-sin(lon), cos(lon), 0.0);
+    vec3 north = vec3(-sin(phi) * cos(lon), -sin(phi) * sin(lon), cos(phi));
 
     // Sun elevation (dot with surface normal) drives the terminator geometry.
     float s = dot(n, sun_dir);
@@ -177,14 +240,14 @@ void main(){
     float daylight = 0.0;
     float lat_abs = abs(lat_norm) * 2.0;
     // Night floor is the darkest baseline; eclipse shading cannot go below this.
-    float night_floor = 0.035;
+    float night_floor = 0.010;
     // Smooth high-latitude winter darkening (avoids hard latitude "scissor" lines).
     float hemi_dot = lat_norm * delta;
     float opposite_hemi = 1.0 - smoothstep(-0.02, 0.02, hemi_dot);
     float polar_weight = smoothstep(0.45, 0.95, lat_abs);
     float season_weight = smoothstep(radians(10.0), radians(28.0), abs(delta));
     float winter_darkening = opposite_hemi * polar_weight * season_weight * clamp(lat_abs * abs(delta) * 1.35, 0.0, 1.0);
-    night_floor = mix(0.035, 0.015, winter_darkening);
+    night_floor = mix(0.010, 0.002, winter_darkening);
     
     // Physically driven light model:
     // - direct beam from solar incidence
@@ -204,13 +267,22 @@ void main(){
         * smoothstep(0.00, 0.28, hemi_dot)
         * smoothstep(radians(8.0), radians(30.0), abs(delta));
     solar_lighting = clamp01(solar_lighting + 0.08 * summer_polar);
+    // Terrain-driven horizon occlusion: subtly irregularize the terminator at
+    // local scales while preserving global day/night/season geometry.
+    float term_band = 1.0 - smoothstep(0.14, 0.50, max(0.0, s));
+    float h_occ = terrain_horizon_occlusion(int(x), int(y), s, sun_dir, east, north, W, H) * term_band;
 
-    daylight = night_floor + (1.0 - night_floor) * solar_lighting;
+    float daylight_base = night_floor + (1.0 - night_floor) * solar_lighting;
+    float night_darkness_max = 1.0 - night_floor;
+    float base_darkness = clamp01(1.0 - daylight_base);
+    // Add horizon shadow directly in darkness space so twilight does not wash it out.
+    float horizon_darkness = 0.26 * h_occ;
 
     // Eclipse darkening only affects daylight above the night baseline.
     // This makes moon shadows melt into the terminator without stacking past night darkness.
     float moon_shadow = moon_shadow_factor(n, sun_dir, s);
-    float day_excess = max(0.0, daylight - night_floor);
+    float day_excess = max(0.0, daylight_base - night_floor);
+    float moon_darkness = day_excess * moon_shadow;
 
     // Terrain relief shading (hillshade): gentle, strongest near low sun.
     // Keep this much weaker than the day/night baseline darkness.
@@ -227,25 +299,19 @@ void main(){
     float dzdx = 0.5 * (h_r - h_l);
     float dzdy = 0.5 * (h_u - h_d);
     float slope_mag = clamp(length(vec2(dzdx, dzdy)) * 12.0, 0.0, 1.0);
-    vec3 east = vec3(-sin(lon), cos(lon), 0.0);
-    vec3 north = vec3(-sin(phi) * cos(lon), -sin(phi) * sin(lon), cos(phi));
     vec3 sun_local = normalize(vec3(dot(sun_dir, east), dot(sun_dir, north), max(0.02, s)));
     vec3 terrain_n = normalize(vec3(-dzdx * 11.0, -dzdy * 11.0, 1.0));
     float relief_lambert = max(dot(terrain_n, sun_local), 0.0);
-    // Keep relief active into twilight so terrain shading blends into the terminator.
-    float twilight_relief = smoothstep(-0.20, 0.14, s);
+    // Keep relief active well into twilight so the bright terminator edge does not erase it.
+    float twilight_relief = smoothstep(-0.30, 0.02, s);
     float relief_shadow = (1.0 - relief_lambert)
         * twilight_relief
         * smoothstep(0.03, 0.50, slope_mag);
     float low_sun_boost = 1.0 - smoothstep(0.10, 0.75, max(0.0, s));
-    float relief_strength = 0.10 + 0.20 * low_sun_boost;
-    float lit_excess = day_excess * (1.0 - moon_shadow);
-    float relief_blend = clamp(relief_strength * relief_shadow, 0.0, 0.92);
-    float daylight_lit = night_floor + lit_excess;
-    // Accumulate relief in darkness space and clamp at the night maximum.
-    float night_darkness_max = 1.0 - night_floor;
-    float base_darkness = clamp01(1.0 - daylight_lit);
-    float darkness = min(night_darkness_max, base_darkness + relief_blend);
+    float relief_strength = 0.04 + 0.09 * low_sun_boost;
+    float relief_blend = clamp(relief_strength * relief_shadow, 0.0, 0.55);
+    // Final additive composition in darkness space.
+    float darkness = min(night_darkness_max, base_darkness + horizon_darkness + moon_darkness + relief_blend);
     daylight = 1.0 - darkness;
     
     // Apply base lighting and contrast

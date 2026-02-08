@@ -99,8 +99,8 @@ class Config:
 	var diurnal_ocean_damp: float = 0.28
 	var time_of_day: float = 0.0
 	# Day-night visual settings
-	var day_night_contrast: float = 0.86
-	var day_night_base: float = 0.14
+	var day_night_contrast: float = 0.992
+	var day_night_base: float = 0.008
 	# Intro-scene moon system propagated into world light field
 	var moon_count: int = 0
 	var moon_seed: float = 0.0
