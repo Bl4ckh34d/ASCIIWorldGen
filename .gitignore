@@ -18,4 +18,6 @@ build/
 *.tmp
 *.log
 
+# Local tools/downloads
+.tools/
 

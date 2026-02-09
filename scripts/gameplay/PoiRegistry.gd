@@ -18,18 +18,18 @@ static func get_poi_at(world_seed_hash: int, world_x: int, world_y: int, local_x
 	elif _is_forest_biome(biome_id):
 		house_chance = 0.045
 		dungeon_chance = 0.018
-		elif _is_desert_biome(biome_id):
-			house_chance = 0.018
-			dungeon_chance = 0.030
-		if roll <= house_chance:
-			var shop_roll: float = DeterministicRng.randf01(world_seed_hash, key_root + "|shop")
-			var shop_chance: float = 0.15
-			return {
-				"type": "House",
-				"id": "house_%d_%d_%d_%d" % [world_x, world_y, local_x, local_y],
-				"seed_key": key_root,
-				"is_shop": shop_roll <= shop_chance,
-			}
+	elif _is_desert_biome(biome_id):
+		house_chance = 0.018
+		dungeon_chance = 0.030
+	if roll <= house_chance:
+		var shop_roll: float = DeterministicRng.randf01(world_seed_hash, key_root + "|shop")
+		var shop_chance: float = 0.15
+		return {
+			"type": "House",
+			"id": "house_%d_%d_%d_%d" % [world_x, world_y, local_x, local_y],
+			"seed_key": key_root,
+			"is_shop": shop_roll <= shop_chance,
+		}
 	if roll <= house_chance + dungeon_chance:
 		return {
 			"type": "Dungeon",
