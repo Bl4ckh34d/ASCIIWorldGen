@@ -21,6 +21,11 @@ var world_seed_hash: int = 0
 var world_width: int = 0
 var world_height: int = 0
 var world_biome_ids: PackedInt32Array = PackedInt32Array()
+var world_height_raw: PackedFloat32Array = PackedFloat32Array()
+var world_temperature: PackedFloat32Array = PackedFloat32Array()
+var world_moisture: PackedFloat32Array = PackedFloat32Array()
+var world_land_mask: PackedByteArray = PackedByteArray()
+var world_beach_mask: PackedByteArray = PackedByteArray()
 
 var location: Dictionary = {
 	"scene": SceneContracts.STATE_WORLD,
@@ -119,6 +124,11 @@ func reset_run() -> void:
 	world_width = 0
 	world_height = 0
 	world_biome_ids = PackedInt32Array()
+	world_height_raw = PackedFloat32Array()
+	world_temperature = PackedFloat32Array()
+	world_moisture = PackedFloat32Array()
+	world_land_mask = PackedByteArray()
+	world_beach_mask = PackedByteArray()
 	location = {
 		"scene": SceneContracts.STATE_WORLD,
 		"world_x": 0,
@@ -142,11 +152,27 @@ func reset_run() -> void:
 	_emit_quests_changed()
 	_emit_world_flags_changed()
 
-func initialize_world_snapshot(width: int, height: int, seed_hash: int, biome_ids: PackedInt32Array) -> void:
+func initialize_world_snapshot(
+	width: int,
+	height: int,
+	seed_hash: int,
+	biome_ids: PackedInt32Array,
+	height_raw: PackedFloat32Array = PackedFloat32Array(),
+	temperature: PackedFloat32Array = PackedFloat32Array(),
+	moisture: PackedFloat32Array = PackedFloat32Array(),
+	land_mask: PackedByteArray = PackedByteArray(),
+	beach_mask: PackedByteArray = PackedByteArray()
+) -> void:
 	world_width = max(1, width)
 	world_height = max(1, height)
 	world_seed_hash = seed_hash
 	world_biome_ids = biome_ids.duplicate()
+	var size: int = world_width * world_height
+	world_height_raw = height_raw.duplicate() if height_raw.size() == size else PackedFloat32Array()
+	world_temperature = temperature.duplicate() if temperature.size() == size else PackedFloat32Array()
+	world_moisture = moisture.duplicate() if moisture.size() == size else PackedFloat32Array()
+	world_land_mask = land_mask.duplicate() if land_mask.size() == size else PackedByteArray()
+	world_beach_mask = beach_mask.duplicate() if beach_mask.size() == size else PackedByteArray()
 	if _events and _events.has_signal("world_snapshot_updated"):
 		_events.emit_signal("world_snapshot_updated", world_width, world_height, world_seed_hash)
 
@@ -792,6 +818,11 @@ func _from_save_payload(data: Dictionary, version: int = SAVE_SCHEMA_VERSION) ->
 	world_width = max(0, int(data.get("world_width", 0)))
 	world_height = max(0, int(data.get("world_height", 0)))
 	world_biome_ids = PackedInt32Array()
+	world_height_raw = PackedFloat32Array()
+	world_temperature = PackedFloat32Array()
+	world_moisture = PackedFloat32Array()
+	world_land_mask = PackedByteArray()
+	world_beach_mask = PackedByteArray()
 	var incoming_biomes: Array = data.get("world_biome_ids", [])
 	world_biome_ids.resize(incoming_biomes.size())
 	for i in range(incoming_biomes.size()):

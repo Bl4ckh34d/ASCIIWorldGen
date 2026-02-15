@@ -18,6 +18,11 @@ var world_seed_hash: int = 0
 var world_width: int = 0
 var world_height: int = 0
 var world_biome_ids: PackedInt32Array = PackedInt32Array()
+var world_height_raw: PackedFloat32Array = PackedFloat32Array()
+var world_temperature: PackedFloat32Array = PackedFloat32Array()
+var world_moisture: PackedFloat32Array = PackedFloat32Array()
+var world_land_mask: PackedByteArray = PackedByteArray()
+var world_beach_mask: PackedByteArray = PackedByteArray()
 var selected_world_tile: Vector2i = Vector2i(-1, -1)
 var selected_world_tile_biome_id: int = -1
 var selected_world_tile_biome_name: String = ""
@@ -40,6 +45,11 @@ func reset() -> void:
 	world_width = 0
 	world_height = 0
 	world_biome_ids = PackedInt32Array()
+	world_height_raw = PackedFloat32Array()
+	world_temperature = PackedFloat32Array()
+	world_moisture = PackedFloat32Array()
+	world_land_mask = PackedByteArray()
+	world_beach_mask = PackedByteArray()
 	selected_world_tile = Vector2i(-1, -1)
 	selected_world_tile_biome_id = -1
 	selected_world_tile_biome_name = ""
@@ -87,11 +97,27 @@ func consume_world_config() -> Dictionary:
 func get_intro_seed_string() -> String:
 	return _intro_seed_string
 
-func set_world_snapshot(width: int, height: int, seed_hash: int, biome_ids: PackedInt32Array) -> void:
+func set_world_snapshot(
+	width: int,
+	height: int,
+	seed_hash: int,
+	biome_ids: PackedInt32Array,
+	height_raw: PackedFloat32Array = PackedFloat32Array(),
+	temperature: PackedFloat32Array = PackedFloat32Array(),
+	moisture: PackedFloat32Array = PackedFloat32Array(),
+	land_mask: PackedByteArray = PackedByteArray(),
+	beach_mask: PackedByteArray = PackedByteArray()
+) -> void:
 	world_width = max(1, width)
 	world_height = max(1, height)
 	world_seed_hash = seed_hash
 	world_biome_ids = biome_ids.duplicate()
+	var size: int = world_width * world_height
+	world_height_raw = height_raw.duplicate() if height_raw.size() == size else PackedFloat32Array()
+	world_temperature = temperature.duplicate() if temperature.size() == size else PackedFloat32Array()
+	world_moisture = moisture.duplicate() if moisture.size() == size else PackedFloat32Array()
+	world_land_mask = land_mask.duplicate() if land_mask.size() == size else PackedByteArray()
+	world_beach_mask = beach_mask.duplicate() if beach_mask.size() == size else PackedByteArray()
 
 func set_selected_world_tile(x: int, y: int, biome_id: int, biome_name: String, local_x: int = 48, local_y: int = 48) -> void:
 	selected_world_tile = Vector2i(x, y)

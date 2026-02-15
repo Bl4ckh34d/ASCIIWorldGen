@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/gameplay/WorldMapOverlay.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/rendering/GPUAsciiRenderer.gd" id="2"]
 
 [node name="WorldMapOverlay" type="CanvasLayer"]
 layer = 19
@@ -50,18 +51,15 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "-"
 
-[node name="MapLabel" type="RichTextLabel" parent="RootPanel/Margin/VBox"]
+[node name="GpuMap" type="Control" parent="RootPanel/Margin/VBox"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 custom_minimum_size = Vector2(0, 560)
-theme_override_font_sizes/normal_font_size = 10
-bbcode_enabled = true
-autowrap_mode = 0
-scroll_active = true
+mouse_filter = 0
+script = ExtResource("2")
 
 [node name="FooterLabel" type="Label" parent="RootPanel/Margin/VBox"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Arrows: Move cursor | Enter: Fast travel (visited only) | M: Close"
-
+text = "Mouse: Move cursor + LMB fast travel | Arrows/WASD: Move cursor | Shift/Ctrl: faster | Enter/Space: Fast travel | M: Close"

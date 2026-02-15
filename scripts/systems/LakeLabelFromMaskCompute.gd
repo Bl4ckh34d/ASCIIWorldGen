@@ -126,3 +126,24 @@ func label_from_mask_gpu_buffers(
 	_rd.free_rid(u_set)
 	_rd.free_rid(buf_changed)
 	return true
+
+func cleanup() -> void:
+	if _rd != null:
+		if _clear_pipeline.is_valid():
+			_rd.free_rid(_clear_pipeline)
+		if _clear_shader.is_valid():
+			_rd.free_rid(_clear_shader)
+		if _seed_pipeline.is_valid():
+			_rd.free_rid(_seed_pipeline)
+		if _seed_shader.is_valid():
+			_rd.free_rid(_seed_shader)
+		if _prop_pipeline.is_valid():
+			_rd.free_rid(_prop_pipeline)
+		if _prop_shader.is_valid():
+			_rd.free_rid(_prop_shader)
+	_clear_pipeline = RID()
+	_clear_shader = RID()
+	_seed_pipeline = RID()
+	_seed_shader = RID()
+	_prop_pipeline = RID()
+	_prop_shader = RID()

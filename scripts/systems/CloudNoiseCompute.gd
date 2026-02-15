@@ -91,3 +91,12 @@ func generate_clouds_gpu(w: int, h: int, params: Dictionary, out_buf: RID) -> bo
 	_rd.free_rid(uniform_set)
 	return true
 
+func cleanup() -> void:
+	if _rd != null:
+		if _pipeline.is_valid():
+			_rd.free_rid(_pipeline)
+		if _shader.is_valid():
+			_rd.free_rid(_shader)
+	_pipeline = RID()
+	_shader = RID()
+	_rd = null

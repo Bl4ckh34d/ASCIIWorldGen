@@ -1,5 +1,6 @@
 # File: res://scripts/systems/HydroUpdateSystem.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # Lightweight system to update flow/accumulation/rivers on a cadence.
 # Adds a simple tiling scheduler to amortize updates over several ticks.
@@ -14,6 +15,17 @@ var river_threshold: float = 4.0
 const RIVER_STAGE_BUFFER_NAME: String = "river_stage"
 const CATCHUP_BOOST_DT1: float = 1.5
 const CATCHUP_BOOST_DT2: float = 3.5
+
+func cleanup() -> void:
+	if _river_tex is Object:
+		var tex_obj: Object = _river_tex as Object
+		if tex_obj.has_method("cleanup"):
+			tex_obj.call("cleanup")
+		elif tex_obj.has_method("clear"):
+			tex_obj.call("clear")
+	_river_tex = null
+	generator = null
+	_tile_cursor = 0
 
 func initialize(gen: Object) -> void:
 	generator = gen
@@ -97,7 +109,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				var cycle_end_now: bool = ((_tile_cursor + 1) % total_tiles == 0)
 				if cycle_end_now and river_stage_buf.is_valid() and river_buf.is_valid():
 					if "dispatch_copy_u32" in generator:
-						river_cycle_committed = bool(generator.dispatch_copy_u32(river_stage_buf, river_buf, w * h)) or river_cycle_committed
+						river_cycle_committed = VariantCasts.to_bool(generator.dispatch_copy_u32(river_stage_buf, river_buf, w * h)) or river_cycle_committed
 		processed += 1
 		_tile_cursor = (_tile_cursor + 1) % total_tiles
 	if river_cycle_committed and _river_tex:
@@ -106,12 +118,14 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			var tex: Texture2D = _river_tex.update_from_buffer(w, h, river_buf_final)
 			if tex and "set_river_texture_override" in generator:
 				generator.set_river_texture_override(tex)
+			elif "set_river_texture_override" in generator:
+				generator.set_river_texture_override(null)
 	var dirty := PackedStringArray(["flow"])
 	if river_cycle_committed or (total_tiles <= 1 and river_trace_any):
 		dirty.append("river")
 	if "update_water_budget_and_sea_solver" in generator:
 		var wb: Dictionary = generator.update_water_budget_and_sea_solver(dt_days, world)
-		if bool(wb.get("sea_level_changed", false)):
+		if VariantCasts.to_bool(wb.get("sea_level_changed", false)):
 			dirty.append("is_land")
 			dirty.append("biome")
 	return {

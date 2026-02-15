@@ -10,6 +10,8 @@ layout(std430, set = 0, binding = 2) buffer DistOutBuf { float dist_out[]; } Dis
 layout(push_constant) uniform Params { int width; int height; int wrap_x; int mode; } PC; // mode: 0 fwd, 1 bwd, 2 seed
 
 int idx(int x, int y) { return x + y * PC.width; }
+int wrap_x_idx(int x, int w) { int r = x % w; return (r < 0) ? (r + w) : r; }
+bool valid_x(int x, int w) { return x >= 0 && x < w; }
 
 // Avoid built-in min precision overload issues by using explicit helpers
 float minf(float a, float b) { return a < b ? a : b; }
@@ -40,30 +42,38 @@ void main() {
 
     if (PC.mode == 0) {
         // forward: neighbors above and left
-        int xl = int(x) - 1; if (PC.wrap_x == 1) xl = (xl % W + W) % W;
-        int xr = int(x) + 1; if (PC.wrap_x == 1) xr = (xr % W + W) % W;
+        int xl = int(x) - 1;
+        int xr = int(x) + 1;
+        if (PC.wrap_x == 1) {
+            xl = wrap_x_idx(xl, W);
+            xr = wrap_x_idx(xr, W);
+        }
         int yt = int(y) - 1;
         // left
-        if (xl >= 0 && xl < W) best = minf(best, DistIn.dist_in[idx(xl, int(y))] + C1);
+        if (valid_x(xl, W)) best = minf(best, DistIn.dist_in[idx(xl, int(y))] + C1);
         // top
         if (yt >= 0) best = minf(best, DistIn.dist_in[idx(int(x), yt)] + C1);
         // top-left
-        if (yt >= 0 && xl >= 0 && xl < W) best = minf(best, DistIn.dist_in[idx(xl, yt)] + C2);
+        if (yt >= 0 && valid_x(xl, W)) best = minf(best, DistIn.dist_in[idx(xl, yt)] + C2);
         // top-right
-        if (yt >= 0) best = minf(best, DistIn.dist_in[idx(xr < W ? xr : (PC.wrap_x == 1 ? (xr % W) : W - 1), yt)] + C2);
+        if (yt >= 0 && valid_x(xr, W)) best = minf(best, DistIn.dist_in[idx(xr, yt)] + C2);
     } else {
         // backward: neighbors below and right
-        int xl = int(x) - 1; if (PC.wrap_x == 1) xl = (xl % W + W) % W;
-        int xr = int(x) + 1; if (PC.wrap_x == 1) xr = (xr % W + W) % W;
+        int xl = int(x) - 1;
+        int xr = int(x) + 1;
+        if (PC.wrap_x == 1) {
+            xl = wrap_x_idx(xl, W);
+            xr = wrap_x_idx(xr, W);
+        }
         int yb = int(y) + 1;
         // right
-        if (xr < W || PC.wrap_x == 1) best = minf(best, DistIn.dist_in[idx(xr < W ? xr : (xr % W), int(y))] + C1);
+        if (valid_x(xr, W)) best = minf(best, DistIn.dist_in[idx(xr, int(y))] + C1);
         // bottom
         if (yb < H) best = minf(best, DistIn.dist_in[idx(int(x), yb)] + C1);
         // bottom-left
-        if (yb < H) best = minf(best, DistIn.dist_in[idx(xl, yb)] + C2);
+        if (yb < H && valid_x(xl, W)) best = minf(best, DistIn.dist_in[idx(xl, yb)] + C2);
         // bottom-right
-        if (yb < H) best = minf(best, DistIn.dist_in[idx(xr < W ? xr : (xr % W), yb)] + C2);
+        if (yb < H && valid_x(xr, W)) best = minf(best, DistIn.dist_in[idx(xr, yb)] + C2);
     }
 
     DistOut.dist_out[i] = best;

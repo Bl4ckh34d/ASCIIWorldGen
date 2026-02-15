@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c8sl37m0fu6wi"
+path="res://.godot/imported/pop_migrate.glsl-20acfa13fbd4f142a36118f2b76ff08b.res"
+
+[deps]
+
+source_file="res://shaders/society/pop_migrate.glsl"
+dest_files=["res://.godot/imported/pop_migrate.glsl-20acfa13fbd4f142a36118f2b76ff08b.res"]
+
+[params]
+

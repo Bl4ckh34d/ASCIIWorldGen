@@ -1,5 +1,6 @@
 # File: res://scripts/intro/Intro.gd
 extends Control
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const IntroBigBangCompute = preload("res://scripts/intro/IntroBigBangCompute.gd")
 
@@ -345,7 +346,7 @@ func _is_first_intro_quote_start() -> bool:
 	var err: int = cfg.load(INTRO_FLAGS_PATH)
 	if err != OK:
 		return true
-	return not bool(cfg.get_value(INTRO_FLAGS_SECTION, INTRO_FLAGS_KEY_FIRST_QUOTE_SHOWN, false))
+	return not VariantCasts.to_bool(cfg.get_value(INTRO_FLAGS_SECTION, INTRO_FLAGS_KEY_FIRST_QUOTE_SHOWN, false))
 
 func _mark_first_intro_quote_shown() -> void:
 	var cfg := ConfigFile.new()

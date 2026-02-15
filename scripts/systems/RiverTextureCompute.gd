@@ -43,6 +43,8 @@ func _ensure_pipeline() -> void:
 		_pipeline = _rd.compute_pipeline_create(_shader)
 
 func _ensure_texture(w: int, h: int) -> void:
+	w = max(1, int(w))
+	h = max(1, int(h))
 	if _tex_rid.is_valid() and w == _width and h == _height:
 		return
 	if _tex_rid.is_valid():
@@ -60,6 +62,9 @@ func _ensure_texture(w: int, h: int) -> void:
 	fmt.usage_bits = RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
 	var view := RDTextureView.new()
 	_tex_rid = _rd.texture_create(fmt, view)
+	if not _tex_rid.is_valid():
+		_tex = null
+		return
 	_tex = Texture2DRD.new()
 	if _tex.has_method("set_texture_rd_rid"):
 		_tex.set_texture_rd_rid(_tex_rid)
@@ -79,7 +84,7 @@ func update_from_buffer(w: int, h: int, river_buf: RID) -> Texture2D:
 	if not river_buf.is_valid():
 		return null
 	_ensure_texture(w, h)
-	if _tex == null:
+	if _tex == null or not _tex_rid.is_valid():
 		return null
 	var uniforms: Array = []
 	var u := RDUniform.new()
@@ -93,6 +98,8 @@ func update_from_buffer(w: int, h: int, river_buf: RID) -> Texture2D:
 	img_u.add_id(_tex_rid)
 	uniforms.append(img_u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	if not u_set.is_valid():
+		return null
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
 	pc.append_array(ints.to_byte_array())
@@ -108,8 +115,24 @@ func update_from_buffer(w: int, h: int, river_buf: RID) -> Texture2D:
 	_rd.compute_list_set_push_constant(cl, pc, pc.size())
 	_rd.compute_list_dispatch(cl, gx, gy, 1)
 	_rd.compute_list_end()
-	_rd.free_rid(u_set)
+	if u_set.is_valid():
+		_rd.free_rid(u_set)
 	return _tex
 
 func get_texture() -> Texture2D:
 	return _tex
+
+func cleanup() -> void:
+	if _rd != null:
+		if _tex_rid.is_valid():
+			_rd.free_rid(_tex_rid)
+		if _pipeline.is_valid():
+			_rd.free_rid(_pipeline)
+		if _shader.is_valid():
+			_rd.free_rid(_shader)
+	_tex_rid = RID()
+	_pipeline = RID()
+	_shader = RID()
+	_tex = null
+	_width = 0
+	_height = 0

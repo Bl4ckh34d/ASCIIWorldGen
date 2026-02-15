@@ -50,6 +50,8 @@ func apply(w: int, h: int, temp_buf: RID, moist_buf: RID, slow_temp_buf: RID, sl
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(slow_temp_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(slow_moist_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
 	var floats := PackedFloat32Array([clamp(alpha, 0.0, 1.0)])
@@ -70,3 +72,13 @@ func apply(w: int, h: int, temp_buf: RID, moist_buf: RID, slow_temp_buf: RID, sl
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
 	return true
+
+func cleanup() -> void:
+	if _rd != null:
+		if _pipeline.is_valid():
+			_rd.free_rid(_pipeline)
+		if _shader.is_valid():
+			_rd.free_rid(_shader)
+	_pipeline = RID()
+	_shader = RID()
+	_rd = null

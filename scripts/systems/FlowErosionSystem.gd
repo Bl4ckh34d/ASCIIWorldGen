@@ -1,5 +1,6 @@
 # File: res://scripts/systems/FlowErosionSystem.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 ## Rivers, flow accumulation, and light erosion.
 ## Fast linear-time pipeline: basin pooling above sea level, D4 flow, accumulation,
@@ -18,7 +19,7 @@ func _compare_height(a, b) -> bool:
 
 func compute_pour_from_labels(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, lake_mask: PackedByteArray, lake_id: PackedInt32Array, settings: Dictionary = {}) -> Dictionary:
 	var size: int = max(0, w * h)
-	var wrap_x: bool = bool(settings.get("wrap_x", true))
+	var wrap_x: bool = VariantCasts.to_bool(settings.get("wrap_x", true))
 	# Collect boundary candidates per lake_id
 	var per_lake: Dictionary = {}
 	for i in range(size):
@@ -110,7 +111,7 @@ func compute_pour_from_labels(w: int, h: int, height: PackedFloat32Array, is_lan
 
 func compute_full(w: int, h: int, height: PackedFloat32Array, is_land: PackedByteArray, settings: Dictionary = {}) -> Dictionary:
 	var size: int = max(0, w * h)
-	var wrap_x: bool = bool(settings.get("wrap_x", true))
+	var wrap_x: bool = VariantCasts.to_bool(settings.get("wrap_x", true))
 	var flow_dir := PackedInt32Array()
 	var flow_accum := PackedFloat32Array()
 	var river := PackedByteArray()

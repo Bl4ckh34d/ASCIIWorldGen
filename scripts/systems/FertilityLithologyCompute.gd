@@ -175,3 +175,18 @@ func seed_from_lithology_gpu_buffers(
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
 	return true
+
+func cleanup() -> void:
+	if _rd != null:
+		if _seed_pipeline.is_valid():
+			_rd.free_rid(_seed_pipeline)
+		if _seed_shader.is_valid():
+			_rd.free_rid(_seed_shader)
+		if _pipeline.is_valid():
+			_rd.free_rid(_pipeline)
+		if _shader.is_valid():
+			_rd.free_rid(_shader)
+	_seed_pipeline = RID()
+	_seed_shader = RID()
+	_pipeline = RID()
+	_shader = RID()

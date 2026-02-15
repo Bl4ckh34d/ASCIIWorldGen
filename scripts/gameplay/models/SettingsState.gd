@@ -1,5 +1,6 @@
 extends RefCounted
 class_name SettingsStateModel
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 var encounter_rate_multiplier: float = 1.0
 var auto_battle_enabled: bool = false
@@ -20,7 +21,7 @@ func apply_patch(data: Dictionary) -> void:
 	if data.has("encounter_rate_multiplier"):
 		encounter_rate_multiplier = clamp(float(data["encounter_rate_multiplier"]), 0.10, 2.00)
 	if data.has("auto_battle_enabled"):
-		auto_battle_enabled = bool(data["auto_battle_enabled"])
+		auto_battle_enabled = VariantCasts.to_bool(data["auto_battle_enabled"])
 	if data.has("text_speed"):
 		text_speed = clamp(float(data["text_speed"]), 0.50, 2.00)
 	if data.has("master_volume"):

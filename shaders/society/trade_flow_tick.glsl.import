@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c0oftkiworbk"
+path="res://.godot/imported/trade_flow_tick.glsl-5268dc54ce50ac8d759a38e5dc1291b5.res"
+
+[deps]
+
+source_file="res://shaders/society/trade_flow_tick.glsl"
+dest_files=["res://.godot/imported/trade_flow_tick.glsl-5268dc54ce50ac8d759a38e5dc1291b5.res"]
+
+[params]
+

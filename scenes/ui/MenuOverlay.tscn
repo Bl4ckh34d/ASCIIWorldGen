@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/gameplay/MenuOverlay.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/SettingsDialog.gd" id="2"]
 
 [node name="MenuOverlay" type="CanvasLayer"]
 layer = 20
@@ -327,3 +328,13 @@ text = "Close"
 [node name="Hint" type="Label" parent="RootPanel/Margin/VBox"]
 layout_mode = 2
 text = "Esc or Tab closes menu"
+
+[node name="SettingsDialogBridge" type="AcceptDialog" parent="."]
+visible = false
+script = ExtResource("2")
+encounter_slider_path = NodePath("../RootPanel/Margin/VBox/Tabs/SettingsTab/EncounterRow/EncounterSlider")
+encounter_value_label_path = NodePath("../RootPanel/Margin/VBox/Tabs/SettingsTab/EncounterRow/EncounterValue")
+text_speed_slider_path = NodePath("../RootPanel/Margin/VBox/Tabs/SettingsTab/TextSpeedRow/TextSpeedSlider")
+text_speed_value_label_path = NodePath("../RootPanel/Margin/VBox/Tabs/SettingsTab/TextSpeedRow/TextSpeedValue")
+auto_battle_check_path = NodePath("../RootPanel/Margin/VBox/Tabs/SettingsTab/AutoBattleCheck")
+apply_button_path = NodePath("../RootPanel/Margin/VBox/Tabs/SettingsTab/ApplySettingsButton")

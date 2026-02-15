@@ -1,7 +1,9 @@
 extends RefCounted
 class_name BattleStateMachine
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
+const EnemyCatalog = preload("res://scripts/gameplay/catalog/EnemyCatalog.gd")
 const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
 const SpellCatalog = preload("res://scripts/gameplay/catalog/SpellCatalog.gd")
 
@@ -98,7 +100,7 @@ func apply_player_command(command_id: String) -> Dictionary:
 	if cmd == "flee":
 		var flee_out: Dictionary = _attempt_flee()
 		logs.append_array(flee_out.get("logs", PackedStringArray()))
-		if bool(flee_out.get("resolved", false)):
+		if VariantCasts.to_bool(flee_out.get("resolved", false)):
 			return {"ok": true, "logs": logs, "resolved": true, "result": result.duplicate(true)}
 		# Flee failed: enemies get a response action, then restart selection.
 		logs.append_array(_enemy_only_response())
@@ -146,6 +148,7 @@ func _actors_summary(actors: Array[Dictionary]) -> Array[Dictionary]:
 			"mp": int(a.get("mp", 0)),
 			"mp_max": int(a.get("mp_max", 0)),
 			"alive": int(a.get("hp", 0)) > 0,
+			"status": a.get("status", {}).duplicate(true) if typeof(a.get("status", {})) == TYPE_DICTIONARY else {},
 		})
 	return out
 
@@ -153,7 +156,7 @@ func _party_from_state(party_state: Variant) -> void:
 	party.clear()
 	if party_state == null:
 		party = [
-			{"id": "hero", "name": "Hero", "hp": 42, "hp_max": 42, "agi": 7, "str": 8, "def": 6, "int": 6},
+			{"id": "hero", "name": "Hero", "hp": 42, "hp_max": 42, "agi": 7, "str": 8, "def": 6, "int": 6, "status": {}},
 		]
 		return
 	# We accept either PartyStateModel or a plain Dictionary snapshot.
@@ -175,6 +178,7 @@ func _party_from_state(party_state: Variant) -> void:
 				"def": int(entry.get("defense", 5)) + int(eq_bonus.get("defense", 0)),
 				"agi": int(entry.get("agility", 6)) + int(eq_bonus.get("agility", 0)),
 				"int": int(entry.get("intellect", 6)) + int(eq_bonus.get("intellect", 0)),
+				"status": {},
 			})
 		return
 	# PartyStateModel instance: prefer converting to a Dictionary snapshot.
@@ -182,7 +186,7 @@ func _party_from_state(party_state: Variant) -> void:
 		_party_from_state(party_state.to_dict())
 	if party.is_empty():
 		party = [
-			{"id": "hero", "name": "Hero", "hp": 42, "hp_max": 42, "agi": 7, "str": 8, "def": 6, "int": 6},
+			{"id": "hero", "name": "Hero", "hp": 42, "hp_max": 42, "agi": 7, "str": 8, "def": 6, "int": 6, "status": {}},
 		]
 
 func _inventory_from_state(party_state: Variant) -> void:
@@ -239,6 +243,32 @@ func _enemies_from_encounter(enc: Dictionary) -> void:
 	var count: int = max(1, int(enc.get("enemy_count", 1)))
 	var power: int = max(4, int(enc.get("enemy_power", 8)))
 	var total_hp: int = max(10, int(enc.get("enemy_hp", 24)))
+	var profile_id: String = String(enc.get("enemy_profile_id", "")).strip_edges()
+	var tags: PackedStringArray = _parse_enemy_tags(enc.get("enemy_tags", []))
+	var resist: Dictionary = _parse_enemy_resist(enc.get("enemy_resist", {}))
+	var actions: Array[Dictionary] = _parse_enemy_actions(enc.get("enemy_actions", []))
+	if profile_id.is_empty() or actions.is_empty() or resist.is_empty() or tags.is_empty():
+		var fallback: Dictionary = EnemyCatalog.profile_for_group(group)
+		if profile_id.is_empty():
+			profile_id = String(fallback.get("id", "")).strip_edges()
+		if tags.is_empty():
+			tags = _parse_enemy_tags(fallback.get("tags", []))
+		if resist.is_empty():
+			resist = _parse_enemy_resist(fallback.get("resist", {}))
+		if actions.is_empty():
+			actions = _parse_enemy_actions(fallback.get("actions", []))
+	if actions.is_empty():
+		actions.append({
+			"id": "attack",
+			"label": "hits",
+			"weight": 1.0,
+			"damage_type": "physical",
+			"power_mult": 1.0,
+			"target_mode": "single",
+			"status": "",
+			"status_turns": 1,
+			"status_chance": 0.0,
+		})
 	var base_hp: int = int(ceil(float(total_hp) / float(count)))
 	for i in range(count):
 		var hp_i: int = base_hp
@@ -252,7 +282,62 @@ func _enemies_from_encounter(enc: Dictionary) -> void:
 			"hp_max": hp_i,
 			"power": power,
 			"agi": 6 + int(round(float(power) * 0.35)),
+			"status": {},
+			"profile_id": profile_id,
+			"tags": tags.duplicate(),
+			"resist": resist.duplicate(true),
+			"actions": _duplicate_actions(actions),
 		})
+
+func _parse_enemy_tags(v: Variant) -> PackedStringArray:
+	var out: PackedStringArray = PackedStringArray()
+	if typeof(v) != TYPE_ARRAY and typeof(v) != TYPE_PACKED_STRING_ARRAY:
+		return out
+	for tv in v:
+		var s: String = String(tv).strip_edges().to_lower()
+		if s.is_empty():
+			continue
+		out.append(s)
+	return out
+
+func _parse_enemy_resist(v: Variant) -> Dictionary:
+	var out: Dictionary = {}
+	if typeof(v) != TYPE_DICTIONARY:
+		return out
+	var d: Dictionary = v
+	for k in d.keys():
+		var key: String = String(k).strip_edges().to_lower()
+		if key.is_empty():
+			continue
+		out[key] = clamp(float(d.get(k, 1.0)), 0.20, 3.00)
+	return out
+
+func _parse_enemy_actions(v: Variant) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	if typeof(v) != TYPE_ARRAY:
+		return out
+	for av in v:
+		if typeof(av) != TYPE_DICTIONARY:
+			continue
+		var a: Dictionary = av as Dictionary
+		out.append({
+			"id": String(a.get("id", "attack")),
+			"label": String(a.get("label", "hits")),
+			"weight": max(0.0, float(a.get("weight", 1.0))),
+			"damage_type": String(a.get("damage_type", "physical")).to_lower(),
+			"power_mult": clamp(float(a.get("power_mult", 1.0)), 0.20, 3.00),
+			"target_mode": "all" if String(a.get("target_mode", "single")).to_lower() == "all" else "single",
+			"status": String(a.get("status", "")).to_lower(),
+			"status_turns": max(1, int(a.get("status_turns", 1))),
+			"status_chance": clamp(float(a.get("status_chance", 0.0)), 0.0, 1.0),
+		})
+	return out
+
+func _duplicate_actions(actions: Array[Dictionary]) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for a in actions:
+		out.append(a.duplicate(true))
+	return out
 
 func _reset_selection() -> void:
 	_select_indices = PackedInt32Array()
@@ -334,6 +419,12 @@ func _resolve_round() -> PackedStringArray:
 		if phase == Phase.RESOLVED:
 			break
 
+	if phase != Phase.RESOLVED:
+		logs.append_array(_apply_end_of_turn_status_ticks())
+		_check_terminal()
+		if phase == Phase.RESOLVED:
+			return logs
+
 	# Cleanup for next round.
 	_queued_commands.clear()
 	if phase != Phase.RESOLVED:
@@ -394,11 +485,15 @@ func _apply_party_action(party_idx: int, cmd: String, arg: String = "", target_i
 				var dmg_base: int = max(1, int(effect.get("power", 10)))
 				var strv: int = int(actor.get("str", 6))
 				var jitter3: int = int(round(_roll("idmg|%s|turn=%d" % [String(actor.get("id", "")), turn_index]) * 4.0))
-				var dmg3: int = max(1, dmg_base + int(round(float(strv) * 0.35)) + jitter3)
+				var dmg3_raw: int = max(1, dmg_base + int(round(float(strv) * 0.35)) + jitter3)
+				var dmg_type3: String = String(effect.get("damage_type", "explosive")).to_lower()
+				var dmg_info3: Dictionary = _apply_enemy_resistance_to_damage(tgt3, dmg3_raw, dmg_type3)
+				var dmg3: int = int(dmg_info3.get("damage", dmg3_raw))
+				var mult3: float = float(dmg_info3.get("mult", 1.0))
 				tgt3["hp"] = max(0, int(tgt3.get("hp", 0)) - dmg3)
 				enemies[tgt_e] = tgt3
 				_consume_item(item_name, 1)
-				logs.append("%s uses %s for %d damage." % [actor_name, item_name, dmg3])
+				logs.append("%s uses %s for %d damage%s." % [actor_name, item_name, dmg3, _resistance_suffix(mult3)])
 				if int(tgt3.get("hp", 0)) <= 0:
 					logs.append("%s was defeated." % String(tgt3.get("name", "Enemy")))
 				return logs
@@ -483,10 +578,14 @@ func _apply_party_action(party_idx: int, cmd: String, arg: String = "", target_i
 				var dmg_base: int = max(1, int(spell.get("power", 6)))
 				var intv3: int = int(actor.get("int", 6))
 				var jitter3: int = int(round(_roll("sdmg|%s|turn=%d" % [String(actor.get("id", "")), turn_index]) * 4.0))
-				var dmg3: int = max(1, dmg_base + int(round(float(intv3) * 0.75)) + jitter3)
+				var dmg3_raw: int = max(1, dmg_base + int(round(float(intv3) * 0.75)) + jitter3)
+				var dmg_type3: String = String(spell.get("damage_type", "arcane")).to_lower()
+				var dmg_info3: Dictionary = _apply_enemy_resistance_to_damage(tgt3, dmg3_raw, dmg_type3)
+				var dmg3: int = int(dmg_info3.get("damage", dmg3_raw))
+				var mult3: float = float(dmg_info3.get("mult", 1.0))
 				tgt3["hp"] = max(0, int(tgt3.get("hp", 0)) - dmg3)
 				enemies[tgt_e] = tgt3
-				logs.append("%s casts %s for %d damage." % [actor_name, spell_name, dmg3])
+				logs.append("%s casts %s for %d damage%s." % [actor_name, spell_name, dmg3, _resistance_suffix(mult3)])
 				if int(tgt3.get("hp", 0)) <= 0:
 					logs.append("%s was defeated." % String(tgt3.get("name", "Enemy")))
 				return logs
@@ -497,9 +596,12 @@ func _apply_party_action(party_idx: int, cmd: String, arg: String = "", target_i
 		return logs
 	var dmg: int = _calc_party_damage(actor, cmd)
 	var tgt: Dictionary = enemies[target_idx]
-	tgt["hp"] = max(0, int(tgt.get("hp", 0)) - dmg)
+	var dmg_info: Dictionary = _apply_enemy_resistance_to_damage(tgt, dmg, "physical")
+	var dmg_final: int = int(dmg_info.get("damage", dmg))
+	var dmg_mult: float = float(dmg_info.get("mult", 1.0))
+	tgt["hp"] = max(0, int(tgt.get("hp", 0)) - dmg_final)
 	enemies[target_idx] = tgt
-	logs.append("%s uses %s for %d damage." % [actor_name, cmd.capitalize(), dmg])
+	logs.append("%s uses %s for %d damage%s." % [actor_name, cmd.capitalize(), dmg_final, _resistance_suffix(dmg_mult)])
 	if int(tgt.get("hp", 0)) <= 0:
 		logs.append("%s was defeated." % String(tgt.get("name", "Enemy")))
 	return logs
@@ -511,16 +613,60 @@ func _apply_enemy_action(enemy_idx: int) -> PackedStringArray:
 	var e: Dictionary = enemies[enemy_idx]
 	if int(e.get("hp", 0)) <= 0:
 		return logs
+	var action: Dictionary = _pick_enemy_action(enemy_idx, e)
+	var action_label: String = String(action.get("label", "hits"))
+	var action_status: String = String(action.get("status", "")).to_lower()
+	var status_turns: int = max(1, int(action.get("status_turns", 1)))
+	var status_chance: float = clamp(float(action.get("status_chance", 0.0)), 0.0, 1.0)
+	var damage_type: String = String(action.get("damage_type", "physical")).to_lower()
+	var power_mult: float = clamp(float(action.get("power_mult", 1.0)), 0.20, 3.00)
+	var target_mode: String = String(action.get("target_mode", "single")).to_lower()
+	var enemy_name: String = String(e.get("name", "Enemy"))
+	if target_mode == "all":
+		var hits: int = 0
+		for i in range(party.size()):
+			if int(party[i].get("hp", 0)) <= 0:
+				continue
+			var raw: int = _calc_enemy_damage(e, power_mult * 0.85)
+			var tgt: Dictionary = party[i]
+			var dmg_info: Dictionary = _apply_party_resistance_to_damage(tgt, raw, damage_type)
+			var dmg: int = int(dmg_info.get("damage", raw))
+			var mult: float = float(dmg_info.get("mult", 1.0))
+			tgt["hp"] = max(0, int(tgt.get("hp", 0)) - dmg)
+			party[i] = tgt
+			logs.append("%s %s %s for %d damage%s." % [enemy_name, action_label, String(tgt.get("name", "Member")), dmg, _resistance_suffix(mult)])
+			if int(tgt.get("hp", 0)) <= 0:
+				logs.append("%s was knocked out." % String(tgt.get("name", "Member")))
+			hits += 1
+			if action_status.is_empty():
+				continue
+			if int(tgt.get("hp", 0)) <= 0:
+				continue
+			var chance: float = _status_apply_chance_vs_actor(status_chance, tgt, action_status)
+			var roll_key: String = "estat|%s|turn=%d|all|%d|%s" % [String(e.get("id", "e")), turn_index, i, action_status]
+			if _roll(roll_key) <= chance and apply_status_to_actor("party", String(tgt.get("id", "")), action_status, status_turns):
+				logs.append("%s is afflicted with %s." % [String(tgt.get("name", "Member")), action_status.capitalize()])
+		if hits <= 0:
+			return logs
+		return logs
 	var target_idx: int = _pick_alive_party_target(enemy_idx)
 	if target_idx < 0:
 		return logs
-	var dmg: int = _calc_enemy_damage(e)
-	var tgt: Dictionary = party[target_idx]
-	tgt["hp"] = max(0, int(tgt.get("hp", 0)) - dmg)
-	party[target_idx] = tgt
-	logs.append("%s hits %s for %d damage." % [String(e.get("name", "Enemy")), String(tgt.get("name", "Member")), dmg])
-	if int(tgt.get("hp", 0)) <= 0:
-		logs.append("%s was knocked out." % String(tgt.get("name", "Member")))
+	var raw_dmg: int = _calc_enemy_damage(e, power_mult)
+	var tgt2: Dictionary = party[target_idx]
+	var dmg_info2: Dictionary = _apply_party_resistance_to_damage(tgt2, raw_dmg, damage_type)
+	var dmg2: int = int(dmg_info2.get("damage", raw_dmg))
+	var mult2: float = float(dmg_info2.get("mult", 1.0))
+	tgt2["hp"] = max(0, int(tgt2.get("hp", 0)) - dmg2)
+	party[target_idx] = tgt2
+	logs.append("%s %s %s for %d damage%s." % [enemy_name, action_label, String(tgt2.get("name", "Member")), dmg2, _resistance_suffix(mult2)])
+	if int(tgt2.get("hp", 0)) <= 0:
+		logs.append("%s was knocked out." % String(tgt2.get("name", "Member")))
+	elif not action_status.is_empty():
+		var chance2: float = _status_apply_chance_vs_actor(status_chance, tgt2, action_status)
+		var roll_key2: String = "estat|%s|turn=%d|%s" % [String(e.get("id", "e")), turn_index, action_status]
+		if _roll(roll_key2) <= chance2 and apply_status_to_actor("party", String(tgt2.get("id", "")), action_status, status_turns):
+			logs.append("%s is afflicted with %s." % [String(tgt2.get("name", "Member")), action_status.capitalize()])
 	return logs
 
 func _attempt_flee() -> Dictionary:
@@ -548,6 +694,74 @@ func _enemy_only_response() -> PackedStringArray:
 			break
 	return logs
 
+func apply_status_to_actor(side: String, actor_id: String, status_id: String, turns: int = 1) -> bool:
+	# v0 status scaffold API: apply/refresh a timed status effect.
+	side = String(side).to_lower()
+	actor_id = String(actor_id)
+	status_id = String(status_id).to_lower()
+	turns = max(1, int(turns))
+	if actor_id.is_empty() or status_id.is_empty():
+		return false
+	var list_ref: Array[Dictionary] = party if side == "party" else enemies
+	for i in range(list_ref.size()):
+		var a: Dictionary = list_ref[i]
+		if String(a.get("id", "")) != actor_id:
+			continue
+		var st: Dictionary = a.get("status", {})
+		if typeof(st) != TYPE_DICTIONARY:
+			st = {}
+		var prev: int = max(0, int(st.get("%s_turns" % status_id, 0)))
+		st["%s_turns" % status_id] = max(prev, turns)
+		a["status"] = st
+		if side == "party":
+			party[i] = a
+		else:
+			enemies[i] = a
+		return true
+	return false
+
+func _apply_end_of_turn_status_ticks() -> PackedStringArray:
+	var logs: PackedStringArray = PackedStringArray()
+	logs.append_array(_apply_status_ticks_for_side("party"))
+	logs.append_array(_apply_status_ticks_for_side("enemy"))
+	return logs
+
+func _apply_status_ticks_for_side(side: String) -> PackedStringArray:
+	var logs: PackedStringArray = PackedStringArray()
+	var count: int = party.size() if side == "party" else enemies.size()
+	for i in range(count):
+		var actor: Dictionary = party[i] if side == "party" else enemies[i]
+		if int(actor.get("hp", 0)) <= 0:
+			continue
+		var st: Dictionary = actor.get("status", {})
+		if typeof(st) != TYPE_DICTIONARY:
+			continue
+
+		# Poison (v0 scaffold): fixed percent damage for N turns.
+		var poison_turns: int = max(0, int(st.get("poison_turns", 0)))
+		if poison_turns > 0:
+			var hp_max: int = max(1, int(actor.get("hp_max", 1)))
+			var dmg: int = max(1, int(ceil(float(hp_max) * 0.05)))
+			actor["hp"] = max(0, int(actor.get("hp", 0)) - dmg)
+			poison_turns -= 1
+			if poison_turns <= 0:
+				st.erase("poison_turns")
+			else:
+				st["poison_turns"] = poison_turns
+			actor["status"] = st
+			var n: String = String(actor.get("name", "Actor"))
+			logs.append("%s suffers %d poison damage." % [n, dmg])
+			if int(actor.get("hp", 0)) <= 0:
+				if side == "party":
+					logs.append("%s was knocked out." % n)
+				else:
+					logs.append("%s was defeated." % n)
+		if side == "party":
+			party[i] = actor
+		else:
+			enemies[i] = actor
+	return logs
+
 func _first_alive_enemy() -> int:
 	for i in range(enemies.size()):
 		if int(enemies[i].get("hp", 0)) > 0:
@@ -565,6 +779,95 @@ func _pick_alive_party_target(enemy_idx: int) -> int:
 	pick = clamp(pick, 0, alive.size() - 1)
 	return int(alive[pick])
 
+func _pick_enemy_action(enemy_idx: int, enemy: Dictionary) -> Dictionary:
+	var acts_v: Variant = enemy.get("actions", [])
+	if typeof(acts_v) != TYPE_ARRAY:
+		return {
+			"id": "attack",
+			"label": "hits",
+			"weight": 1.0,
+			"damage_type": "physical",
+			"power_mult": 1.0,
+			"target_mode": "single",
+			"status": "",
+			"status_turns": 1,
+			"status_chance": 0.0,
+		}
+	var acts: Array = acts_v
+	if acts.is_empty():
+		return {
+			"id": "attack",
+			"label": "hits",
+			"weight": 1.0,
+			"damage_type": "physical",
+			"power_mult": 1.0,
+			"target_mode": "single",
+			"status": "",
+			"status_turns": 1,
+			"status_chance": 0.0,
+		}
+	var total_w: float = 0.0
+	for av in acts:
+		if typeof(av) != TYPE_DICTIONARY:
+			continue
+		total_w += max(0.0, float((av as Dictionary).get("weight", 1.0)))
+	if total_w <= 0.0:
+		total_w = 1.0
+	var roll_w: float = _roll("eact|%d|%s|turn=%d" % [enemy_idx, String(enemy.get("id", "e")), turn_index]) * total_w
+	var acc: float = 0.0
+	var fallback: Dictionary = acts[0] if typeof(acts[0]) == TYPE_DICTIONARY else {}
+	for av in acts:
+		if typeof(av) != TYPE_DICTIONARY:
+			continue
+		var a: Dictionary = av as Dictionary
+		acc += max(0.0, float(a.get("weight", 1.0)))
+		fallback = a
+		if roll_w <= acc:
+			return a.duplicate(true)
+	return fallback.duplicate(true)
+
+func _apply_enemy_resistance_to_damage(enemy: Dictionary, raw_damage: int, damage_type: String) -> Dictionary:
+	var resist: Dictionary = enemy.get("resist", {})
+	return _apply_resistance_to_damage(raw_damage, resist, damage_type)
+
+func _apply_party_resistance_to_damage(actor: Dictionary, raw_damage: int, damage_type: String) -> Dictionary:
+	var resist: Dictionary = actor.get("resist", {})
+	return _apply_resistance_to_damage(raw_damage, resist, damage_type)
+
+func _apply_resistance_to_damage(raw_damage: int, resist: Dictionary, damage_type: String) -> Dictionary:
+	var raw: int = max(1, int(raw_damage))
+	var kind: String = String(damage_type).strip_edges().to_lower()
+	if kind.is_empty():
+		kind = "physical"
+	var mult: float = 1.0
+	if typeof(resist) == TYPE_DICTIONARY:
+		if resist.has(kind):
+			mult = clamp(float(resist.get(kind, 1.0)), 0.20, 3.00)
+		elif resist.has("all"):
+			mult = clamp(float(resist.get("all", 1.0)), 0.20, 3.00)
+	var dmg: int = max(1, int(round(float(raw) * mult)))
+	return {"damage": dmg, "mult": mult}
+
+func _resistance_suffix(mult: float) -> String:
+	if mult <= 0.85:
+		return " (resisted)"
+	if mult >= 1.15:
+		return " (vulnerable)"
+	return ""
+
+func _status_apply_chance_vs_actor(base_chance: float, actor: Dictionary, status_id: String) -> float:
+	var chance: float = clamp(float(base_chance), 0.0, 1.0)
+	var sid: String = String(status_id).to_lower().strip_edges()
+	if sid.is_empty():
+		return chance
+	var resist: Dictionary = actor.get("resist", {})
+	if typeof(resist) == TYPE_DICTIONARY and resist.has(sid):
+		chance *= clamp(float(resist.get(sid, 1.0)), 0.25, 2.00)
+	var st: Dictionary = actor.get("status", {})
+	if typeof(st) == TYPE_DICTIONARY and int(st.get("%s_turns" % sid, 0)) > 0:
+		chance *= 0.35
+	return clamp(chance, 0.0, 0.95)
+
 func _calc_party_damage(actor: Dictionary, cmd: String) -> int:
 	var strv: int = int(actor.get("str", 6))
 	var intv: int = int(actor.get("int", 6))
@@ -574,9 +877,9 @@ func _calc_party_damage(actor: Dictionary, cmd: String) -> int:
 	var jitter: int = int(round(_roll("pdmg|%s|turn=%d" % [String(actor.get("id", "")), turn_index]) * 4.0))
 	return max(1, base + jitter)
 
-func _calc_enemy_damage(enemy: Dictionary) -> int:
+func _calc_enemy_damage(enemy: Dictionary, power_mult: float = 1.0) -> int:
 	var powv: int = int(enemy.get("power", 8))
-	var base: int = 2 + int(round(float(powv) * 0.60))
+	var base: int = 2 + int(round(float(powv) * 0.60 * clamp(float(power_mult), 0.20, 3.00)))
 	var eid: String = String(enemy.get("id", "e"))
 	var jitter: int = int(round(_roll("edmg|%s|turn=%d" % [eid, turn_index]) * 3.0))
 	return max(1, base + jitter)
@@ -614,6 +917,7 @@ func _party_after_payload() -> Array[Dictionary]:
 			"hp_max": int(m.get("hp_max", 0)),
 			"mp": int(m.get("mp", 0)),
 			"mp_max": int(m.get("mp_max", 0)),
+			"status": m.get("status", {}).duplicate(true) if typeof(m.get("status", {})) == TYPE_DICTIONARY else {},
 		})
 	return out
 

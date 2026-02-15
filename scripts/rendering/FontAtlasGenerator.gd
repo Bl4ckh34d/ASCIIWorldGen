@@ -1,6 +1,6 @@
 # File: res://scripts/rendering/FontAtlasGenerator.gd
-class_name FontAtlasGenerator
 extends RefCounted
+class_name FontAtlasGenerator
 
 # Generate texture atlas containing ASCII characters for GPU rendering
 # Layout: 16x6 grid for 95 printable ASCII characters (32-126)

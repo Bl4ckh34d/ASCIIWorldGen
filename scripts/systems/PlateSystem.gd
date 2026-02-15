@@ -1,5 +1,6 @@
 # File: res://scripts/systems/PlateSystem.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # Prototype plate tectonics: Voronoi plates with wrap-X, per-plate velocities, and
 # small boundary uplift/subsidence. Updates the height field incrementally.
@@ -21,6 +22,8 @@ var subduction_rate_per_day: float = 0.0018
 var trench_rate_per_day: float = 0.00135
 var drift_cells_per_day: float = 0.02
 var boundary_band_cells: int = 3
+var max_boundary_delta_per_day: float = 0.080
+var divergence_response: float = 1.0
 var terrain_relax_enabled: bool = true
 var terrain_relax_iterations: int = 3
 var terrain_relax_rate: float = 0.55
@@ -47,6 +50,14 @@ var plate_turn_phase: PackedFloat32Array = PackedFloat32Array()
 var cell_plate_id: PackedInt32Array = PackedInt32Array()
 var boundary_mask: PackedByteArray = PackedByteArray()
 var boundary_mask_render: PackedByteArray = PackedByteArray()
+var boundary_readback_interval_days: float = 60.0
+var velocity_min_magnitude: float = 0.25
+var velocity_max_magnitude: float = 2.10
+var velocity_bias_equator_u: float = -0.70
+var velocity_bias_midlat_u: float = 0.50
+var velocity_bias_polar_u: float = -0.40
+var velocity_meridional_scale: float = 0.30
+var velocity_bias_jitter: float = 0.20
 
 var _boundary_noise: FastNoiseLite
 var _gpu_update: Object = null
@@ -54,9 +65,48 @@ var _land_mask_compute: Object = null
 var _field_advection_compute: Object = null
 var _pinhole_cleanup_compute: Object = null
 var _terrain_relax_compute: Object = null
+var _boundary_readback_accum_days: float = 0.0
+
+func _cleanup_if_supported(obj: Variant) -> void:
+	if obj == null:
+		return
+	if obj is Object:
+		var ref_obj: Object = obj as Object
+		if ref_obj.has_method("cleanup"):
+			ref_obj.call("cleanup")
+		elif ref_obj.has_method("clear"):
+			ref_obj.call("clear")
+
+func cleanup() -> void:
+	_cleanup_if_supported(_gpu_update)
+	_cleanup_if_supported(_land_mask_compute)
+	_cleanup_if_supported(_field_advection_compute)
+	_cleanup_if_supported(_pinhole_cleanup_compute)
+	_cleanup_if_supported(_terrain_relax_compute)
+	_gpu_update = null
+	_land_mask_compute = null
+	_field_advection_compute = null
+	_pinhole_cleanup_compute = null
+	_terrain_relax_compute = null
+	generator = null
+	plate_site_x.clear()
+	plate_site_y.clear()
+	plate_site_weight.clear()
+	plate_vel_u.clear()
+	plate_vel_v.clear()
+	plate_buoyancy.clear()
+	plate_turn_bias_rad_per_day.clear()
+	plate_turn_amp_rad_per_day.clear()
+	plate_turn_freq_cycles_per_day.clear()
+	plate_turn_phase.clear()
+	cell_plate_id.clear()
+	boundary_mask.clear()
+	boundary_mask_render.clear()
+	_boundary_readback_accum_days = 0.0
 
 func initialize(gen: Object) -> void:
 	generator = gen
+	_apply_velocity_model_from_generator()
 	_boundary_noise = FastNoiseLite.new()
 	_boundary_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	_boundary_noise.frequency = 0.08
@@ -83,17 +133,19 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if _gpu_update == null:
 		_gpu_update = PlateUpdateCompute.new()
 	var gpu_ok: bool = false
+	var boundary_buf: RID = RID()
 	if "ensure_persistent_buffers" in generator:
 		generator.ensure_persistent_buffers(false)
 		var height_buf: RID = generator.get_persistent_buffer("height")
 		var height_tmp: RID = generator.get_persistent_buffer("height_tmp")
 		var plate_buf: RID = generator.get_persistent_buffer("plate_id")
-		var boundary_buf: RID = generator.get_persistent_buffer("plate_boundary")
+		boundary_buf = generator.get_persistent_buffer("plate_boundary")
 		var biome_buf: RID = generator.get_persistent_buffer("biome_id")
 		var rock_buf: RID = generator.get_persistent_buffer("rock_type")
 		var field_tmp_buf: RID = generator.get_persistent_buffer("biome_tmp")
 		var lava_buf: RID = generator.get_persistent_buffer("lava")
 		if height_buf.is_valid() and height_tmp.is_valid() and plate_buf.is_valid() and boundary_buf.is_valid():
+			var tectonic_rates: Dictionary = _build_tectonic_rate_params()
 			gpu_ok = _gpu_update.apply_gpu_buffers(
 				w, h,
 				height_buf,
@@ -103,22 +155,14 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				plate_vel_v,
 				plate_buoyancy,
 				dt_days,
-				{
-					"uplift_rate_per_day": uplift_rate_per_day,
-					"ridge_rate_per_day": ridge_rate_per_day,
-					"transform_roughness_per_day": transform_roughness_per_day,
-					"subduction_rate_per_day": subduction_rate_per_day,
-					"trench_rate_per_day": trench_rate_per_day,
-					"drift_cells_per_day": drift_cells_per_day,
-					"sea_level": float(generator.config.sea_level),
-				},
+				tectonic_rates,
 				boundary_band_cells,
 				float(Time.get_ticks_msec() % 100000) / 100000.0,
 				height_tmp
 			)
 		if gpu_ok:
 			# Copy height_tmp -> height (reuse FlowCompute copy)
-			if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(height_tmp, height_buf, w * h))):
+			if not ("dispatch_copy_u32" in generator and VariantCasts.to_bool(generator.dispatch_copy_u32(height_tmp, height_buf, w * h))):
 				gpu_ok = false
 			if gpu_ok and terrain_relax_enabled:
 				if _terrain_relax_compute == null:
@@ -147,7 +191,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 					in_buf = out_buf
 					out_buf = tbuf
 				if gpu_ok and in_buf != height_buf:
-					if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(in_buf, height_buf, w * h))):
+					if not ("dispatch_copy_u32" in generator and VariantCasts.to_bool(generator.dispatch_copy_u32(in_buf, height_buf, w * h))):
 						gpu_ok = false
 			# Update land mask buffer from height
 			if gpu_ok and _land_mask_compute:
@@ -175,7 +219,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 						int(generator.config.rng_seed) ^ sim_days_seed
 					)
 				if gpu_ok and "apply_ocean_connectivity_gate_runtime" in generator:
-					if not bool(generator.apply_ocean_connectivity_gate_runtime()):
+					if not VariantCasts.to_bool(generator.apply_ocean_connectivity_gate_runtime()):
 						gpu_ok = false
 		# Advect plate-bound categorical fields so biomes/lithology move with plate drift.
 		if gpu_ok and field_tmp_buf.is_valid():
@@ -192,7 +236,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				drift_cells_per_day,
 				field_tmp_buf
 			):
-				if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(field_tmp_buf, biome_buf, w * h))):
+				if not ("dispatch_copy_u32" in generator and VariantCasts.to_bool(generator.dispatch_copy_u32(field_tmp_buf, biome_buf, w * h))):
 					gpu_ok = false
 			if rock_buf.is_valid() and _field_advection_compute.advect_i32_gpu_buffers(
 				w,
@@ -205,13 +249,18 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				drift_cells_per_day,
 				field_tmp_buf
 			):
-				if not ("dispatch_copy_u32" in generator and bool(generator.dispatch_copy_u32(field_tmp_buf, rock_buf, w * h))):
+				if not ("dispatch_copy_u32" in generator and VariantCasts.to_bool(generator.dispatch_copy_u32(field_tmp_buf, rock_buf, w * h))):
 					gpu_ok = false
+	if gpu_ok and boundary_buf.is_valid():
+		_boundary_readback_accum_days += max(0.0, dt_days)
+		if boundary_readback_interval_days <= 0.0 or _boundary_readback_accum_days >= boundary_readback_interval_days:
+			_refresh_boundary_masks_from_gpu(w, h, boundary_buf)
+			_boundary_readback_accum_days = 0.0
 	if not gpu_ok:
 		return {}
 	# Expose boundary mask to generator for volcanism coupling
 	var boundary_count = 0
-	var mask_src: PackedByteArray = boundary_mask_render if boundary_mask_render.size() == w * h else boundary_mask
+	var mask_src: PackedByteArray = _select_boundary_render_source(w, h)
 	var mask_i32 := PackedInt32Array(); mask_i32.resize(w * h)
 	for m in range(w * h):
 		var val = (1 if mask_src[m] != 0 else 0)
@@ -280,16 +329,9 @@ func _build_plates() -> void:
 		# Mild buoyancy influence: buoyant/continental plates tend to be slightly larger.
 		w_plate *= (0.90 - (buoy - 0.5) * 0.12)
 		plate_site_weight[p] = clamp(w_plate, 0.20, 3.40)
-		var u: float = (rng.randf() * 2.0 - 1.0)
-		var v: float = (rng.randf() * 2.0 - 1.0) * 0.3
-		if lat < 0.3:
-			u -= 0.7
-		elif lat < 0.7:
-			u += 0.5
-		else:
-			u -= 0.4
-		plate_vel_u[p] = u
-		plate_vel_v[p] = v
+		var vel: Vector2 = _sample_initial_plate_velocity(lat, rng)
+		plate_vel_u[p] = vel.x
+		plate_vel_v[p] = vel.y
 		# Per-plate drift-direction evolution profile.
 		# Geologic-scale cadence: mostly slow turners, with rare moderate outliers.
 		var fast_turner: bool = rng.randf() < 0.08
@@ -337,6 +379,8 @@ func _build_plates() -> void:
 				warp_frequency,
 				lat_anisotropy
 			)
+			if built_gpu:
+				_refresh_boundary_masks_from_gpu(w, h, boundary_buf)
 	if not built_gpu:
 		push_error("PlateSystem: GPU Voronoi/boundary build failed; plate buffers remain zeroed.")
 	# Expose raw plate fields so terrain generation can use the same tectonic structure.
@@ -393,8 +437,9 @@ func _update_plate_direction(dt_days: float, world: Object) -> void:
 		# Keep drift magnitudes stable; only change direction.
 		var speed1: float = sqrt(max(1e-9, un * un + vn * vn))
 		var sfix: float = speed0 / speed1
-		plate_vel_u[p] = un * sfix
-		plate_vel_v[p] = vn * sfix
+		var clamped: Vector2 = _clamp_velocity(un * sfix, vn * sfix)
+		plate_vel_u[p] = clamped.x
+		plate_vel_v[p] = clamped.y
 	# Mirror evolved velocities for systems that sample generator plate state.
 	if generator:
 		if "publish_plate_runtime_state" in generator:
@@ -443,3 +488,91 @@ func _build_boundary_render_mask(w: int, h: int) -> void:
 			var n: float = _boundary_noise.get_noise_2d(float(x) * 0.37, float(y) * 0.37) * 0.5 + 0.5
 			var keep: float = clamp(t * 0.78 + n * 0.22 - 0.12, 0.0, 1.0)
 			boundary_mask_render[i] = (1 if keep > 0.42 else 0)
+
+func _apply_velocity_model_from_generator() -> void:
+	if generator == null or not ("config" in generator):
+		return
+	var cfg: Object = generator.config
+	if cfg == null:
+		return
+	velocity_min_magnitude = max(0.01, float(_cfg_value(cfg, "plate_velocity_min_magnitude", velocity_min_magnitude)))
+	velocity_max_magnitude = max(velocity_min_magnitude, float(_cfg_value(cfg, "plate_velocity_max_magnitude", velocity_max_magnitude)))
+	velocity_bias_equator_u = float(_cfg_value(cfg, "plate_velocity_bias_equator_u", velocity_bias_equator_u))
+	velocity_bias_midlat_u = float(_cfg_value(cfg, "plate_velocity_bias_midlat_u", velocity_bias_midlat_u))
+	velocity_bias_polar_u = float(_cfg_value(cfg, "plate_velocity_bias_polar_u", velocity_bias_polar_u))
+	velocity_meridional_scale = clamp(float(_cfg_value(cfg, "plate_velocity_meridional_scale", velocity_meridional_scale)), 0.01, 2.0)
+	velocity_bias_jitter = clamp(float(_cfg_value(cfg, "plate_velocity_bias_jitter", velocity_bias_jitter)), 0.0, 1.0)
+	max_boundary_delta_per_day = clamp(float(_cfg_value(cfg, "plate_max_boundary_delta_per_day", max_boundary_delta_per_day)), 0.001, 0.50)
+	divergence_response = clamp(float(_cfg_value(cfg, "plate_divergence_response", divergence_response)), 0.2, 2.5)
+	boundary_readback_interval_days = max(0.0, float(_cfg_value(cfg, "plate_boundary_readback_interval_days", boundary_readback_interval_days)))
+
+func _cfg_value(cfg: Object, key: String, fallback: Variant) -> Variant:
+	if cfg != null and key in cfg:
+		return cfg.get(key)
+	return fallback
+
+func _sample_initial_plate_velocity(lat: float, rng: RandomNumberGenerator) -> Vector2:
+	var u: float = rng.randf_range(-1.0, 1.0)
+	var v: float = rng.randf_range(-1.0, 1.0) * velocity_meridional_scale
+	if lat < 0.3:
+		u += velocity_bias_equator_u
+	elif lat < 0.7:
+		u += velocity_bias_midlat_u
+	else:
+		u += velocity_bias_polar_u
+	u += rng.randf_range(-velocity_bias_jitter, velocity_bias_jitter)
+	v += rng.randf_range(-velocity_bias_jitter, velocity_bias_jitter) * velocity_meridional_scale
+	return _clamp_velocity(u, v)
+
+func _clamp_velocity(u: float, v: float) -> Vector2:
+	var mag: float = sqrt(max(1e-9, u * u + v * v))
+	var target: float = clamp(mag, velocity_min_magnitude, velocity_max_magnitude)
+	var scale: float = target / mag
+	return Vector2(u * scale, v * scale)
+
+func _refresh_boundary_masks_from_gpu(w: int, h: int, boundary_buf: RID) -> void:
+	if generator == null or not boundary_buf.is_valid() or not ("read_persistent_buffer_region" in generator):
+		return
+	var size: int = max(0, w * h)
+	if size <= 0:
+		return
+	var bytes: PackedByteArray = generator.read_persistent_buffer_region("plate_boundary", 0, size * 4)
+	if bytes.size() < size * 4:
+		return
+	var boundary_i32: PackedInt32Array = bytes.to_int32_array()
+	if boundary_i32.size() < size:
+		return
+	boundary_mask.resize(size)
+	for i in range(size):
+		boundary_mask[i] = 1 if boundary_i32[i] != 0 else 0
+	_build_boundary_render_mask(w, h)
+
+func _select_boundary_render_source(w: int, h: int) -> PackedByteArray:
+	var size: int = max(0, w * h)
+	if boundary_mask_render.size() == size and _has_any_nonzero(boundary_mask_render):
+		return boundary_mask_render
+	if boundary_mask.size() == size:
+		return boundary_mask
+	var empty := PackedByteArray()
+	empty.resize(size)
+	return empty
+
+func _has_any_nonzero(mask: PackedByteArray) -> bool:
+	for i in range(mask.size()):
+		if mask[i] != 0:
+			return true
+	return false
+
+func _build_tectonic_rate_params() -> Dictionary:
+	# Clamp to stable envelopes before handing values to GPU update.
+	return {
+		"uplift_rate_per_day": clamp(uplift_rate_per_day, 0.0, 0.050),
+		"ridge_rate_per_day": clamp(ridge_rate_per_day, 0.0, 0.050),
+		"transform_roughness_per_day": clamp(transform_roughness_per_day, 0.0, 0.050),
+		"subduction_rate_per_day": clamp(subduction_rate_per_day, 0.0, 0.050),
+		"trench_rate_per_day": clamp(trench_rate_per_day, 0.0, 0.050),
+		"drift_cells_per_day": clamp(drift_cells_per_day, 0.0, 0.20),
+		"sea_level": float(generator.config.sea_level),
+		"max_boundary_delta_per_day": clamp(max_boundary_delta_per_day, 0.001, 0.50),
+		"divergence_response": clamp(divergence_response, 0.2, 2.5),
+	}

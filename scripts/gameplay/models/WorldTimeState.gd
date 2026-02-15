@@ -38,6 +38,42 @@ func advance_seconds(seconds: int) -> void:
 				year += 1
 	minute_of_day = clamp(int(second_of_day / 60), 0, MINUTES_PER_DAY - 1)
 
+func abs_day_index() -> int:
+	# 0-based absolute day index (Y1 M1 D1 => 0).
+	var day_of_year: int = 0
+	for m in range(1, int(month)):
+		day_of_year += days_in_month(m)
+	day_of_year += max(0, int(day) - 1)
+	return max(0, int(year) - 1) * 365 + clamp(day_of_year, 0, 364)
+
+func set_from_abs_day(abs_day: int, second_in_day: int = -1) -> void:
+	abs_day = max(0, int(abs_day))
+	var y0: int = int(abs_day / 365)
+	var doy: int = int(abs_day % 365)
+	year = y0 + 1
+	month = 1
+	day = 1
+	for m in range(1, MONTHS_PER_YEAR + 1):
+		var dm: int = days_in_month(m)
+		if doy >= dm:
+			doy -= dm
+			month += 1
+		else:
+			month = m
+			day = doy + 1
+			break
+	if second_in_day >= 0:
+		second_of_day = clamp(int(second_in_day), 0, SECONDS_PER_DAY - 1)
+	minute_of_day = clamp(int(second_of_day / 60), 0, MINUTES_PER_DAY - 1)
+
+func advance_days_batched(days: int) -> void:
+	# Fast path for worldgen-style batching (weeks/months).
+	days = max(0, int(days))
+	if days <= 0:
+		return
+	var abs0: int = abs_day_index()
+	set_from_abs_day(abs0 + days, second_of_day)
+
 func season_name() -> String:
 	if month <= 3:
 		return "Spring"

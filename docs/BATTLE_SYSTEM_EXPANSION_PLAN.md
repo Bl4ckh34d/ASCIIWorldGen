@@ -183,17 +183,20 @@ Split “result panel” into two modes:
 - Applying an item:
   - Removes from inventory.
   - Heals the target.
-Status: partially implemented (battle `Item` consumes a default consumable like `Potion/Herb` and heals; full item/target selection UI is still pending).
+Status: implemented (item submenu + target selection + inventory consumption pipeline wired).
 
 ### M2: Magic + MP Costs
 - Add `SpellCatalog`.
 - Magic menu shows spells known (start with mage only).
 - Apply damage/heal and subtract MP.
-Status: minimal MP cost is implemented for `Magic` (spell selection still pending).
+Status: implemented (spell submenu + target selection + MP costs wired).
 
 ### M3: Multiple Enemies
 - Update `EnemyCatalog` + `EncounterRegistry` to return an enemy list.
 - Update UI target selection across multiple enemies.
+Status: scaffold implemented (v0):
+- Encounter generation now supports mixed/multi-enemy groups with deterministic composition.
+- Battle state tracks enemy actors individually and target selection supports indexed enemies.
 
 ### M3.5: Encounter Openers (Preemptive / Back Attack)
 - Add a deterministic “opener roll” per encounter:
@@ -201,10 +204,14 @@ Status: minimal MP cost is implemented for `Magic` (spell selection still pendin
 - Opener influences:
   - which side resolves first on turn 1
   - optional small damage multiplier (later)
+Status: scaffold implemented (v0):
+- Deterministic opener roll is wired in `EncounterRegistry`.
+- Turn-1 initiative behavior in `BattleStateMachine` respects opener state.
 
 ### M4: Status Effects (Optional)
 - Poison, sleep, etc.
 - Add simple per-turn ticks.
+Status: scaffold implemented (status dictionary on actors + per-turn poison tick hook + API to apply timed statuses).
 
 ## Testing / Verification
 - Determinism script:
@@ -215,8 +222,8 @@ Status: minimal MP cost is implemented for `Magic` (spell selection still pendin
   - Save before battle, load, repeat battle -> same results (assuming same inputs).
 
 ## Open Questions (Need Your Answers)
-Decisions per your answers:
+Locked decisions (2026-02-09):
 1. Turn structure: FF9-like (select actions for the party, then resolve).
-2. Encounters: can be 1 enemy, multiple of the same, or mixed groups; include chance-based openers (preemptive/back attack/normal).
-3. Defeat: game over (load save or restart).
-4. Flee: biome/encounter dependent with some chance (FF9-like behavior).
+2. Encounters: 1 enemy / multiples / mixed groups; chance-based openers (preemptive/back/normal) OK.
+3. Defeat: game over (load save or restart) OK.
+4. Flee: biome/encounter dependent chance OK.

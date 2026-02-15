@@ -1,5 +1,6 @@
 # File: res://scripts/systems/RainErosionSystem.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 const RainErosionCompute = preload("res://scripts/systems/RainErosionCompute.gd")
@@ -21,6 +22,14 @@ const GLACIER_SMOOTHING_BIAS: float = 0.65
 const CRYO_EROSION_RATE_SCALE: float = 1.25
 const CRYO_EROSION_CAP_SCALE: float = 1.55
 
+func _cleanup_if_supported(obj: Variant) -> void:
+	if obj == null:
+		return
+	if obj is Object:
+		var o: Object = obj as Object
+		if o.has_method("cleanup"):
+			o.call("cleanup")
+
 func initialize(gen: Object) -> void:
 	generator = gen
 	_step_counter = 0
@@ -28,6 +37,14 @@ func initialize(gen: Object) -> void:
 		_compute = RainErosionCompute.new()
 	if _land_mask_compute == null:
 		_land_mask_compute = LandMaskCompute.new()
+
+func cleanup() -> void:
+	_cleanup_if_supported(_compute)
+	_cleanup_if_supported(_land_mask_compute)
+	_compute = null
+	_land_mask_compute = null
+	_step_counter = 0
+	generator = null
 
 func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null:
@@ -95,7 +112,7 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 
 	# Commit height_tmp -> height (bitwise copy as u32 words).
 	if "dispatch_copy_u32" in generator:
-		if not bool(generator.dispatch_copy_u32(height_tmp, height_buf, size)):
+		if not VariantCasts.to_bool(generator.dispatch_copy_u32(height_tmp, height_buf, size)):
 			return {}
 	else:
 		return {}

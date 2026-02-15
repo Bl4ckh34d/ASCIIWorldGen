@@ -68,6 +68,8 @@ var _moist_pipeline: RID
 var _cloud_tex: Object = null
 var _cloud_buf_a: RID
 var _cloud_buf_b: RID
+var _cloud_buf_a_owned: bool = false
+var _cloud_buf_b_owned: bool = false
 var _cloud_flip: bool = false
 var _wind_gpu_valid: bool = false
 var _seed_cache: int = -2147483648
@@ -152,6 +154,60 @@ func initialize(gen: Object, time_sys: Object = null) -> void:
 	_last_advection_tick = -1000000
 	_last_moisture_tick = -1000000
 	_last_texture_tick = -1000000
+
+func _release_owned_cloud_buffers() -> void:
+	var rd: RenderingDevice = RenderingServer.get_rendering_device()
+	if rd != null:
+		if _cloud_buf_a_owned and _cloud_buf_a.is_valid():
+			rd.free_rid(_cloud_buf_a)
+		if _cloud_buf_b_owned and _cloud_buf_b.is_valid():
+			rd.free_rid(_cloud_buf_b)
+	_cloud_buf_a = RID()
+	_cloud_buf_b = RID()
+	_cloud_buf_a_owned = false
+	_cloud_buf_b_owned = false
+
+func cleanup() -> void:
+	_release_owned_cloud_buffers()
+	if _cloud_tex is Object:
+		var tex_obj: Object = _cloud_tex as Object
+		if tex_obj.has_method("cleanup"):
+			tex_obj.call("cleanup")
+	if cloud_compute is Object:
+		var comp_obj: Object = cloud_compute as Object
+		if comp_obj.has_method("cleanup"):
+			comp_obj.call("cleanup")
+	var rd: RenderingDevice = RenderingServer.get_rendering_device()
+	if rd != null:
+		if _advec_pipeline.is_valid():
+			rd.free_rid(_advec_pipeline)
+		if _advec_shader_rid.is_valid():
+			rd.free_rid(_advec_shader_rid)
+		if _wind_pipeline.is_valid():
+			rd.free_rid(_wind_pipeline)
+		if _wind_shader_rid.is_valid():
+			rd.free_rid(_wind_shader_rid)
+		if _moist_pipeline.is_valid():
+			rd.free_rid(_moist_pipeline)
+		if _moist_shader_rid.is_valid():
+			rd.free_rid(_moist_shader_rid)
+	_advec_pipeline = RID()
+	_advec_shader_rid = RID()
+	_wind_pipeline = RID()
+	_wind_shader_rid = RID()
+	_moist_pipeline = RID()
+	_moist_shader_rid = RID()
+	_cloud_tex = null
+	cloud_compute = null
+	_gpu_manager_ref = null
+	_buffer_size = -1
+	_wind_gpu_valid = false
+	_cloud_flip = false
+	generator = null
+	time_system = null
+	wind_u = PackedFloat32Array()
+	wind_v = PackedFloat32Array()
+	_tmp_clouds = PackedFloat32Array()
 
 func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null or world == null:
@@ -415,8 +471,7 @@ func _sync_seed(force_reset: bool) -> void:
 	_noise_curl.seed = cur_seed ^ 0x1FEED5
 	_noise_curl2.seed = cur_seed ^ 0x5AC1D0
 	# Rebind local resources on seed change; do not wipe generated cloud state.
-	_cloud_buf_a = RID()
-	_cloud_buf_b = RID()
+	_release_owned_cloud_buffers()
 	_cloud_flip = false
 	_wind_gpu_valid = false
 	_force_resync = true
@@ -427,8 +482,7 @@ func _sync_gpu_manager(w: int, h: int) -> void:
 	if mgr != _gpu_manager_ref or _buffer_size != size:
 		_gpu_manager_ref = mgr
 		_buffer_size = size
-		_cloud_buf_a = RID()
-		_cloud_buf_b = RID()
+		_release_owned_cloud_buffers()
 		_cloud_flip = false
 		_wind_gpu_valid = false
 		_force_resync = true
@@ -682,6 +736,7 @@ func _setup_cloud_buffers(w: int, h: int) -> void:
 		generator.ensure_persistent_buffers(false)
 	if generator and "get_persistent_buffer" in generator:
 		_cloud_buf_a = generator.get_persistent_buffer("clouds")
+		_cloud_buf_a_owned = false
 	if not _cloud_buf_a.is_valid():
 		var rd := RenderingServer.get_rendering_device()
 		var arr := PackedFloat32Array()
@@ -691,10 +746,12 @@ func _setup_cloud_buffers(w: int, h: int) -> void:
 			arr.resize(w * h)
 			arr.fill(0.0)
 		_cloud_buf_a = rd.storage_buffer_create(arr.to_byte_array().size(), arr.to_byte_array())
+		_cloud_buf_a_owned = true
 	var rd2 := RenderingServer.get_rendering_device()
 	if not _cloud_buf_b.is_valid():
 		var arr2 := PackedFloat32Array(); arr2.resize(w * h)
 		_cloud_buf_b = rd2.storage_buffer_create(arr2.to_byte_array().size(), arr2.to_byte_array())
+		_cloud_buf_b_owned = true
 	# Allocate wind/source buffers for compute if missing
 	if generator and "ensure_gpu_storage_buffer" in generator:
 		var size_bytes := w * h * 4
@@ -714,6 +771,8 @@ func _update_cloud_texture_gpu(w: int, h: int) -> void:
 	var tex: Texture2D = _cloud_tex.update_from_buffer(w, h, buf)
 	if tex and generator and "set_cloud_texture_override" in generator:
 		generator.set_cloud_texture_override(tex)
+	elif generator and "set_cloud_texture_override" in generator:
+		generator.set_cloud_texture_override(null)
 
 func _sample_bilinear_wrap_x(arr: PackedFloat32Array, w: int, h: int, fx: float, fy: float) -> float:
 	# Wrap horizontally, clamp vertically

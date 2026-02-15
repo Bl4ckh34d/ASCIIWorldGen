@@ -18,6 +18,8 @@ uniform sampler2D biome_texture;
 uniform int use_biome_texture = 0;
 uniform sampler2D lava_texture;
 uniform int use_lava_texture = 0;
+uniform sampler2D society_overlay;
+uniform int use_society_overlay = 0;
 uniform sampler2D world_data_4; // lake, river, lava, lake_level_norm
 uniform sampler2D color_palette;
 uniform int debug_mode = 0;
@@ -194,6 +196,12 @@ float _hash12(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
+}
+
+vec4 _society_at(vec2 cell) {
+    vec2 wrapped = _wrap_cell_x(cell);
+    vec2 uv = (wrapped + vec2(0.5)) / map_dimensions;
+    return (use_society_overlay != 0) ? texture(society_overlay, uv) : vec4(0.0);
 }
 
 void fragment() {
@@ -424,6 +432,67 @@ void fragment() {
         bool on_horizontal = (dy < 0.5) && (dx_wrap <= 3.0);
         if (on_vertical || on_horizontal) {
             lit_color = vec3(1.0) - lit_color;
+        }
+    }
+
+    // Civilization overlay (worldgen debug): subtle tint + boundary outline around human presence.
+    if (use_society_overlay != 0) {
+        vec4 soc = _society_at(world_cell);
+        float human = clamp(soc.r, 0.0, 1.0);
+        float wild = clamp(soc.g, 0.0, 1.0);
+        float lvl = clamp(soc.b, 0.0, 1.0);
+        float state_norm = clamp(soc.a, 0.0, 1.0);
+
+        // Subtle tint that doesn't erase geography: warm for humans, cool for high wildlife.
+        vec3 human_tint = vec3(1.0, 0.92, 0.78);
+        vec3 wild_tint = vec3(0.78, 0.92, 1.0);
+        lit_color = mix(lit_color, human_tint, human * 0.18);
+        lit_color = mix(lit_color, wild_tint, wild * 0.06);
+
+        // Settlement "glow": slightly boost value for higher settlement levels.
+        float glow = smoothstep(0.20, 1.0, lvl) * 0.10;
+        lit_color = clamp(lit_color + vec3(glow), 0.0, 1.0);
+
+        // Outline humans-held area by drawing edges where presence changes.
+        float t = 0.08;
+        float here = step(t, human);
+        float left = step(t, _society_at(world_cell + vec2(-1.0, 0.0)).r);
+        float right = step(t, _society_at(world_cell + vec2(1.0, 0.0)).r);
+        float up = step(t, _society_at(world_cell + vec2(0.0, -1.0)).r);
+        float down = step(t, _society_at(world_cell + vec2(0.0, 1.0)).r);
+
+        float bw = 0.10;
+        float edge_l = here * (1.0 - left) * (1.0 - smoothstep(0.0, bw, char_uv.x));
+        float edge_r = here * (1.0 - right) * smoothstep(1.0 - bw, 1.0, char_uv.x);
+        float edge_u = here * (1.0 - up) * (1.0 - smoothstep(0.0, bw, char_uv.y));
+        float edge_d = here * (1.0 - down) * smoothstep(1.0 - bw, 1.0, char_uv.y);
+        float edge = clamp(edge_l + edge_r + edge_u + edge_d, 0.0, 1.0);
+        if (edge > 0.0) {
+            vec3 border_col = vec3(0.08, 0.08, 0.08);
+            lit_color = mix(lit_color, border_col, edge * 0.85);
+        }
+
+        // Political borders: compare hashed state id between neighbors, draw a slightly thicker outline.
+        float state_here = step(0.002, state_norm);
+        if (state_here > 0.5) {
+            float sL = _society_at(world_cell + vec2(-1.0, 0.0)).a;
+            float sR = _society_at(world_cell + vec2(1.0, 0.0)).a;
+            float sU = _society_at(world_cell + vec2(0.0, -1.0)).a;
+            float sD = _society_at(world_cell + vec2(0.0, 1.0)).a;
+            float diffL = step(0.004, abs(state_norm - sL));
+            float diffR = step(0.004, abs(state_norm - sR));
+            float diffU = step(0.004, abs(state_norm - sU));
+            float diffD = step(0.004, abs(state_norm - sD));
+            float bw2 = 0.14;
+            float edge2_l = diffL * (1.0 - smoothstep(0.0, bw2, char_uv.x));
+            float edge2_r = diffR * smoothstep(1.0 - bw2, 1.0, char_uv.x);
+            float edge2_u = diffU * (1.0 - smoothstep(0.0, bw2, char_uv.y));
+            float edge2_d = diffD * smoothstep(1.0 - bw2, 1.0, char_uv.y);
+            float edge2 = clamp(edge2_l + edge2_r + edge2_u + edge2_d, 0.0, 1.0);
+            if (edge2 > 0.0) {
+                vec3 pol_col = vec3(0.02, 0.02, 0.02);
+                lit_color = mix(lit_color, pol_col, edge2 * 0.70);
+            }
         }
     }
 

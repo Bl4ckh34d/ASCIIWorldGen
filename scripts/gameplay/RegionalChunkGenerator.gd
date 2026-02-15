@@ -32,6 +32,7 @@ var world_width: int = 1
 var world_height: int = 1
 var world_biome_ids: PackedInt32Array = PackedInt32Array()
 var biome_overrides: Dictionary = {} # Vector2i(wx, wy) -> biome_id override
+var biome_transition_overrides: Dictionary = {} # Vector2i(wx, wy) -> {from_biome,to_biome,progress}
 var region_size: int = 96
 
 var blend_band_m: int = 8
@@ -53,6 +54,7 @@ func configure(seed_hash: int, world_w: int, world_h: int, biome_ids: PackedInt3
 	world_height = max(1, world_h)
 	world_biome_ids = biome_ids.duplicate()
 	biome_overrides.clear()
+	biome_transition_overrides.clear()
 	region_size = max(16, region_size_m)
 	_world_period_x_m = world_width * region_size
 	_world_radius_x_m = float(_world_period_x_m) / TAU
@@ -64,6 +66,14 @@ func set_biome_overrides(overrides: Dictionary) -> void:
 		biome_overrides.clear()
 		return
 	biome_overrides = overrides.duplicate(true)
+
+func set_biome_transition_overrides(overrides: Dictionary) -> void:
+	# Optional gradual transitions keyed by world tile.
+	# Entry schema: { from_biome: int, to_biome: int, progress: float 0..1 }.
+	if typeof(overrides) != TYPE_DICTIONARY or overrides.is_empty():
+		biome_transition_overrides.clear()
+		return
+	biome_transition_overrides = overrides.duplicate(true)
 
 func _seed_noises() -> void:
 	_noise_elev.seed = world_seed_hash ^ 0x1A2B3C
@@ -105,6 +115,7 @@ func generate_chunk(chunk_x: int, chunk_y: int, chunk_size: int) -> Dictionary:
 	var flags := PackedByteArray()
 	var heights := PackedFloat32Array()
 	var biomes := PackedInt32Array()
+	var poi_cells: Dictionary = {} # idx -> {type, id}
 	ground.resize(cs * cs)
 	obj.resize(cs * cs)
 	flags.resize(cs * cs)
@@ -129,6 +140,12 @@ func generate_chunk(chunk_x: int, chunk_y: int, chunk_size: int) -> Dictionary:
 			flags[i] = int(cell.get("flags", 0))
 			heights[i] = float(cell.get("height_raw", 0.0))
 			biomes[i] = int(cell.get("biome", 7))
+			var poi_type: String = String(cell.get("poi_type", ""))
+			if not poi_type.is_empty():
+				poi_cells[i] = {
+					"type": poi_type,
+					"id": String(cell.get("poi_id", "")),
+				}
 	return {
 		"chunk_size": cs,
 		"ground": ground,
@@ -136,6 +153,7 @@ func generate_chunk(chunk_x: int, chunk_y: int, chunk_size: int) -> Dictionary:
 		"flags": flags,
 		"height_raw": heights,
 		"biome": biomes,
+		"poi_cells": poi_cells,
 	}
 
 func sample_cell(gx: int, gy: int) -> Dictionary:
@@ -161,6 +179,8 @@ func sample_cell(gx: int, gy: int) -> Dictionary:
 	var out_obj: int = Obj.NONE
 	var out_flags: int = 0
 	var out_biome: int = surface_biome
+	var out_poi_type: String = ""
+	var out_poi_id: String = ""
 
 	# Water depth bands (walkable shallows; no swimming).
 	# Note: wateriness is a blended parameter, so coastlines appear naturally where land meets ocean tiles.
@@ -217,6 +237,8 @@ func sample_cell(gx: int, gy: int) -> Dictionary:
 	# Ensure deterministic POIs remain reachable (override terrain at POI origin cell).
 	var poi: Dictionary = _poi_at_global(x, y)
 	if not poi.is_empty():
+		out_poi_type = String(poi.get("type", ""))
+		out_poi_id = String(poi.get("id", ""))
 		out_flags = 0
 		out_obj = Obj.NONE
 		if out_ground == Ground.WATER_DEEP:
@@ -232,6 +254,8 @@ func sample_cell(gx: int, gy: int) -> Dictionary:
 		"flags": out_flags,
 		"height_raw": height_raw,
 		"biome": out_biome,
+		"poi_type": out_poi_type,
+		"poi_id": out_poi_id,
 	}
 
 func _poi_at_global(gx: int, gy: int) -> Dictionary:
@@ -256,6 +280,32 @@ func get_world_biome_id(wx: int, wy: int) -> int:
 	if i < 0 or i >= world_biome_ids.size():
 		return 7
 	return int(world_biome_ids[i])
+
+func _resolved_world_biome_at_sample(wx: int, wy: int, gx_sample: int, gy_sample: int) -> int:
+	var x: int = posmod(wx, world_width)
+	var y: int = clamp(wy, 0, world_height - 1)
+	var key := Vector2i(x, y)
+	var base_id: int = get_world_biome_id(x, y)
+	if not biome_transition_overrides.has(key):
+		return base_id
+	var vv: Variant = biome_transition_overrides.get(key, {})
+	if typeof(vv) != TYPE_DICTIONARY:
+		return base_id
+	var tr: Dictionary = vv as Dictionary
+	var from_id: int = int(tr.get("from_biome", base_id))
+	var to_id: int = int(tr.get("to_biome", base_id))
+	var progress: float = clamp(float(tr.get("progress", 1.0)), 0.0, 1.0)
+	if progress <= 0.0001:
+		return from_id
+	if progress >= 0.9999 or from_id == to_id:
+		return to_id
+	# Non-homogeneous transition: per-cell threshold with deterministic tile bias.
+	var n0: float = clamp(_noise_border_periodic(gx_sample + x * 17 + 29, gy_sample + y * 11 - 37) * 0.5 + 0.5, 0.0, 1.0)
+	var n1: float = _noise01_veg(gx_sample + x * 23 + 7, gy_sample + y * 19 - 5)
+	var patch: float = clamp(0.65 * n0 + 0.35 * n1, 0.0, 1.0)
+	var tile_bias: float = (float(abs(int(("reg_tile_bias|%d|%d|%d" % [world_seed_hash, x, y]).hash()) % 1000)) / 1000.0 - 0.5) * 0.14
+	var threshold: float = clamp(progress + tile_bias, 0.0, 1.0)
+	return to_id if patch <= threshold else from_id
 
 func _blend_params_at(gx: int, gy: int) -> Dictionary:
 	var wx: int = int(gx / region_size)
@@ -296,7 +346,7 @@ func _blend_params_at(gx: int, gy: int) -> Dictionary:
 	for k in weights.keys():
 		sum_w += float(weights[k])
 	if sum_w <= 0.0001:
-		var base_id: int = get_world_biome_id(wx, wy)
+		var base_id: int = _resolved_world_biome_at_sample(wx, wy, gx, gy)
 		var p0: Dictionary = RegionalGenParams.params_for_biome(base_id)
 		p0["_biome_choice"] = base_id
 		p0["_biome_dominant"] = base_id
@@ -308,7 +358,7 @@ func _blend_params_at(gx: int, gy: int) -> Dictionary:
 			continue
 		var ox: int = int(k.x)
 		var oy: int = int(k.y)
-		var bid: int = get_world_biome_id(wx + ox, wy + oy)
+		var bid: int = _resolved_world_biome_at_sample(wx + ox, wy + oy, gx + ox * region_size, gy + oy * region_size)
 		var p: Dictionary = RegionalGenParams.params_for_biome(bid)
 		for key in p.keys():
 			out[key] = float(out.get(key, 0.0)) + float(p[key]) * w
@@ -325,13 +375,13 @@ func _blend_params_at(gx: int, gy: int) -> Dictionary:
 		Vector2i(-1, 1),
 		Vector2i(1, 1),
 	]
-	var dominant_id: int = get_world_biome_id(wx, wy)
+	var dominant_id: int = _resolved_world_biome_at_sample(wx, wy, gx, gy)
 	var dominant_w: float = -1.0
 	for off in order:
 		var ww: float = float(weights.get(off, 0.0)) / sum_w
 		if ww > dominant_w:
 			dominant_w = ww
-			dominant_id = get_world_biome_id(wx + off.x, wy + off.y)
+			dominant_id = _resolved_world_biome_at_sample(wx + off.x, wy + off.y, gx + off.x * region_size, gy + off.y * region_size)
 	var r: float = clamp((_noise_border_periodic(gx + 191, gy + 73) * 0.5 + 0.5), 0.0, 0.99999)
 	var acc: float = 0.0
 	var chosen_id: int = dominant_id
@@ -341,7 +391,7 @@ func _blend_params_at(gx: int, gy: int) -> Dictionary:
 			continue
 		acc += ww2
 		if r <= acc:
-			chosen_id = get_world_biome_id(wx + off2.x, wy + off2.y)
+			chosen_id = _resolved_world_biome_at_sample(wx + off2.x, wy + off2.y, gx + off2.x * region_size, gy + off2.y * region_size)
 			break
 	out["_biome_choice"] = chosen_id
 	out["_biome_dominant"] = dominant_id

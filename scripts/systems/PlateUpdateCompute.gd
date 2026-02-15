@@ -1,13 +1,17 @@
 # File: res://scripts/systems/PlateUpdateCompute.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 ## GPU Plate boundary update: uplift/ridge/transform on boundary cells.
 ## Inputs: height (f32), cell_plate_id (i32), boundary_mask (i32), plate_vel_u/v (f32 per-plate)
 ## Output: updated height (f32)
 
-var PLATE_SHADER_FILE: RDShaderFile = load("res://shaders/plate_update.glsl")
-var PLATE_LABEL_SHADER_FILE: RDShaderFile = load("res://shaders/plate_label.glsl")
-var PLATE_BOUNDARY_SHADER_FILE: RDShaderFile = load("res://shaders/plate_boundary_mask.glsl")
+const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
+
+const PLATE_SHADER_PATH: String = "res://shaders/plate_update.glsl"
+const PLATE_LABEL_SHADER_PATH: String = "res://shaders/plate_label.glsl"
+const PLATE_BOUNDARY_SHADER_PATH: String = "res://shaders/plate_boundary_mask.glsl"
 
 var _rd: RenderingDevice
 var _shader: RID
@@ -16,52 +20,47 @@ var _label_shader: RID
 var _label_pipeline: RID
 var _bnd_shader: RID
 var _bnd_pipeline: RID
+var _buf_mgr: GPUBufferManager = null
 
-func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
-	if file == null:
-		return null
-	var versions: Array = file.get_version_list()
-	if versions.is_empty():
-		return null
-	var chosen_version: Variant = null
-	for v in versions:
-		if v == null:
-			continue
-		if chosen_version == null:
-			chosen_version = v
-		if String(v) == "vulkan":
-			chosen_version = v
-			break
-	if chosen_version == null:
-		return null
-	return file.get_spirv(chosen_version)
+func _init() -> void:
+	_buf_mgr = GPUBufferManager.new()
 
-func _ensure() -> void:
-	if _rd == null:
-		_rd = RenderingServer.get_rendering_device()
-	if _rd == null:
-		return
-	if not _shader.is_valid():
-		var spirv: RDShaderSPIRV = _get_spirv(PLATE_SHADER_FILE)
-		if spirv == null:
-			return
-		_shader = _rd.shader_create_from_spirv(spirv)
-	if not _pipeline.is_valid() and _shader.is_valid():
-		_pipeline = _rd.compute_pipeline_create(_shader)
-	# label pipeline
-	if not _label_shader.is_valid():
-		var s2: RDShaderSPIRV = _get_spirv(PLATE_LABEL_SHADER_FILE)
-		if s2 != null:
-			_label_shader = _rd.shader_create_from_spirv(s2)
-	if not _label_pipeline.is_valid() and _label_shader.is_valid():
-		_label_pipeline = _rd.compute_pipeline_create(_label_shader)
-	# boundary pipeline
-	if not _bnd_shader.is_valid():
-		var s3: RDShaderSPIRV = _get_spirv(PLATE_BOUNDARY_SHADER_FILE)
-		if s3 != null:
-			_bnd_shader = _rd.shader_create_from_spirv(s3)
-	if not _bnd_pipeline.is_valid() and _bnd_shader.is_valid():
-		_bnd_pipeline = _rd.compute_pipeline_create(_bnd_shader)
+func _ensure() -> bool:
+	var state_update: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_shader,
+		_pipeline,
+		PLATE_SHADER_PATH,
+		"plate_update"
+	)
+	_rd = state_update.get("rd", null)
+	_shader = state_update.get("shader", RID())
+	_pipeline = state_update.get("pipeline", RID())
+	if not VariantCasts.to_bool(state_update.get("ok", false)):
+		return false
+
+	var state_label: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_label_shader,
+		_label_pipeline,
+		PLATE_LABEL_SHADER_PATH,
+		"plate_label"
+	)
+	_label_shader = state_label.get("shader", RID())
+	_label_pipeline = state_label.get("pipeline", RID())
+	if not VariantCasts.to_bool(state_label.get("ok", false)):
+		return false
+
+	var state_boundary: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_bnd_shader,
+		_bnd_pipeline,
+		PLATE_BOUNDARY_SHADER_PATH,
+		"plate_boundary_mask"
+	)
+	_bnd_shader = state_boundary.get("shader", RID())
+	_bnd_pipeline = state_boundary.get("pipeline", RID())
+	return VariantCasts.to_bool(state_boundary.get("ok", false))
 
 func build_voronoi_and_boundary_gpu_buffers(
 		w: int,
@@ -76,7 +75,8 @@ func build_voronoi_and_boundary_gpu_buffers(
 		warp_frequency: float = 0.013,
 		lat_anisotropy: float = 1.2
 	) -> bool:
-	_ensure()
+	if not _ensure():
+		return false
 	if not _label_pipeline.is_valid() or not _bnd_pipeline.is_valid():
 		return false
 	if not out_plate_id_buf.is_valid() or not out_boundary_buf.is_valid():
@@ -89,9 +89,13 @@ func build_voronoi_and_boundary_gpu_buffers(
 		weights = PackedFloat32Array()
 		weights.resize(site_x.size())
 		weights.fill(1.0)
-	var buf_sx := _rd.storage_buffer_create(site_x.to_byte_array().size(), site_x.to_byte_array())
-	var buf_sy := _rd.storage_buffer_create(site_y.to_byte_array().size(), site_y.to_byte_array())
-	var buf_sw := _rd.storage_buffer_create(weights.to_byte_array().size(), weights.to_byte_array())
+	if _buf_mgr == null:
+		_buf_mgr = GPUBufferManager.new()
+	var buf_sx: RID = _buf_mgr.ensure_buffer("plate_site_x", site_x.to_byte_array().size(), site_x.to_byte_array())
+	var buf_sy: RID = _buf_mgr.ensure_buffer("plate_site_y", site_y.to_byte_array().size(), site_y.to_byte_array())
+	var buf_sw: RID = _buf_mgr.ensure_buffer("plate_site_w", weights.to_byte_array().size(), weights.to_byte_array())
+	if not (buf_sx.is_valid() and buf_sy.is_valid() and buf_sw.is_valid()):
+		return false
 	# label dispatch
 	var uniforms1: Array = []
 	var u: RDUniform
@@ -114,6 +118,9 @@ func build_voronoi_and_boundary_gpu_buffers(
 	if pad1 > 0:
 		var zeros1 := PackedByteArray(); zeros1.resize(pad1)
 		pc1.append_array(zeros1)
+	if not ComputeShaderBase.validate_push_constant_size(pc1, 32, "PlateUpdateCompute.label"):
+		_rd.free_rid(u_set1)
+		return false
 	var gx: int = int(ceil(float(w) / 16.0))
 	var gy: int = int(ceil(float(h) / 16.0))
 	var cl := _rd.compute_list_begin()
@@ -132,6 +139,10 @@ func build_voronoi_and_boundary_gpu_buffers(
 	if pad2 > 0:
 		var zeros2 := PackedByteArray(); zeros2.resize(pad2)
 		pc2.append_array(zeros2)
+	if not ComputeShaderBase.validate_push_constant_size(pc2, 16, "PlateUpdateCompute.boundary"):
+		_rd.free_rid(u_set1)
+		_rd.free_rid(u_set2)
+		return false
 	cl = _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(cl, _bnd_pipeline)
 	_rd.compute_list_bind_uniform_set(cl, u_set2, 0)
@@ -140,13 +151,11 @@ func build_voronoi_and_boundary_gpu_buffers(
 	_rd.compute_list_end()
 	_rd.free_rid(u_set1)
 	_rd.free_rid(u_set2)
-	_rd.free_rid(buf_sx)
-	_rd.free_rid(buf_sy)
-	_rd.free_rid(buf_sw)
 	return true
 
 func apply_gpu_buffers(w: int, h: int, height_in_buf: RID, plate_id_buf: RID, boundary_buf: RID, plate_vel_u: PackedFloat32Array, plate_vel_v: PackedFloat32Array, plate_buoyancy: PackedFloat32Array, dt_days: float, rates: Dictionary, boundary_band_cells: int, seed_phase: float, height_out_buf: RID) -> bool:
-	_ensure()
+	if not _ensure():
+		return false
 	if not _pipeline.is_valid():
 		return false
 	if not height_in_buf.is_valid() or not plate_id_buf.is_valid() or not boundary_buf.is_valid() or not height_out_buf.is_valid():
@@ -154,14 +163,18 @@ func apply_gpu_buffers(w: int, h: int, height_in_buf: RID, plate_id_buf: RID, bo
 	var size: int = max(0, w * h)
 	if size == 0:
 		return false
-	var buf_pu := _rd.storage_buffer_create(plate_vel_u.to_byte_array().size(), plate_vel_u.to_byte_array())
-	var buf_pv := _rd.storage_buffer_create(plate_vel_v.to_byte_array().size(), plate_vel_v.to_byte_array())
+	if _buf_mgr == null:
+		_buf_mgr = GPUBufferManager.new()
+	var buf_pu: RID = _buf_mgr.ensure_buffer("plate_vel_u", plate_vel_u.to_byte_array().size(), plate_vel_u.to_byte_array())
+	var buf_pv: RID = _buf_mgr.ensure_buffer("plate_vel_v", plate_vel_v.to_byte_array().size(), plate_vel_v.to_byte_array())
 	var buoy: PackedFloat32Array = plate_buoyancy
 	if buoy.size() != plate_vel_u.size():
 		buoy = PackedFloat32Array()
 		buoy.resize(plate_vel_u.size())
 		buoy.fill(0.5)
-	var buf_pb := _rd.storage_buffer_create(buoy.to_byte_array().size(), buoy.to_byte_array())
+	var buf_pb: RID = _buf_mgr.ensure_buffer("plate_buoyancy", buoy.to_byte_array().size(), buoy.to_byte_array())
+	if not (buf_pu.is_valid() and buf_pv.is_valid() and buf_pb.is_valid()):
+		return false
 	var uniforms: Array = []
 	var u: RDUniform
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(height_in_buf); uniforms.append(u)
@@ -179,16 +192,33 @@ func apply_gpu_buffers(w: int, h: int, height_in_buf: RID, plate_id_buf: RID, bo
 	var trench: float = float(rates.get("trench_rate_per_day", 0.0012))
 	var drift: float = float(rates.get("drift_cells_per_day", 0.02))
 	var sea_level: float = float(rates.get("sea_level", 0.0))
+	var max_delta: float = float(rates.get("max_boundary_delta_per_day", 0.08))
+	var divergence_response: float = float(rates.get("divergence_response", 1.0))
 	var num_plates: int = int(max(0, plate_vel_u.size()))
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h, num_plates, max(0, boundary_band_cells)])
-	var floats := PackedFloat32Array([dt_days, upl, ridge, rough, subduct, trench, drift, seed_phase, sea_level])
+	var floats := PackedFloat32Array([
+		max(0.0, dt_days),
+		clamp(upl, 0.0, 0.05),
+		clamp(ridge, 0.0, 0.05),
+		clamp(rough, 0.0, 0.05),
+		clamp(subduct, 0.0, 0.05),
+		clamp(trench, 0.0, 0.05),
+		clamp(drift, 0.0, 0.2),
+		seed_phase,
+		sea_level,
+		clamp(max_delta, 0.001, 0.5),
+		clamp(divergence_response, 0.2, 2.5),
+	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
 	var pad := (16 - (pc.size() % 16)) % 16
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 64, "PlateUpdateCompute.apply"):
+		_rd.free_rid(u_set)
+		return false
 	var gx: int = int(ceil(float(w) / 16.0))
 	var gy: int = int(ceil(float(h) / 16.0))
 	var cl := _rd.compute_list_begin()
@@ -198,7 +228,19 @@ func apply_gpu_buffers(w: int, h: int, height_in_buf: RID, plate_id_buf: RID, bo
 	_rd.compute_list_dispatch(cl, gx, gy, 1)
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
-	_rd.free_rid(buf_pu)
-	_rd.free_rid(buf_pv)
-	_rd.free_rid(buf_pb)
 	return true
+
+func cleanup() -> void:
+	if _buf_mgr != null:
+		_buf_mgr.cleanup()
+	ComputeShaderBase.free_rids(_rd, [
+		_pipeline, _shader,
+		_label_pipeline, _label_shader,
+		_bnd_pipeline, _bnd_shader,
+	])
+	_pipeline = RID()
+	_shader = RID()
+	_label_pipeline = RID()
+	_label_shader = RID()
+	_bnd_pipeline = RID()
+	_bnd_shader = RID()

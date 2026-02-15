@@ -1,12 +1,16 @@
 # File: res://scripts/systems/FlowCompute.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const FLOW_DIR_SHADER := preload("res://shaders/flow_dir.glsl")
-const FLOW_ACCUM_SHADER := preload("res://shaders/flow_accum.glsl")
-const FLOW_PUSH_SHADER := preload("res://shaders/flow_push.glsl")
-var CLEAR_U32_SHADER_FILE: RDShaderFile = load("res://shaders/clear_u32.glsl")
-const COPY_U32_SHADER := preload("res://shaders/copy_u32.glsl")
-const U32_TO_F32_SHADER := preload("res://shaders/u32_to_f32.glsl")
+const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
+
+const FLOW_DIR_SHADER_PATH: String = "res://shaders/flow_dir.glsl"
+const FLOW_ACCUM_SHADER_PATH: String = "res://shaders/flow_accum.glsl"
+const FLOW_PUSH_SHADER_PATH: String = "res://shaders/flow_push.glsl"
+const CLEAR_U32_SHADER_PATH: String = "res://shaders/clear_u32.glsl"
+const COPY_U32_SHADER_PATH: String = "res://shaders/copy_u32.glsl"
+const U32_TO_F32_SHADER_PATH: String = "res://shaders/u32_to_f32.glsl"
 
 var _rd: RenderingDevice
 var _dir_shader: RID
@@ -21,73 +25,88 @@ var _copy_shader: RID
 var _copy_pipeline: RID
 var _u32_to_f32_shader: RID
 var _u32_to_f32_pipeline: RID
+var _owned_buffer_manager: GPUBufferManager = null
 
-func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
-	if file == null:
-		return null
-	var versions: Array = file.get_version_list()
-	if versions.is_empty():
-		return null
-	var chosen_version: Variant = null
-	for v in versions:
-		if v == null:
-			continue
-		if chosen_version == null:
-			chosen_version = v
-		if String(v) == "vulkan":
-			chosen_version = v
-			break
-	if chosen_version == null:
-		return null
-	return file.get_spirv(chosen_version)
+func _init() -> void:
+	_owned_buffer_manager = GPUBufferManager.new()
 
-func _ensure() -> void:
-	if _rd == null:
-		_rd = RenderingServer.get_rendering_device()
-	if not _dir_shader.is_valid():
-		var s := _get_spirv(FLOW_DIR_SHADER)
-		if s == null:
-			return
-		_dir_shader = _rd.shader_create_from_spirv(s)
-	if not _dir_pipeline.is_valid() and _dir_shader.is_valid():
-		_dir_pipeline = _rd.compute_pipeline_create(_dir_shader)
-	if not _acc_shader.is_valid():
-		var s2 := _get_spirv(FLOW_ACCUM_SHADER)
-		if s2 == null:
-			return
-		_acc_shader = _rd.shader_create_from_spirv(s2)
-	if not _acc_pipeline.is_valid() and _acc_shader.is_valid():
-		_acc_pipeline = _rd.compute_pipeline_create(_acc_shader)
-	if not _push_shader.is_valid():
-		var s3 := _get_spirv(FLOW_PUSH_SHADER)
-		if s3 == null:
-			return
-		_push_shader = _rd.shader_create_from_spirv(s3)
-	if not _push_pipeline.is_valid() and _push_shader.is_valid():
-		_push_pipeline = _rd.compute_pipeline_create(_push_shader)
-	if not _clear_shader.is_valid():
-		var sc: RDShaderSPIRV = _get_spirv(CLEAR_U32_SHADER_FILE)
-		if sc == null:
-			return
-		_clear_shader = _rd.shader_create_from_spirv(sc)
-	if not _clear_pipeline.is_valid() and _clear_shader.is_valid():
-		_clear_pipeline = _rd.compute_pipeline_create(_clear_shader)
-	if not _copy_shader.is_valid():
-		var scp: RDShaderSPIRV = _get_spirv(COPY_U32_SHADER)
-		if scp != null:
-			_copy_shader = _rd.shader_create_from_spirv(scp)
-	if not _copy_pipeline.is_valid() and _copy_shader.is_valid():
-		_copy_pipeline = _rd.compute_pipeline_create(_copy_shader)
-	if not _u32_to_f32_shader.is_valid():
-		var sconv: RDShaderSPIRV = _get_spirv(U32_TO_F32_SHADER)
-		if sconv != null:
-			_u32_to_f32_shader = _rd.shader_create_from_spirv(sconv)
-	if not _u32_to_f32_pipeline.is_valid() and _u32_to_f32_shader.is_valid():
-		_u32_to_f32_pipeline = _rd.compute_pipeline_create(_u32_to_f32_shader)
+func _ensure() -> bool:
+	var dir_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_dir_shader,
+		_dir_pipeline,
+		FLOW_DIR_SHADER_PATH,
+		"flow_dir"
+	)
+	_rd = dir_state.get("rd", null)
+	_dir_shader = dir_state.get("shader", RID())
+	_dir_pipeline = dir_state.get("pipeline", RID())
+	if not VariantCasts.to_bool(dir_state.get("ok", false)):
+		return false
 
-func _dispatch_copy_u32(src: RID, dst: RID, count: int) -> void:
+	var push_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_push_shader,
+		_push_pipeline,
+		FLOW_PUSH_SHADER_PATH,
+		"flow_push"
+	)
+	_push_shader = push_state.get("shader", RID())
+	_push_pipeline = push_state.get("pipeline", RID())
+	if not VariantCasts.to_bool(push_state.get("ok", false)):
+		return false
+
+	var clear_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_clear_shader,
+		_clear_pipeline,
+		CLEAR_U32_SHADER_PATH,
+		"clear_u32"
+	)
+	_clear_shader = clear_state.get("shader", RID())
+	_clear_pipeline = clear_state.get("pipeline", RID())
+	if not VariantCasts.to_bool(clear_state.get("ok", false)):
+		return false
+
+	var copy_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_copy_shader,
+		_copy_pipeline,
+		COPY_U32_SHADER_PATH,
+		"copy_u32"
+	)
+	_copy_shader = copy_state.get("shader", RID())
+	_copy_pipeline = copy_state.get("pipeline", RID())
+	if not VariantCasts.to_bool(copy_state.get("ok", false)):
+		return false
+
+	var conv_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_u32_to_f32_shader,
+		_u32_to_f32_pipeline,
+		U32_TO_F32_SHADER_PATH,
+		"u32_to_f32"
+	)
+	_u32_to_f32_shader = conv_state.get("shader", RID())
+	_u32_to_f32_pipeline = conv_state.get("pipeline", RID())
+	if not VariantCasts.to_bool(conv_state.get("ok", false)):
+		return false
+
+	# Optional compatibility pipeline (currently not used by compute_flow_gpu_buffers).
+	var acc_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_acc_shader,
+		_acc_pipeline,
+		FLOW_ACCUM_SHADER_PATH,
+		"flow_accum"
+	)
+	_acc_shader = acc_state.get("shader", RID())
+	_acc_pipeline = acc_state.get("pipeline", RID())
+	return true
+
+func _dispatch_copy_u32(src: RID, dst: RID, count: int) -> bool:
 	if not _copy_pipeline.is_valid():
-		return
+		return false
 	var uniforms: Array = []
 	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(src); uniforms.append(u0)
 	var u1 := RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(dst); uniforms.append(u1)
@@ -99,6 +118,9 @@ func _dispatch_copy_u32(src: RID, dst: RID, count: int) -> void:
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "FlowCompute.copy_u32"):
+		_rd.free_rid(u_set)
+		return false
 	var g1d: int = int(ceil(float(count) / 256.0))
 	var cl := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(cl, _copy_pipeline)
@@ -107,10 +129,11 @@ func _dispatch_copy_u32(src: RID, dst: RID, count: int) -> void:
 	_rd.compute_list_dispatch(cl, g1d, 1, 1)
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
+	return true
 
-func _dispatch_clear_u32(buf: RID, count: int) -> void:
+func _dispatch_clear_u32(buf: RID, count: int) -> bool:
 	if not _clear_pipeline.is_valid():
-		return
+		return false
 	var uniforms: Array = []
 	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(buf); uniforms.append(u0)
 	var u_set := _rd.uniform_set_create(uniforms, _clear_shader, 0)
@@ -121,6 +144,9 @@ func _dispatch_clear_u32(buf: RID, count: int) -> void:
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "FlowCompute.clear_u32"):
+		_rd.free_rid(u_set)
+		return false
 	var g1d: int = int(ceil(float(count) / 256.0))
 	var cl := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(cl, _clear_pipeline)
@@ -129,10 +155,11 @@ func _dispatch_clear_u32(buf: RID, count: int) -> void:
 	_rd.compute_list_dispatch(cl, g1d, 1, 1)
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
+	return true
 
-func _dispatch_u32_to_f32(src: RID, dst: RID, count: int) -> void:
+func _dispatch_u32_to_f32(src: RID, dst: RID, count: int) -> bool:
 	if not _u32_to_f32_pipeline.is_valid():
-		return
+		return false
 	var uniforms: Array = []
 	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(src); uniforms.append(u0)
 	var u1 := RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(dst); uniforms.append(u1)
@@ -144,6 +171,9 @@ func _dispatch_u32_to_f32(src: RID, dst: RID, count: int) -> void:
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "FlowCompute.u32_to_f32"):
+		_rd.free_rid(u_set)
+		return false
 	var g1d: int = int(ceil(float(count) / 256.0))
 	var cl := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(cl, _u32_to_f32_pipeline)
@@ -152,9 +182,11 @@ func _dispatch_u32_to_f32(src: RID, dst: RID, count: int) -> void:
 	_rd.compute_list_dispatch(cl, g1d, 1, 1)
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
+	return true
 
 func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wrap_x: bool, out_dir_buf: RID, out_acc_buf: RID, roi: Rect2i = Rect2i(0,0,0,0), buffer_manager: Object = null) -> bool:
-	_ensure()
+	if not _ensure():
+		return false
 	if not _dir_pipeline.is_valid() or not _push_pipeline.is_valid() or not _u32_to_f32_pipeline.is_valid():
 		return false
 	if not height_buf.is_valid() or not land_buf.is_valid() or not out_dir_buf.is_valid() or not out_acc_buf.is_valid():
@@ -180,6 +212,9 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 	if pad0 > 0:
 		var zeros0 := PackedByteArray(); zeros0.resize(pad0)
 		pc.append_array(zeros0)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 32, "FlowCompute.dir"):
+		_rd.free_rid(u_set)
+		return false
 	var gx: int = int(ceil(float(w) / 16.0)); var gy: int = int(ceil(float(h) / 16.0))
 	var cl := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(cl, _dir_pipeline)
@@ -193,18 +228,23 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 	var front_in_buf: RID
 	var front_out_buf: RID
 	var bytes: int = size * 4
-	if buffer_manager:
-		total_buf = buffer_manager.ensure_buffer("flow_total_u32", bytes)
-		front_in_buf = buffer_manager.ensure_buffer("flow_front_in", bytes)
-		front_out_buf = buffer_manager.ensure_buffer("flow_front_out", bytes)
-	else:
-		total_buf = _rd.storage_buffer_create(bytes)
-		front_in_buf = _rd.storage_buffer_create(bytes)
-		front_out_buf = _rd.storage_buffer_create(bytes)
+	var bm: Object = buffer_manager
+	if bm == null:
+		if _owned_buffer_manager == null:
+			_owned_buffer_manager = GPUBufferManager.new()
+		bm = _owned_buffer_manager
+	total_buf = bm.ensure_buffer("flow_total_u32", bytes)
+	front_in_buf = bm.ensure_buffer("flow_front_in", bytes)
+	front_out_buf = bm.ensure_buffer("flow_front_out", bytes)
+	if not (total_buf.is_valid() and front_in_buf.is_valid() and front_out_buf.is_valid()):
+		return false
 	# total = land, frontier_in = land, frontier_out = 0
-	_dispatch_copy_u32(land_buf, total_buf, size)
-	_dispatch_copy_u32(land_buf, front_in_buf, size)
-	_dispatch_clear_u32(front_out_buf, size)
+	if not _dispatch_copy_u32(land_buf, total_buf, size):
+		return false
+	if not _dispatch_copy_u32(land_buf, front_in_buf, size):
+		return false
+	if not _dispatch_clear_u32(front_out_buf, size):
+		return false
 	# Push pass
 	uniforms.clear()
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(out_dir_buf); uniforms.append(u)
@@ -219,6 +259,9 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 	if pad_p > 0:
 		var zeros_p := PackedByteArray(); zeros_p.resize(pad_p)
 		pc.append_array(zeros_p)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 32, "FlowCompute.push"):
+		_rd.free_rid(u_set)
+		return false
 	var g1d: int = int(ceil(float(size) / 256.0))
 	var max_iters: int = 4
 	for _pass in range(max_iters):
@@ -232,7 +275,9 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 		var tmp_buf := front_in_buf
 		front_in_buf = front_out_buf
 		front_out_buf = tmp_buf
-		_dispatch_clear_u32(front_out_buf, size)
+		if not _dispatch_clear_u32(front_out_buf, size):
+			_rd.free_rid(u_set)
+			return false
 		# rebuild uniform set for swapped frontiers
 		uniforms.clear()
 		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(out_dir_buf); uniforms.append(u)
@@ -243,11 +288,30 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 		u_set = _rd.uniform_set_create(uniforms, _push_shader, 0)
 	_rd.free_rid(u_set)
 	# Convert total u32 -> float accumulation
-	_dispatch_u32_to_f32(total_buf, out_acc_buf, size)
-	if buffer_manager == null:
-		_rd.free_rid(total_buf)
-		_rd.free_rid(front_in_buf)
-		_rd.free_rid(front_out_buf)
-	return true
+	return _dispatch_u32_to_f32(total_buf, out_acc_buf, size)
+
+func cleanup() -> void:
+	if _owned_buffer_manager != null:
+		_owned_buffer_manager.cleanup()
+	ComputeShaderBase.free_rids(_rd, [
+		_dir_pipeline, _dir_shader,
+		_acc_pipeline, _acc_shader,
+		_push_pipeline, _push_shader,
+		_clear_pipeline, _clear_shader,
+		_copy_pipeline, _copy_shader,
+		_u32_to_f32_pipeline, _u32_to_f32_shader,
+	])
+	_dir_pipeline = RID()
+	_dir_shader = RID()
+	_acc_pipeline = RID()
+	_acc_shader = RID()
+	_push_pipeline = RID()
+	_push_shader = RID()
+	_clear_pipeline = RID()
+	_clear_shader = RID()
+	_copy_pipeline = RID()
+	_copy_shader = RID()
+	_u32_to_f32_pipeline = RID()
+	_u32_to_f32_shader = RID()
 
 

@@ -1,112 +1,88 @@
 # File: res://scripts/systems/TerrainCompute.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const TERRAIN_SHADER := preload("res://shaders/terrain_gen.glsl")
-var FBM_SHADER_FILE: RDShaderFile = load("res://shaders/noise_fbm.glsl")
+const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 
-var _rd: RenderingDevice
-var _shader: RID
-var _pipeline: RID
+const TERRAIN_SHADER_PATH: String = "res://shaders/terrain_gen.glsl"
+const FBM_SHADER_PATH: String = "res://shaders/noise_fbm.glsl"
 
-func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
-	if file == null:
-		return null
-	var versions: Array = file.get_version_list()
-	if versions.is_empty():
-		return null
-	var chosen_version = null
-	for v in versions:
-		if v == null:
-			continue
-		if String(v) == "vulkan":
-			chosen_version = v
-			break
-		if chosen_version == null:
-			chosen_version = v
-	if chosen_version == null:
-		chosen_version = &""
-	return file.get_spirv(chosen_version)
+var _rd: RenderingDevice = null
+var _shader: RID = RID()
+var _pipeline: RID = RID()
+var _fbm_shader: RID = RID()
+var _fbm_pipeline: RID = RID()
+var _buf_mgr: GPUBufferManager = null
+var _buf_size: int = 0
+var _buf_fbm: RID = RID()
+var _buf_cont: RID = RID()
+var _buf_warp_x: RID = RID()
+var _buf_warp_y: RID = RID()
 
-func _ensure() -> void:
-	if _rd == null:
-		_rd = RenderingServer.get_rendering_device()
-	if _rd == null:
-		return
-	if not _shader.is_valid():
-		var spirv: RDShaderSPIRV = _get_spirv(TERRAIN_SHADER)
-		if spirv == null:
-			push_error("TerrainCompute: terrain_gen.glsl SPIR-V unavailable")
-			return
-		_shader = _rd.shader_create_from_spirv(spirv)
-		if not _shader.is_valid():
-			push_error("TerrainCompute: failed to create terrain_gen shader from SPIR-V")
-			return
-	if not _pipeline.is_valid() and _shader.is_valid():
-		_pipeline = _rd.compute_pipeline_create(_shader)
-		if not _pipeline.is_valid():
-			push_error("TerrainCompute: failed to create terrain_gen compute pipeline")
+func _init() -> void:
+	_buf_mgr = GPUBufferManager.new()
 
-func generate_to_buffers(
-		w: int,
-		h: int,
-		params: Dictionary,
-		out_height_buf: RID,
-		out_land_buf: RID
-	) -> bool:
-	_ensure()
-	if not _shader.is_valid() or not _pipeline.is_valid():
+func _ensure() -> bool:
+	var terrain_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_shader,
+		_pipeline,
+		TERRAIN_SHADER_PATH,
+		"terrain_gen"
+	)
+	_rd = terrain_state.get("rd", null)
+	_shader = terrain_state.get("shader", RID())
+	_pipeline = terrain_state.get("pipeline", RID())
+	if not VariantCasts.to_bool(terrain_state.get("ok", false)):
 		return false
-	var size: int = max(0, w * h)
-	if size == 0:
-		return false
-	if not out_height_buf.is_valid() or not out_land_buf.is_valid():
-		return false
-	var sea_level: float = float(params.get("sea_level", 0.0))
-	var wrap_x: bool = bool(params.get("wrap_x", true))
-	var noise_x_scale: float = float(params.get("noise_x_scale", 1.0))
-	var warp_amount: float = float(params.get("warp", 24.0))
 
-	# GPU-only terrain path: noise fields must be produced by the FBM compute shader.
-	var buf_warp_x: RID
-	var buf_warp_y: RID
-	var buf_fbm: RID
-	var buf_cont: RID
-	var fbm_spirv: RDShaderSPIRV = _get_spirv(FBM_SHADER_FILE)
-	if fbm_spirv == null:
-		push_error("TerrainCompute: noise_fbm shader unavailable; CPU terrain fallback is disabled in GPU-only mode.")
+	var fbm_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_fbm_shader,
+		_fbm_pipeline,
+		FBM_SHADER_PATH,
+		"noise_fbm"
+	)
+	_fbm_shader = fbm_state.get("shader", RID())
+	_fbm_pipeline = fbm_state.get("pipeline", RID())
+	return VariantCasts.to_bool(fbm_state.get("ok", false))
+
+func _ensure_intermediate_buffers(size: int) -> bool:
+	if size <= 0:
 		return false
-	var fbm_shader: RID = _rd.shader_create_from_spirv(fbm_spirv)
-	if not fbm_shader.is_valid():
-		push_error("TerrainCompute: failed to create noise_fbm shader; CPU terrain fallback is disabled in GPU-only mode.")
-		return false
-	var fbm_pipeline: RID = _rd.compute_pipeline_create(fbm_shader)
-	if not fbm_pipeline.is_valid():
-		push_error("TerrainCompute: failed to create noise_fbm pipeline; CPU terrain fallback is disabled in GPU-only mode.")
-		_rd.free_rid(fbm_shader)
-		return false
-	# Allocate outputs
-	var out_fbm := PackedFloat32Array(); out_fbm.resize(size)
-	var out_cont := PackedFloat32Array(); out_cont.resize(size)
-	var out_wx := PackedFloat32Array(); out_wx.resize(size)
-	var out_wy := PackedFloat32Array(); out_wy.resize(size)
-	buf_fbm = _rd.storage_buffer_create(out_fbm.to_byte_array().size(), out_fbm.to_byte_array())
-	buf_cont = _rd.storage_buffer_create(out_cont.to_byte_array().size(), out_cont.to_byte_array())
-	buf_warp_x = _rd.storage_buffer_create(out_wx.to_byte_array().size(), out_wx.to_byte_array())
-	buf_warp_y = _rd.storage_buffer_create(out_wy.to_byte_array().size(), out_wy.to_byte_array())
-	# Bind and dispatch
+	if _buf_mgr == null:
+		_buf_mgr = GPUBufferManager.new()
+	if _buf_size == size and _buf_fbm.is_valid() and _buf_cont.is_valid() and _buf_warp_x.is_valid() and _buf_warp_y.is_valid():
+		return true
+	_buf_size = size
+	var bytes_size: int = size * 4
+	_buf_fbm = _buf_mgr.ensure_buffer("terrain_fbm", bytes_size)
+	_buf_cont = _buf_mgr.ensure_buffer("terrain_cont", bytes_size)
+	_buf_warp_x = _buf_mgr.ensure_buffer("terrain_warp_x", bytes_size)
+	_buf_warp_y = _buf_mgr.ensure_buffer("terrain_warp_y", bytes_size)
+	return _buf_fbm.is_valid() and _buf_cont.is_valid() and _buf_warp_x.is_valid() and _buf_warp_y.is_valid()
+
+func _dispatch_noise_fbm(w: int, h: int, params: Dictionary, wrap_x: bool) -> bool:
 	var uniforms_n: Array = []
 	var un: RDUniform
-	un = RDUniform.new(); un.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; un.binding = 0; un.add_id(buf_fbm); uniforms_n.append(un)
-	un = RDUniform.new(); un.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; un.binding = 1; un.add_id(buf_cont); uniforms_n.append(un)
-	un = RDUniform.new(); un.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; un.binding = 2; un.add_id(buf_warp_x); uniforms_n.append(un)
-	un = RDUniform.new(); un.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; un.binding = 3; un.add_id(buf_warp_y); uniforms_n.append(un)
-	var u_set_n := _rd.uniform_set_create(uniforms_n, fbm_shader, 0)
+	un = RDUniform.new(); un.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; un.binding = 0; un.add_id(_buf_fbm); uniforms_n.append(un)
+	un = RDUniform.new(); un.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; un.binding = 1; un.add_id(_buf_cont); uniforms_n.append(un)
+	un = RDUniform.new(); un.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; un.binding = 2; un.add_id(_buf_warp_x); uniforms_n.append(un)
+	un = RDUniform.new(); un.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; un.binding = 3; un.add_id(_buf_warp_y); uniforms_n.append(un)
+	var u_set_n: RID = _rd.uniform_set_create(uniforms_n, _fbm_shader, 0)
+
 	var pc_n := PackedByteArray()
-	# Order must match shader push constant struct exactly
-	var ints_n := PackedInt32Array([w, h, (1 if wrap_x else 0), int(params.get("seed", 0))])
+	var ints_n := PackedInt32Array([
+		w,
+		h,
+		(1 if wrap_x else 0),
+		int(params.get("seed", 0)),
+	])
+	var base_freq: float = float(params.get("frequency", 0.02))
 	var floats_n := PackedFloat32Array([
-		float(params.get("frequency", 0.02)),
-		max(0.002, float(params.get("frequency", 0.02)) * 0.4),
+		base_freq,
+		max(0.002, base_freq * 0.4),
 		float(params.get("noise_x_scale", 1.0)),
 		float(params.get("warp", 24.0)),
 		float(params.get("lacunarity", 2.0)),
@@ -116,41 +92,50 @@ func generate_to_buffers(
 	pc_n.append_array(ints_n.to_byte_array())
 	pc_n.append_array(floats_n.to_byte_array())
 	pc_n.append_array(ints_n_tail.to_byte_array())
-	# Align to 16-byte multiple for Vulkan push constants
-	var pad_n := (16 - (pc_n.size() % 16)) % 16
+	var pad_n: int = (16 - (pc_n.size() % 16)) % 16
 	if pad_n > 0:
-		var zeros_n := PackedByteArray(); zeros_n.resize(pad_n)
+		var zeros_n := PackedByteArray()
+		zeros_n.resize(pad_n)
 		pc_n.append_array(zeros_n)
+	if not ComputeShaderBase.validate_push_constant_size(pc_n, 48, "TerrainCompute.noise_fbm"):
+		_rd.free_rid(u_set_n)
+		return false
+
 	var gx_n: int = int(ceil(float(w) / 16.0))
 	var gy_n: int = int(ceil(float(h) / 16.0))
 	var cl_n := _rd.compute_list_begin()
-	_rd.compute_list_bind_compute_pipeline(cl_n, fbm_pipeline)
+	_rd.compute_list_bind_compute_pipeline(cl_n, _fbm_pipeline)
 	_rd.compute_list_bind_uniform_set(cl_n, u_set_n, 0)
 	_rd.compute_list_set_push_constant(cl_n, pc_n, pc_n.size())
 	_rd.compute_list_dispatch(cl_n, gx_n, gy_n, 1)
 	_rd.compute_list_end()
 	_rd.free_rid(u_set_n)
+	return true
 
+func _dispatch_terrain(w: int, h: int, sea_level: float, noise_x_scale: float, warp_amount: float, wrap_x: bool, out_height_buf: RID, out_land_buf: RID) -> bool:
 	var uniforms: Array = []
 	var u: RDUniform
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(buf_warp_x); uniforms.append(u)
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(buf_warp_y); uniforms.append(u)
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(buf_fbm); uniforms.append(u)
-	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_cont); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(_buf_warp_x); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(_buf_warp_y); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(_buf_fbm); uniforms.append(u)
+	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(_buf_cont); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(out_height_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(out_land_buf); uniforms.append(u)
-	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	var u_set: RID = _rd.uniform_set_create(uniforms, _shader, 0)
 
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h, (1 if wrap_x else 0)])
 	var floats := PackedFloat32Array([sea_level, noise_x_scale, warp_amount])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
-	# Align to 16-byte multiple
-	var pad := (16 - (pc.size() % 16)) % 16
+	var pad: int = (16 - (pc.size() % 16)) % 16
 	if pad > 0:
-		var zeros := PackedByteArray(); zeros.resize(pad)
+		var zeros := PackedByteArray()
+		zeros.resize(pad)
 		pc.append_array(zeros)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 32, "TerrainCompute.terrain"):
+		_rd.free_rid(u_set)
+		return false
 
 	var gx: int = int(ceil(float(w) / 16.0))
 	var gy: int = int(ceil(float(h) / 16.0))
@@ -160,16 +145,57 @@ func generate_to_buffers(
 	_rd.compute_list_set_push_constant(cl, pc, pc.size())
 	_rd.compute_list_dispatch(cl, gx, gy, 1)
 	_rd.compute_list_end()
-
 	_rd.free_rid(u_set)
-	_rd.free_rid(buf_warp_x)
-	_rd.free_rid(buf_warp_y)
-	_rd.free_rid(buf_fbm)
-	_rd.free_rid(buf_cont)
-	_rd.free_rid(fbm_pipeline)
-	_rd.free_rid(fbm_shader)
 	return true
+
+func generate_to_buffers(
+		w: int,
+		h: int,
+		params: Dictionary,
+		out_height_buf: RID,
+		out_land_buf: RID
+	) -> bool:
+	if not _ensure():
+		return false
+	if not _shader.is_valid() or not _pipeline.is_valid() or not _fbm_shader.is_valid() or not _fbm_pipeline.is_valid():
+		return false
+
+	var size: int = max(0, w * h)
+	if size == 0:
+		return false
+	if not out_height_buf.is_valid() or not out_land_buf.is_valid():
+		return false
+	if not _ensure_intermediate_buffers(size):
+		return false
+
+	var sea_level: float = float(params.get("sea_level", 0.0))
+	var wrap_x: bool = VariantCasts.to_bool(params.get("wrap_x", true))
+	var noise_x_scale: float = float(params.get("noise_x_scale", 1.0))
+	var warp_amount: float = float(params.get("warp", 24.0))
+
+	if not _dispatch_noise_fbm(w, h, params, wrap_x):
+		return false
+	return _dispatch_terrain(w, h, sea_level, noise_x_scale, warp_amount, wrap_x, out_height_buf, out_land_buf)
 
 func generate(_w: int, _h: int, _params: Dictionary) -> Dictionary:
 	push_error("TerrainCompute.generate() is disabled in GPU-only mode; use generate_to_buffers().")
 	return {}
+
+func cleanup() -> void:
+	if _buf_mgr != null:
+		_buf_mgr.cleanup()
+	ComputeShaderBase.free_rids(_rd, [
+		_pipeline,
+		_shader,
+		_fbm_pipeline,
+		_fbm_shader,
+	])
+	_pipeline = RID()
+	_shader = RID()
+	_fbm_pipeline = RID()
+	_fbm_shader = RID()
+	_buf_fbm = RID()
+	_buf_cont = RID()
+	_buf_warp_x = RID()
+	_buf_warp_y = RID()
+	_buf_size = 0

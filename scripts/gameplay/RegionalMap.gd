@@ -1,4 +1,5 @@
 extends Control
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
 const PoiRegistry = preload("res://scripts/gameplay/PoiRegistry.gd")
@@ -18,7 +19,7 @@ const VIEW_PAD: int = 2
 const RENDER_W: int = VIEW_W + VIEW_PAD * 2
 const RENDER_H: int = VIEW_H + VIEW_PAD * 2
 
-const MOVE_SPEED_CELLS_PER_SEC: float = 4.0
+const MOVE_SPEED_CELLS_PER_SEC: float = 5.0
 const MOVE_EPS: float = 0.0001
 
 @onready var header_label: Label = %HeaderLabel
@@ -54,8 +55,40 @@ var _center_gy: int = 0
 
 const _HEADER_REFRESH_INTERVAL: float = 0.25
 const _DYNAMIC_REFRESH_INTERVAL: float = 0.50
+const _TRANSITION_PROGRESS_QUANTIZATION_STEPS: int = 200
+const _CHUNK_PREFETCH_MARGIN_CHUNKS: int = 1
+# Partial edge-only GPU uploads are currently incorrect for the scrolled regional view:
+# they do not shift interior texture rows/cols, which can visually pin shading around
+# the centered player. Keep CPU incremental sampling, but push full GPU uploads.
+const _ENABLE_GPU_PARTIAL_UPLOAD: bool = false
 var _header_refresh_accum: float = 0.0
 var _dynamic_refresh_accum: float = 0.0
+var _transition_signature: String = ""
+var _field_cache_valid: bool = false
+var _field_origin_x: int = 0
+var _field_origin_y: int = 0
+var _field_height_raw: PackedFloat32Array = PackedFloat32Array()
+var _field_temp: PackedFloat32Array = PackedFloat32Array()
+var _field_moist: PackedFloat32Array = PackedFloat32Array()
+var _field_biome: PackedInt32Array = PackedInt32Array()
+var _field_land: PackedInt32Array = PackedInt32Array()
+var _field_beach: PackedInt32Array = PackedInt32Array()
+var _field_height_raw_scratch: PackedFloat32Array = PackedFloat32Array()
+var _field_temp_scratch: PackedFloat32Array = PackedFloat32Array()
+var _field_moist_scratch: PackedFloat32Array = PackedFloat32Array()
+var _field_biome_scratch: PackedInt32Array = PackedInt32Array()
+var _field_land_scratch: PackedInt32Array = PackedInt32Array()
+var _field_beach_scratch: PackedInt32Array = PackedInt32Array()
+var _last_redraw_mode: String = ""
+var _last_redraw_us: int = 0
+var _last_redraw_fresh_cells: int = 0
+var _last_redraw_reused_cells: int = 0
+var _last_redraw_dx: int = 0
+var _last_redraw_dy: int = 0
+var _last_gpu_upload_mode: String = ""
+var _last_gpu_upload_us: int = 0
+const _REDRAW_SAMPLE_WINDOW: int = 240
+var _redraw_samples_ms: Array[float] = []
 
 func _ready() -> void:
 	game_state = get_node_or_null("/root/GameState")
@@ -89,6 +122,7 @@ func _init_regional_generation() -> void:
 		})
 	_chunk_cache = RegionalChunkCache.new()
 	_chunk_cache.configure(_chunk_gen, 32, 256)
+	_refresh_regional_transition_overrides(true)
 
 func _ensure_valid_spawn() -> void:
 	# If the saved spawn lands on blocked terrain (deep water/cliff), nudge to the nearest open cell.
@@ -96,6 +130,8 @@ func _ensure_valid_spawn() -> void:
 		return
 	var gx0: int = _wrap_global_x(int(floor(_player_gx)))
 	var gy0: int = _clamp_global_y(int(floor(_player_gy)))
+	if _chunk_cache.has_method("prefetch_for_view"):
+		_chunk_cache.prefetch_for_view(gx0, gy0, 1, 1, 1)
 	if not _is_blocked_cell(gx0, gy0):
 		return
 	var found: bool = false
@@ -125,6 +161,52 @@ func _ensure_valid_spawn() -> void:
 	_save_position_to_state()
 	if footer_label:
 		footer_label.text = "Spawn adjusted to nearest passable terrain."
+
+func _refresh_regional_transition_overrides(force: bool = false) -> bool:
+	if _chunk_gen == null:
+		return false
+	var raw: Dictionary = {}
+	if game_state != null and game_state.has_method("get_regional_biome_transition_overrides"):
+		raw = game_state.get_regional_biome_transition_overrides(world_tile_x, world_tile_y, 1)
+	var parsed: Dictionary = {}
+	for kv in raw.keys():
+		var key: String = String(kv)
+		var parts: PackedStringArray = key.split(",", false)
+		if parts.size() != 2:
+			continue
+		var wx: int = int(parts[0])
+		var wy: int = int(parts[1])
+		var vv: Variant = raw.get(kv, {})
+		if typeof(vv) != TYPE_DICTIONARY:
+			continue
+		var d: Dictionary = vv as Dictionary
+		parsed[Vector2i(wx, wy)] = {
+			"from_biome": int(d.get("from_biome", -1)),
+			"to_biome": int(d.get("to_biome", -1)),
+			"progress": clamp(float(d.get("progress", 1.0)), 0.0, 1.0),
+		}
+	var sig_parts: Array[String] = []
+	for pk in parsed.keys():
+		var pxy: Vector2i = pk
+		var d2: Dictionary = parsed[pk]
+		sig_parts.append("%d,%d:%d>%d@%03d" % [
+			pxy.x,
+			pxy.y,
+			int(d2.get("from_biome", -1)),
+			int(d2.get("to_biome", -1)),
+			int(round(clamp(float(d2.get("progress", 1.0)), 0.0, 1.0) * float(_TRANSITION_PROGRESS_QUANTIZATION_STEPS))),
+		])
+	sig_parts.sort()
+	var sig: String = "|".join(sig_parts)
+	if not force and sig == _transition_signature:
+		return false
+	_transition_signature = sig
+	if "set_biome_transition_overrides" in _chunk_gen:
+		_chunk_gen.set_biome_transition_overrides(parsed)
+	if _chunk_cache != null and _chunk_cache.has_method("invalidate_all"):
+		_chunk_cache.invalidate_all()
+	_field_cache_valid = false
+	return true
 
 func _install_menu_overlay() -> void:
 	var packed: PackedScene = load(SceneContracts.SCENE_MENU_OVERLAY)
@@ -181,9 +263,11 @@ func _ensure_player_marker() -> void:
 	gpu_map.add_child(_player_marker)
 
 func _load_location_from_state() -> void:
+	if game_state != null and game_state.has_method("ensure_world_snapshot_integrity"):
+		game_state.ensure_world_snapshot_integrity()
 	var game_has_snapshot: bool = false
 	if game_state != null and game_state.has_method("has_world_snapshot"):
-		game_has_snapshot = bool(game_state.has_world_snapshot())
+		game_has_snapshot = VariantCasts.to_bool(game_state.has_world_snapshot())
 	if game_state != null and game_state.has_method("get_location"):
 		var loc: Dictionary = game_state.get_location()
 		world_tile_x = int(loc.get("world_x", world_tile_x))
@@ -287,14 +371,17 @@ func _process(delta: float) -> void:
 	# Pause movement while overlays are open.
 	if world_map_overlay != null and world_map_overlay.visible:
 		_apply_scroll_offset()
+		_update_fixed_lonlat_uniform()
 		return
 	if menu_overlay != null and menu_overlay.visible:
 		_apply_scroll_offset()
+		_update_fixed_lonlat_uniform()
 		return
 	var dir: Vector2i = _read_move_dir()
 	if dir != Vector2i.ZERO:
 		_move_continuous(dir, delta)
 	_apply_scroll_offset()
+	_update_fixed_lonlat_uniform()
 	_tick_time_visuals(delta)
 
 func _tick_time_visuals(delta: float) -> void:
@@ -307,36 +394,32 @@ func _tick_time_visuals(delta: float) -> void:
 		_update_header_text()
 	if _dynamic_refresh_accum >= _DYNAMIC_REFRESH_INTERVAL:
 		_dynamic_refresh_accum = 0.0
-		_update_dynamic_layers()
+		if _refresh_regional_transition_overrides(false):
+			_render_view()
+		else:
+			_update_dynamic_layers()
 
 func _update_dynamic_layers() -> void:
 	if _gpu_view == null or gpu_map == null:
 		return
 	var solar: Dictionary = _get_solar_params()
+	# Keep solar basis anchored to the currently centered world cell so relief/cloud
+	# shading remains world-space stable while smooth camera scroll offsets change.
 	var lon_phi: Vector2 = _get_fixed_lon_phi(_center_gx, _center_gy)
 	var half_w: int = VIEW_W / 2
 	var half_h: int = VIEW_H / 2
 	var origin_x: int = _center_gx - half_w - VIEW_PAD
 	var origin_y: int = _center_gy - half_h - VIEW_PAD
+	var clouds: Dictionary = _build_cloud_params(origin_x, origin_y)
 	_gpu_view.update_dynamic_layers(
 		gpu_map,
 		solar,
-		{
-			"enabled": true,
-			"origin_x": origin_x,
-			"origin_y": origin_y,
-			"world_period_x": world_width * REGION_SIZE,
-			"world_height": world_height * REGION_SIZE,
-			"scale": 0.020,
-			"wind_x": 0.12,
-			"wind_y": 0.04,
-			"coverage": 0.54,
-			"contrast": 1.30,
-		},
+		clouds,
 		float(lon_phi.x),
 		float(lon_phi.y),
 		0.0
 	)
+	_publish_regional_cache_stats(-1)
 
 func _update_header_text() -> void:
 	if header_label == null:
@@ -352,7 +435,7 @@ func _update_header_text() -> void:
 	]
 
 func _read_move_dir() -> Vector2i:
-	# 4-directional real-time movement (no diagonals).
+	# Real-time movement (supports diagonals).
 	var dx := 0
 	var dy := 0
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
@@ -363,65 +446,189 @@ func _read_move_dir() -> Vector2i:
 		dy -= 1
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
 		dy += 1
-	if dx != 0:
-		return Vector2i(int(sign(dx)), 0)
-	if dy != 0:
-		return Vector2i(0, int(sign(dy)))
-	return Vector2i.ZERO
+	var sx: int = int(sign(dx))
+	var sy: int = int(sign(dy))
+	return Vector2i(sx, sy)
 
 func _move_continuous(dir: Vector2i, delta: float) -> void:
 	if dir == Vector2i.ZERO:
 		return
-	var remaining: float = MOVE_SPEED_CELLS_PER_SEC * max(0.0, delta)
-	if remaining <= 0.0:
+	var t_rem: float = max(0.0, delta)
+	if t_rem <= 0.0:
 		return
+	var dv: Vector2 = Vector2(float(dir.x), float(dir.y))
+	if dv.length_squared() <= 0.0001:
+		return
+	# Normalize diagonal movement so speed is consistent.
+	var v: Vector2 = dv.normalized() * MOVE_SPEED_CELLS_PER_SEC
 	var safety: int = 0
-	while remaining > 0.0 and safety < 16:
+	while t_rem > 0.0 and safety < 32:
 		safety += 1
-		var gx_int: int = int(floor(_player_gx))
-		var gy_int: int = int(floor(_player_gy))
+		var gx_int: int = _wrap_global_x(int(floor(_player_gx)))
+		var gy_int: int = _clamp_global_y(int(floor(_player_gy)))
 		gx_int = _wrap_global_x(gx_int)
 		gy_int = _clamp_global_y(gy_int)
 
-		var dist_to_boundary: float = _dist_to_next_boundary(dir)
-		if dist_to_boundary <= 0.0:
-			dist_to_boundary = 0.00001
-		if dist_to_boundary > remaining:
-			_player_gx += float(dir.x) * remaining
-			_player_gy += float(dir.y) * remaining
+		var tx: float = 1e30
+		var ty: float = 1e30
+		var fx: float = _player_gx - floor(_player_gx)
+		var fy: float = _player_gy - floor(_player_gy)
+
+		if abs(v.x) > 0.000001:
+			if v.x > 0.0:
+				tx = ((floor(_player_gx) + 1.0) - _player_gx) / v.x
+			else:
+				tx = fx / (-v.x)  # can be 0 when exactly on a boundary
+		if abs(v.y) > 0.000001:
+			if v.y > 0.0:
+				ty = ((floor(_player_gy) + 1.0) - _player_gy) / v.y
+			else:
+				ty = fy / (-v.y)
+
+		var step_time: float = min(t_rem, min(tx, ty))
+		var hit_x: bool = tx <= step_time + 0.000001
+		var hit_y: bool = ty <= step_time + 0.000001
+
+		# If we're exactly on a boundary in a negative direction, allow immediate crossing.
+		if step_time > 0.0:
+			_player_gx += v.x * step_time
+			_player_gy += v.y * step_time
 			_wrap_player_pos()
+			t_rem -= step_time
+
+		if not hit_x and not hit_y:
 			break
 
-		# Attempt to enter the next cell.
-		var next_gx: int = _wrap_global_x(gx_int + dir.x)
-		var next_gy: int = _clamp_global_y(gy_int + dir.y)
-		if next_gx == gx_int and next_gy == gy_int:
-			if footer_label:
-				footer_label.text = "You cannot go further in that direction."
+		var sx: int = 0
+		var sy: int = 0
+		if hit_x:
+			sx = 1 if v.x > 0.0 else -1
+		if hit_y:
+			sy = 1 if v.y > 0.0 else -1
+
+		if sx == 0 and sy == 0:
 			break
-		if _is_blocked_cell(next_gx, next_gy):
-			_snap_to_boundary(gx_int, gy_int, dir)
+		if not _try_cross_boundary_any(gx_int, gy_int, Vector2i(sx, sy)):
+			break
+
+func _try_cross_boundary_any(gx_int: int, gy_int: int, step_dir: Vector2i) -> bool:
+	# Returns true if movement can continue within this frame.
+	var sx: int = step_dir.x
+	var sy: int = step_dir.y
+
+	# Corner crossing: try diagonal first, then slide.
+	if sx != 0 and sy != 0:
+		# If Y is clamped, we cannot enter the diagonal row; fall back to X-only.
+		var gy_diag: int = _clamp_global_y(gy_int + sy)
+		if gy_diag == gy_int:
+			return _try_cross_boundary_any(gx_int, gy_int, Vector2i(sx, 0))
+		var gx_x: int = _wrap_global_x(gx_int + sx)
+		var gy_y: int = _clamp_global_y(gy_int + sy)
+		var gx_diag: int = _wrap_global_x(gx_int + sx)
+
+		# Prevent corner-cutting: diagonal requires both adjacent orthogonal cells to be passable.
+		var can_x: bool = _can_enter_cell(gx_int, gy_int, gx_x, gy_int)
+		var can_y: bool = _can_enter_cell(gx_int, gy_int, gx_int, gy_y)
+		if can_x and can_y and _can_enter_cell(gx_int, gy_int, gx_diag, gy_diag):
+			_set_pos_after_boundary(gx_int, gy_int, sx, sy, true, true)
+			return _on_entered_new_cell()
+		# Slide along X if possible (keep Y inside current cell).
+		if can_x:
+			_set_pos_after_boundary(gx_int, gy_int, sx, sy, true, false)
+			return _on_entered_new_cell()
+		# Slide along Y if possible (keep X inside current cell).
+		if can_y:
+			_set_pos_after_boundary(gx_int, gy_int, sx, sy, false, true)
+			return _on_entered_new_cell()
+		# Blocked: remain inside current cell near the corner.
+		_set_pos_after_boundary(gx_int, gy_int, sx, sy, false, false)
+		if footer_label:
+			footer_label.text = "Blocked terrain."
+		return false
+
+	# Single-axis crossing.
+	if sx != 0:
+		var gx_next: int = _wrap_global_x(gx_int + sx)
+		if not _can_enter_cell(gx_int, gy_int, gx_next, gy_int):
+			_set_pos_after_boundary(gx_int, gy_int, sx, 0, false, false)
 			if footer_label:
 				footer_label.text = "Blocked terrain."
-			break
+			return false
+		_set_pos_after_boundary(gx_int, gy_int, sx, 0, true, false)
+		return _on_entered_new_cell()
 
-		_cross_boundary(gx_int, gy_int, dir)
-		_wrap_player_pos()
-		remaining -= dist_to_boundary
+	if sy != 0:
+		var gy_next: int = _clamp_global_y(gy_int + sy)
+		# Clamp means "cannot go further" at top/bottom.
+		if gy_next == gy_int:
+			_set_pos_after_boundary(gx_int, gy_int, 0, sy, false, false)
+			if footer_label:
+				footer_label.text = "You cannot go further in that direction."
+			return false
+		if not _can_enter_cell(gx_int, gy_int, gx_int, gy_next):
+			_set_pos_after_boundary(gx_int, gy_int, 0, sy, false, false)
+			if footer_label:
+				footer_label.text = "Blocked terrain."
+			return false
+		_set_pos_after_boundary(gx_int, gy_int, 0, sy, false, true)
+		return _on_entered_new_cell()
 
-		# Entered a new tile: update discrete location, roll encounter, and rerender.
-		var prev_cx: int = _center_gx
-		var prev_cy: int = _center_gy
-		_sync_location_from_player_pos()
-		if _center_gx != prev_cx or _center_gy != prev_cy:
-			_save_position_to_state()
-			# Stepping onto a POI tile enters immediately (no "E" required).
-			if _poi_info_at(world_tile_x, world_tile_y, local_x, local_y).size() > 0:
-				_try_enter_poi()
-				return
-			if _roll_encounter_if_needed():
-				return
-			_render_view()
+	return true
+
+func _can_enter_cell(gx_from: int, gy_from: int, gx_to: int, gy_to: int) -> bool:
+	if gx_to == gx_from and gy_to == gy_from:
+		return false
+	if _crosses_world_tile_boundary(gx_from, gy_from, gx_to, gy_to):
+		var to_tile: Vector2i = _world_tile_from_global(gx_to, gy_to)
+		if not _is_world_tile_enterable(to_tile.x, to_tile.y):
+			return false
+		# Edge cliffs are allowed to exist visually, but we should not hard-lock players inside
+		# a macro tile when crossing into another enterable land tile.
+		return true
+	if _is_blocked_cell(gx_to, gy_to):
+		# Regional chunks can mark macro-tile outer rings as blocked for cliff visuals.
+		# Keep those cliffs render-only on land macro tiles so traversal is not trapped.
+		if _is_macro_seam_edge_cell(gx_to, gy_to):
+			var to_tile: Vector2i = _world_tile_from_global(gx_to, gy_to)
+			if _is_world_tile_enterable(to_tile.x, to_tile.y):
+				return true
+		return false
+	return true
+
+func _set_pos_after_boundary(gx_int: int, gy_int: int, sx: int, sy: int, cross_x: bool, cross_y: bool) -> void:
+	# When not crossing an axis at a boundary hit, nudge inside the current cell to prevent floor() from
+	# jumping into the neighbor without collision checks.
+	if sx > 0:
+		_player_gx = float(gx_int + 1) + (MOVE_EPS if cross_x else -MOVE_EPS)
+	elif sx < 0:
+		_player_gx = float(gx_int) + (-MOVE_EPS if cross_x else MOVE_EPS)
+
+	if sy > 0:
+		_player_gy = float(gy_int + 1) + (MOVE_EPS if cross_y else -MOVE_EPS)
+	elif sy < 0:
+		_player_gy = float(gy_int) + (-MOVE_EPS if cross_y else MOVE_EPS)
+
+	_wrap_player_pos()
+
+func _on_entered_new_cell() -> bool:
+	var prev_cx: int = _center_gx
+	var prev_cy: int = _center_gy
+	_sync_location_from_player_pos()
+	if _center_gx == prev_cx and _center_gy == prev_cy:
+		return true
+	_save_position_to_state()
+	_refresh_regional_transition_overrides(false)
+	if footer_label:
+		footer_label.text = ""
+	# Stepping onto a POI tile enters immediately (no "E" required).
+	if _poi_info_at(world_tile_x, world_tile_y, local_x, local_y).size() > 0:
+		_try_enter_poi()
+		return false
+	if _roll_encounter_if_needed():
+		return false
+	if not _render_view_incremental(prev_cx, prev_cy):
+		_render_view()
+	return true
 
 func _dist_to_next_boundary(dir: Vector2i) -> float:
 	if dir.x > 0:
@@ -493,6 +700,41 @@ func _apply_scroll_offset() -> void:
 	fy = clamp(fy, 0.0, 0.999999)
 	gpu_map.set_scroll_offset_cells(fx, fy)
 
+func _update_fixed_lonlat_uniform() -> void:
+	if gpu_map == null:
+		return
+	if not ("set_fixed_lonlat" in gpu_map):
+		return
+	var lon_phi: Vector2 = _get_fixed_lon_phi(_center_gx, _center_gy)
+	gpu_map.set_fixed_lonlat(true, float(lon_phi.x), float(lon_phi.y))
+
+func _world_tile_from_global(gx: int, gy: int) -> Vector2i:
+	var gxw: int = _wrap_global_x(gx)
+	var gyc: int = _clamp_global_y(gy)
+	var wx: int = int(gxw / REGION_SIZE)
+	var wy: int = int(gyc / REGION_SIZE)
+	return Vector2i(posmod(wx, world_width), clamp(wy, 0, world_height - 1))
+
+func _crosses_world_tile_boundary(gx_from: int, gy_from: int, gx_to: int, gy_to: int) -> bool:
+	var a: Vector2i = _world_tile_from_global(gx_from, gy_from)
+	var b: Vector2i = _world_tile_from_global(gx_to, gy_to)
+	return a.x != b.x or a.y != b.y
+
+func _is_world_tile_enterable(wx: int, wy: int) -> bool:
+	var biome_id: int = _get_world_biome_id(wx, wy)
+	return not _is_macro_ocean_biome(biome_id)
+
+func _is_macro_seam_edge_cell(gx: int, gy: int) -> bool:
+	var gxw: int = _wrap_global_x(gx)
+	var gyc: int = _clamp_global_y(gy)
+	var lx: int = posmod(gxw, REGION_SIZE)
+	var ly: int = posmod(gyc, REGION_SIZE)
+	return lx == 0 or lx == REGION_SIZE - 1 or ly == 0 or ly == REGION_SIZE - 1
+
+func _is_macro_ocean_biome(biome_id: int) -> bool:
+	# World-map hard-blocked macro biomes.
+	return biome_id == 0 or biome_id == 1
+
 func _move_player(delta: Vector2i) -> void:
 	var gx0: int = world_tile_x * REGION_SIZE + local_x
 	var gy0: int = world_tile_y * REGION_SIZE + local_y
@@ -550,7 +792,13 @@ func _roll_encounter_if_needed() -> bool:
 		if typeof(cell) == TYPE_DICTIONARY and cell.has("biome"):
 			biome_id = int(cell.get("biome", biome_id))
 	var biome_name: String = _biome_name_for_id(biome_id)
-	var minute_of_day: int = int(game_state.world_time.minute_of_day) if game_state != null and game_state.get("world_time") != null else -1
+	var minute_of_day: int = -1
+	var day_of_year: int = -1
+	if game_state != null and game_state.get("world_time") != null:
+		var wt: Object = game_state.world_time
+		minute_of_day = int(wt.minute_of_day) if "minute_of_day" in wt else -1
+		if "abs_day_index" in wt:
+			day_of_year = posmod(int(wt.abs_day_index()), 365)
 	var meter_state: Dictionary = {}
 	if game_state != null and game_state.has_method("ensure_encounter_meter_state"):
 		meter_state = game_state.ensure_encounter_meter_state()
@@ -562,6 +810,9 @@ func _roll_encounter_if_needed() -> bool:
 			rf["encounter_meter_state"] = v
 		meter_state = v
 		EncounterRegistry.ensure_danger_meter_state_inplace(meter_state)
+	var encounter_rate_mul: float = _get_encounter_rate_multiplier()
+	if game_state != null and game_state.has_method("get_epoch_encounter_rate_multiplier"):
+		encounter_rate_mul *= float(game_state.get_epoch_encounter_rate_multiplier())
 	var encounter: Dictionary = EncounterRegistry.step_danger_meter_and_maybe_trigger(
 		world_seed_hash,
 		meter_state,
@@ -571,11 +822,14 @@ func _roll_encounter_if_needed() -> bool:
 		local_y,
 		biome_id,
 		biome_name,
-		_get_encounter_rate_multiplier(),
-		minute_of_day
+		encounter_rate_mul,
+		minute_of_day,
+		day_of_year
 	)
 	if encounter.is_empty():
 		return false
+	if game_state != null and game_state.has_method("apply_epoch_gameplay_to_encounter"):
+		encounter = game_state.apply_epoch_gameplay_to_encounter(encounter)
 	if scene_router != null and scene_router.has_method("goto_battle"):
 		scene_router.goto_battle(encounter)
 	else:
@@ -595,7 +849,7 @@ func _try_enter_poi() -> void:
 		"type": String(poi_info.get("type", "POI")),
 		"id": String(poi_info.get("id", "")),
 		"seed_key": String(poi_info.get("seed_key", "")),
-		"is_shop": bool(poi_info.get("is_shop", false)),
+		"is_shop": VariantCasts.to_bool(poi_info.get("is_shop", false)),
 		"world_x": world_tile_x,
 		"world_y": world_tile_y,
 		"local_x": local_x,
@@ -617,35 +871,88 @@ func _try_enter_poi() -> void:
 		get_tree().change_scene_to_file(SceneContracts.SCENE_LOCAL_AREA)
 
 func _render_view() -> void:
+	_render_view_full()
+
+func _render_view_incremental(prev_center_x: int, prev_center_y: int) -> bool:
+	if _chunk_cache == null or not _field_cache_valid:
+		return false
+	var dx: int = _wrapped_center_delta_x(_center_gx, prev_center_x)
+	var dy: int = _center_gy - prev_center_y
+	if abs(dx) > 1 or abs(dy) > 1:
+		return false
+	var t0_us: int = Time.get_ticks_usec()
+	_ensure_field_buffers()
 	var half_w: int = VIEW_W / 2
 	var half_h: int = VIEW_H / 2
-	var poi_hint: String = ""
-	var gx0: int = _center_gx
-	var gy0: int = _center_gy
+	var origin_x: int = _center_gx - half_w - VIEW_PAD
+	var origin_y: int = _center_gy - half_h - VIEW_PAD
+	var prefetch_generated: int = -1
+	if _chunk_cache.has_method("prefetch_for_view"):
+		prefetch_generated = int(_chunk_cache.prefetch_for_view(origin_x, origin_y, RENDER_W, RENDER_H, _CHUNK_PREFETCH_MARGIN_CHUNKS))
+	var fresh_cells: int = 0
 
-	# Build view fields for GPU renderer (GPU-only visuals).
-	var size: int = RENDER_W * RENDER_H
-	var height_raw := PackedFloat32Array()
-	var temp := PackedFloat32Array()
-	var moist := PackedFloat32Array()
-	var biome := PackedInt32Array()
-	var land := PackedInt32Array()
-	var beach := PackedInt32Array()
-	height_raw.resize(size)
-	temp.resize(size)
-	moist.resize(size)
-	biome.resize(size)
-	land.resize(size)
-	beach.resize(size)
-
-	var center_sx: int = VIEW_PAD + half_w
-	var center_sy: int = VIEW_PAD + half_h
-	var origin_x: int = gx0 - half_w - VIEW_PAD
-	var origin_y: int = gy0 - half_h - VIEW_PAD
 	for sy in range(RENDER_H):
 		for sx in range(RENDER_W):
-			var ox: int = sx - center_sx
-			var oy: int = sy - center_sy
+			var dst_idx: int = sx + sy * RENDER_W
+			var src_x: int = sx + dx
+			var src_y: int = sy + dy
+			if src_x >= 0 and src_x < RENDER_W and src_y >= 0 and src_y < RENDER_H:
+				var src_idx: int = src_x + src_y * RENDER_W
+				_field_height_raw_scratch[dst_idx] = _field_height_raw[src_idx]
+				_field_temp_scratch[dst_idx] = _field_temp[src_idx]
+				_field_moist_scratch[dst_idx] = _field_moist[src_idx]
+				_field_biome_scratch[dst_idx] = _field_biome[src_idx]
+				_field_land_scratch[dst_idx] = _field_land[src_idx]
+				_field_beach_scratch[dst_idx] = _field_beach[src_idx]
+				continue
+			var gx: int = _wrap_global_x(origin_x + sx)
+			var gy: int = _clamp_global_y(origin_y + sy)
+			var cell: Dictionary = _chunk_cache.get_cell(gx, gy)
+			fresh_cells += 1
+			_write_field_cell(
+				dst_idx,
+				gx,
+				gy,
+				cell,
+				_field_height_raw_scratch,
+				_field_temp_scratch,
+				_field_moist_scratch,
+				_field_biome_scratch,
+				_field_land_scratch,
+				_field_beach_scratch
+			)
+	_swap_field_buffers()
+	_field_origin_x = origin_x
+	_field_origin_y = origin_y
+	_field_cache_valid = true
+	var total_cells: int = RENDER_W * RENDER_H
+	_last_redraw_mode = "incremental"
+	_last_redraw_us = Time.get_ticks_usec() - t0_us
+	_last_redraw_fresh_cells = fresh_cells
+	_last_redraw_reused_cells = max(0, total_cells - fresh_cells)
+	_last_redraw_dx = dx
+	_last_redraw_dy = dy
+	_record_redraw_sample(float(_last_redraw_us) / 1000.0)
+	_present_field_buffers(origin_x, origin_y, prefetch_generated, true, dx, dy)
+	return true
+
+func _render_view_full() -> void:
+	if _chunk_cache == null:
+		_field_cache_valid = false
+		return
+	var t0_us: int = Time.get_ticks_usec()
+	_ensure_field_buffers()
+	var half_w: int = VIEW_W / 2
+	var half_h: int = VIEW_H / 2
+	var gx0: int = _center_gx
+	var gy0: int = _center_gy
+	var origin_x: int = gx0 - half_w - VIEW_PAD
+	var origin_y: int = gy0 - half_h - VIEW_PAD
+	var prefetch_generated: int = -1
+	if _chunk_cache != null and _chunk_cache.has_method("prefetch_for_view"):
+		prefetch_generated = int(_chunk_cache.prefetch_for_view(origin_x, origin_y, RENDER_W, RENDER_H, _CHUNK_PREFETCH_MARGIN_CHUNKS))
+	for sy in range(RENDER_H):
+		for sx in range(RENDER_W):
 			var gx_raw: int = origin_x + sx
 			var gy_raw: int = origin_y + sy
 			var gx: int = _wrap_global_x(gx_raw)
@@ -653,86 +960,211 @@ func _render_view() -> void:
 			var idx: int = sx + sy * RENDER_W
 
 			var cell: Dictionary = _chunk_cache.get_cell(gx, gy) if _chunk_cache != null else {}
-			var ground: int = int(cell.get("ground", RegionalChunkGenerator.Ground.GRASS))
-			var h: float = float(cell.get("height_raw", 0.0))
-			var b: int = int(cell.get("biome", _get_world_biome_id(int(gx / REGION_SIZE), int(gy / REGION_SIZE))))
+			_write_field_cell(
+				idx,
+				gx,
+				gy,
+				cell,
+				_field_height_raw,
+				_field_temp,
+				_field_moist,
+				_field_biome,
+				_field_land,
+				_field_beach
+			)
+	_field_origin_x = origin_x
+	_field_origin_y = origin_y
+	_field_cache_valid = true
+	_last_redraw_mode = "full"
+	_last_redraw_us = Time.get_ticks_usec() - t0_us
+	_last_redraw_fresh_cells = RENDER_W * RENDER_H
+	_last_redraw_reused_cells = 0
+	_last_redraw_dx = 0
+	_last_redraw_dy = 0
+	_record_redraw_sample(float(_last_redraw_us) / 1000.0)
+	_present_field_buffers(origin_x, origin_y, prefetch_generated, false, 0, 0)
 
-			var is_water: bool = (ground == RegionalChunkGenerator.Ground.WATER_DEEP) or (ground == RegionalChunkGenerator.Ground.WATER_SHALLOW)
-			var is_land_cell: int = 0 if is_water else 1
-			var is_beach_cell: int = 1 if ground == RegionalChunkGenerator.Ground.SAND else 0
+func _ensure_field_buffers() -> void:
+	var size: int = RENDER_W * RENDER_H
+	if _field_height_raw.size() != size:
+		_field_height_raw.resize(size)
+		_field_temp.resize(size)
+		_field_moist.resize(size)
+		_field_biome.resize(size)
+		_field_land.resize(size)
+		_field_beach.resize(size)
+	if _field_height_raw_scratch.size() != size:
+		_field_height_raw_scratch.resize(size)
+		_field_temp_scratch.resize(size)
+		_field_moist_scratch.resize(size)
+		_field_biome_scratch.resize(size)
+		_field_land_scratch.resize(size)
+		_field_beach_scratch.resize(size)
 
-			# POI markers (render-only) so houses/dungeons remain visible in GPU mode.
-			var wx: int = int(gx / REGION_SIZE)
-			var wy: int = int(gy / REGION_SIZE)
-			var lx: int = gx - wx * REGION_SIZE
-			var ly: int = gy - wy * REGION_SIZE
-			wx = posmod(wx, world_width)
-			wy = clamp(wy, 0, world_height - 1)
-			var poi_info: Dictionary = _poi_info_at(wx, wy, lx, ly)
-			var poi_type: String = String(poi_info.get("type", ""))
-			if not poi_type.is_empty():
-				if poi_hint.is_empty() and abs(ox) <= 1 and abs(oy) <= 1:
-					poi_hint = "Nearby POI: %s (step onto it to enter)." % poi_type
-				if poi_type == "House":
-					b = 200
-					is_land_cell = 1
-					is_beach_cell = 0
-				elif poi_type == "Dungeon":
-					var poi_id: String = String(poi_info.get("id", ""))
-					var cleared: bool = _is_poi_cleared(poi_id)
-					b = 202 if cleared else 201
-					is_land_cell = 1
-					is_beach_cell = 0
+func _write_field_cell(
+	idx: int,
+	gx: int,
+	gy: int,
+	cell: Dictionary,
+	out_height_raw: PackedFloat32Array,
+	out_temp: PackedFloat32Array,
+	out_moist: PackedFloat32Array,
+	out_biome: PackedInt32Array,
+	out_land: PackedInt32Array,
+	out_beach: PackedInt32Array
+) -> void:
+	var ground: int = int(cell.get("ground", RegionalChunkGenerator.Ground.GRASS))
+	var h: float = float(cell.get("height_raw", 0.0))
+	var b: int = int(cell.get("biome", _get_world_biome_id(int(gx / REGION_SIZE), int(gy / REGION_SIZE))))
 
-			height_raw[idx] = h
-			biome[idx] = b
-			land[idx] = is_land_cell
-			beach[idx] = is_beach_cell
+	var is_water: bool = (ground == RegionalChunkGenerator.Ground.WATER_DEEP) or (ground == RegionalChunkGenerator.Ground.WATER_SHALLOW)
+	var is_land_cell: int = 0 if is_water else 1
+	var is_beach_cell: int = 1 if ground == RegionalChunkGenerator.Ground.SAND else 0
 
-			var base_t: float = _visual_temp_for_biome(b)
-			var base_m: float = _visual_moist_for_biome(b)
-			var jt: float = (_rand01("t|%d|%d" % [gx, gy]) - 0.5) * 0.10
-			var jm: float = (_rand01("m|%d|%d" % [gx, gy]) - 0.5) * 0.10
-			temp[idx] = clamp(base_t + jt, 0.0, 1.0)
-			moist[idx] = clamp(base_m + jm, 0.0, 1.0)
+	# POI markers (render-only) so houses/dungeons remain visible in GPU mode.
+	var poi_type: String = String(cell.get("poi_type", ""))
+	if not poi_type.is_empty():
+		if poi_type == "House":
+			b = 200
+			is_land_cell = 1
+			is_beach_cell = 0
+		elif poi_type == "Dungeon":
+			var poi_id: String = String(cell.get("poi_id", ""))
+			var cleared: bool = _is_poi_cleared(poi_id)
+			b = 202 if cleared else 201
+			is_land_cell = 1
+			is_beach_cell = 0
 
-	# Solar + location for correct sun geometry in local view shaders.
+	out_height_raw[idx] = h
+	out_biome[idx] = b
+	out_land[idx] = is_land_cell
+	out_beach[idx] = is_beach_cell
+
+	var base_t: float = _visual_temp_for_biome(b)
+	var base_m: float = _visual_moist_for_biome(b)
+	var jt: float = (_rand01_xy(gx, gy, 11) - 0.5) * 0.10
+	var jm: float = (_rand01_xy(gx, gy, 29) - 0.5) * 0.10
+	out_temp[idx] = clamp(base_t + jt, 0.0, 1.0)
+	out_moist[idx] = clamp(base_m + jm, 0.0, 1.0)
+
+func _swap_field_buffers() -> void:
+	var tmp_h: PackedFloat32Array = _field_height_raw
+	_field_height_raw = _field_height_raw_scratch
+	_field_height_raw_scratch = tmp_h
+	var tmp_t: PackedFloat32Array = _field_temp
+	_field_temp = _field_temp_scratch
+	_field_temp_scratch = tmp_t
+	var tmp_m: PackedFloat32Array = _field_moist
+	_field_moist = _field_moist_scratch
+	_field_moist_scratch = tmp_m
+	var tmp_b: PackedInt32Array = _field_biome
+	_field_biome = _field_biome_scratch
+	_field_biome_scratch = tmp_b
+	var tmp_l: PackedInt32Array = _field_land
+	_field_land = _field_land_scratch
+	_field_land_scratch = tmp_l
+	var tmp_beach: PackedInt32Array = _field_beach
+	_field_beach = _field_beach_scratch
+	_field_beach_scratch = tmp_beach
+
+func _present_field_buffers(
+	origin_x: int,
+	origin_y: int,
+	prefetch_generated: int = -1,
+	allow_partial_upload: bool = false,
+	upload_dx: int = 0,
+	upload_dy: int = 0
+) -> void:
 	var solar: Dictionary = _get_solar_params()
-	var lon_phi: Vector2 = _get_fixed_lon_phi(gx0, gy0)
-
+	var lon_phi: Vector2 = _get_fixed_lon_phi(_center_gx, _center_gy)
+	var clouds: Dictionary = _build_cloud_params(origin_x, origin_y)
 	if _gpu_view != null and gpu_map != null:
-		_gpu_view.update_and_draw(
-			gpu_map,
-			{
-				"height_raw": height_raw,
-				"temp": temp,
-				"moist": moist,
-				"biome": biome,
-				"land": land,
-				"beach": beach,
-			},
-			solar,
-			{
-				"enabled": true,
-				"origin_x": origin_x,
-				"origin_y": origin_y,
-				"world_period_x": world_width * REGION_SIZE,
-				"world_height": world_height * REGION_SIZE,
-				"scale": 0.020,
-				"wind_x": 0.12,
-				"wind_y": 0.04,
-				"coverage": 0.54,
-				"contrast": 1.30,
-			},
-			float(lon_phi.x),
-			float(lon_phi.y),
-			0.0
-		)
+		var field_payload: Dictionary = {
+			"height_raw": _field_height_raw,
+			"temp": _field_temp,
+			"moist": _field_moist,
+			"biome": _field_biome,
+			"land": _field_land,
+			"beach": _field_beach,
+		}
+		var used_partial_upload: bool = false
+		var t0_upload_us: int = Time.get_ticks_usec()
+		if _ENABLE_GPU_PARTIAL_UPLOAD and allow_partial_upload and "update_and_draw_partial" in _gpu_view:
+			used_partial_upload = VariantCasts.to_bool(_gpu_view.update_and_draw_partial(
+				gpu_map,
+				field_payload,
+				{"dx": upload_dx, "dy": upload_dy},
+				solar,
+				clouds,
+				float(lon_phi.x),
+				float(lon_phi.y),
+				0.0
+			))
+		if not used_partial_upload:
+			_gpu_view.update_and_draw(
+				gpu_map,
+				field_payload,
+				solar,
+				clouds,
+				float(lon_phi.x),
+				float(lon_phi.y),
+				0.0
+			)
+		_last_gpu_upload_us = Time.get_ticks_usec() - t0_upload_us
+		_last_gpu_upload_mode = "partial" if used_partial_upload else "full"
 		_update_player_marker()
 		_update_header_text()
 		if footer_label != null:
-			var base_hint: String = "Move: WASD/Arrows | Step on POI to enter | M: World Map | Esc/Tab: Menu | F5 save | F9 load"
+			var poi_hint: String = _nearby_poi_hint()
+			var base_hint: String = "Move: WASD/Arrows (diagonals OK) | Step on POI to enter | M: World Map | Esc/Tab: Menu | F5 save | F9 load"
 			footer_label.text = poi_hint if not poi_hint.is_empty() else base_hint
+	else:
+		_last_gpu_upload_mode = ""
+		_last_gpu_upload_us = 0
+	_publish_regional_cache_stats(prefetch_generated)
+
+func _record_redraw_sample(ms: float) -> void:
+	if ms < 0.0:
+		return
+	_redraw_samples_ms.append(ms)
+	var max_samples: int = max(16, _REDRAW_SAMPLE_WINDOW)
+	if _redraw_samples_ms.size() > max_samples:
+		_redraw_samples_ms.pop_front()
+
+func _percentile_from_samples(samples: Array[float], p: float) -> float:
+	if samples.is_empty():
+		return 0.0
+	var sorted: Array[float] = samples.duplicate()
+	sorted.sort()
+	var t: float = clamp(p, 0.0, 1.0)
+	var idx: int = int(round(t * float(sorted.size() - 1)))
+	idx = clamp(idx, 0, sorted.size() - 1)
+	return float(sorted[idx])
+
+func _nearby_poi_hint() -> String:
+	if _chunk_cache == null:
+		return ""
+	for oy in range(-1, 2):
+		for ox in range(-1, 2):
+			var gx: int = _wrap_global_x(_center_gx + ox)
+			var gy: int = _clamp_global_y(_center_gy + oy)
+			var cell: Dictionary = _chunk_cache.get_cell(gx, gy)
+			var poi_type: String = String(cell.get("poi_type", ""))
+			if not poi_type.is_empty():
+				return "Nearby POI: %s (step onto it to enter)." % poi_type
+	return ""
+
+func _wrapped_center_delta_x(new_center_x: int, old_center_x: int) -> int:
+	var period: int = world_width * REGION_SIZE
+	if period <= 0:
+		return new_center_x - old_center_x
+	var d: int = new_center_x - old_center_x
+	var half: int = int(period / 2)
+	if d > half:
+		d -= period
+	elif d < -half:
+		d += period
+	return d
 
 func _sample_world_cell(offset_x: int, offset_y: int) -> Dictionary:
 	# Deprecated: replaced by `_chunk_cache` sampling in `_render_view()`.
@@ -745,7 +1177,7 @@ func _is_poi_cleared(poi_id: String) -> bool:
 	if poi_id.is_empty():
 		return false
 	if game_state != null and game_state.has_method("is_poi_cleared"):
-		return bool(game_state.is_poi_cleared(poi_id))
+		return VariantCasts.to_bool(game_state.is_poi_cleared(poi_id))
 	return false
 
 func _get_world_biome_id(x: int, y: int) -> int:
@@ -764,6 +1196,77 @@ func _get_encounter_rate_multiplier() -> float:
 	if game_state != null and game_state.has_method("get_encounter_rate_multiplier"):
 		return float(game_state.get_encounter_rate_multiplier())
 	return 1.0
+
+func _build_cloud_params(origin_x: int, origin_y: int) -> Dictionary:
+	var biome_id: int = _get_world_biome_id(world_tile_x, world_tile_y)
+	if _chunk_cache != null:
+		var c: Dictionary = _chunk_cache.get_cell(_center_gx, _center_gy)
+		if typeof(c) == TYPE_DICTIONARY and c.has("biome"):
+			biome_id = int(c.get("biome", biome_id))
+	var moist: float = _visual_moist_for_biome(biome_id)
+	var temp: float = _visual_temp_for_biome(biome_id)
+	var wind_x: float = 0.08 + (temp - 0.5) * 0.10
+	var wind_y: float = 0.03 + (moist - 0.5) * 0.08
+	var coverage: float = clamp(0.22 + moist * 0.68, 0.10, 0.95)
+	return {
+		"enabled": true,
+		"origin_x": origin_x,
+		"origin_y": origin_y,
+		"world_period_x": world_width * REGION_SIZE,
+		"world_height": world_height * REGION_SIZE,
+		"scale": lerp(0.017, 0.024, moist),
+		"wind_x": wind_x,
+		"wind_y": wind_y,
+		"coverage": coverage,
+		"contrast": lerp(1.15, 1.40, coverage),
+	}
+
+func _publish_regional_cache_stats(prefetch_generated: int = -1) -> void:
+	if game_state == null or _chunk_cache == null:
+		return
+	if not game_state.has_method("set_regional_cache_stats"):
+		return
+	var stats: Dictionary = {}
+	if _chunk_cache.has_method("get_stats"):
+		stats = _chunk_cache.get_stats()
+	stats["scene"] = SceneContracts.STATE_REGIONAL
+	stats["world_x"] = world_tile_x
+	stats["world_y"] = world_tile_y
+	stats["local_x"] = local_x
+	stats["local_y"] = local_y
+	stats["center_gx"] = _center_gx
+	stats["center_gy"] = _center_gy
+	stats["redraw_mode"] = _last_redraw_mode
+	stats["redraw_us"] = _last_redraw_us
+	stats["redraw_ms"] = float(_last_redraw_us) / 1000.0
+	stats["redraw_fresh_cells"] = _last_redraw_fresh_cells
+	stats["redraw_reused_cells"] = _last_redraw_reused_cells
+	stats["redraw_dx"] = _last_redraw_dx
+	stats["redraw_dy"] = _last_redraw_dy
+	stats["gpu_upload_mode"] = _last_gpu_upload_mode
+	stats["gpu_upload_us"] = _last_gpu_upload_us
+	stats["gpu_upload_ms"] = float(_last_gpu_upload_us) / 1000.0
+	stats["redraw_sample_count"] = _redraw_samples_ms.size()
+	stats["redraw_p50_ms"] = _percentile_from_samples(_redraw_samples_ms, 0.50)
+	stats["redraw_p95_ms"] = _percentile_from_samples(_redraw_samples_ms, 0.95)
+	stats["redraw_p99_ms"] = _percentile_from_samples(_redraw_samples_ms, 0.99)
+	stats["field_cache_valid"] = _field_cache_valid
+	if prefetch_generated >= 0:
+		stats["chunks_generated_last_prefetch"] = prefetch_generated
+	game_state.set_regional_cache_stats(stats)
+
+func get_last_redraw_stats() -> Dictionary:
+	return {
+		"mode": _last_redraw_mode,
+		"redraw_us": _last_redraw_us,
+		"redraw_ms": float(_last_redraw_us) / 1000.0,
+		"fresh_cells": _last_redraw_fresh_cells,
+		"reused_cells": _last_redraw_reused_cells,
+		"dx": _last_redraw_dx,
+		"dy": _last_redraw_dy,
+		"gpu_upload_mode": _last_gpu_upload_mode,
+		"gpu_upload_ms": float(_last_gpu_upload_us) / 1000.0,
+	}
 
 func _wrap_global_x(gx: int) -> int:
 	var period: int = world_width * REGION_SIZE
@@ -818,6 +1321,7 @@ func _try_quick_load() -> void:
 	if game_state != null and game_state.has_method("load_from_path"):
 		if game_state.load_from_path(SceneContracts.SAVE_SLOT_0):
 			_load_location_from_state()
+			_refresh_regional_transition_overrides(true)
 			_render_view()
 			_apply_scroll_offset()
 			call_deferred("_update_player_marker")
@@ -825,10 +1329,13 @@ func _try_quick_load() -> void:
 		else:
 			footer_label.text = "Load failed (missing file or schema mismatch)."
 
-func _rand01(key: String) -> float:
-	var h: int = key.hash() ^ world_seed_hash
-	var n: int = abs(h % 10000)
-	return float(n) / 10000.0
+func _rand01_xy(gx: int, gy: int, salt: int) -> float:
+	var n: int = gx * 374761393 + gy * 668265263 + world_seed_hash * 92821 + salt * 715827883
+	n = n ^ (n >> 13)
+	n = n * 1274126177
+	n = n ^ (n >> 16)
+	var u: int = n & 0x7fffffff
+	return float(u) / 2147483647.0
 
 func _is_forest_biome(biome_id: int) -> bool:
 	return biome_id == 11 or biome_id == 12 or biome_id == 13 or biome_id == 14 or biome_id == 15 or biome_id == 22 or biome_id == 27
@@ -886,6 +1393,11 @@ func _exit_tree() -> void:
 	if _gpu_view != null and "cleanup" in _gpu_view:
 		_gpu_view.cleanup()
 	_gpu_view = null
+	_redraw_samples_ms.clear()
+	_last_gpu_upload_mode = ""
+	_last_gpu_upload_us = 0
+	if game_state != null and game_state.has_method("set_regional_cache_stats"):
+		game_state.set_regional_cache_stats({})
 
 func _on_gpu_map_resized() -> void:
 	_update_player_marker()
@@ -929,10 +1441,15 @@ func _get_solar_params() -> Dictionary:
 	}
 
 func _get_fixed_lon_phi(gx_center: int, gy_center: int) -> Vector2:
+	return _get_fixed_lon_phi_f(float(gx_center), float(gy_center))
+
+func _get_fixed_lon_phi_f(gx_center: float, gy_center: float) -> Vector2:
 	var total_w: float = float(max(1, world_width * REGION_SIZE))
 	var total_h: float = float(max(2, world_height * REGION_SIZE))
-	var gx: float = float(_wrap_global_x(gx_center))
-	var gy: float = float(_clamp_global_y(gy_center))
+	var gx: float = fposmod(gx_center, total_w)
+	if gx < 0.0:
+		gx += total_w
+	var gy: float = clamp(gy_center, 0.0, total_h - 1.0)
 	var lon: float = TAU * (gx / total_w)
 	var lat_norm: float = 0.5 - (gy / max(1.0, total_h - 1.0))
 	var phi: float = lat_norm * PI

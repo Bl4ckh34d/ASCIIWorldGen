@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ddgx55o0hvg7p"
+path="res://.godot/imported/npc_tick.glsl-71d2bf665de82b43aed90fc912e5376f.res"
+
+[deps]
+
+source_file="res://shaders/society/npc_tick.glsl"
+dest_files=["res://.godot/imported/npc_tick.glsl-71d2bf665de82b43aed90fc912e5376f.res"]
+
+[params]
+

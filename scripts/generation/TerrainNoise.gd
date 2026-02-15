@@ -1,5 +1,6 @@
 # File: res://scripts/generation/TerrainNoise.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 ## Generates base height and land mask using FBM + continental mask + domain warp
 
@@ -13,8 +14,12 @@ func generate(params: Dictionary) -> Dictionary:
 	var lacunarity: float = float(params.get("lacunarity", 2.0))
 	var gain: float = float(params.get("gain", 0.5))
 	var warp: float = float(params.get("warp", 24.0))
-	var wrap_x: bool = bool(params.get("wrap_x", true))
+	var wrap_x: bool = VariantCasts.to_bool(params.get("wrap_x", true))
 	var noise_x_scale: float = float(params.get("noise_x_scale", 1.0))
+	var height_gamma: float = clamp(float(params.get("height_gamma", 0.65)), 0.25, 2.5)
+	var height_contrast: float = clamp(float(params.get("height_contrast", 1.10)), 0.25, 3.0)
+	var island_falloff_strength: float = clamp(float(params.get("island_falloff_strength", 0.85)), 0.0, 2.0)
+	var island_center_blend: float = clamp(float(params.get("island_center_blend", 0.15)), 0.0, 1.0)
 
 	var noise := FastNoiseLite.new()
 	noise.seed = rng_seed
@@ -90,13 +95,13 @@ func generate(params: Dictionary) -> Dictionary:
 				var dx: float = float(x) - cx
 				var dy: float = float(y) - cy
 				var r: float = sqrt(dx * dx + dy * dy) / max_r
-				var falloff: float = clamp(1.0 - r * 0.85, 0.0, 1.0)
-				hval = hval * 0.85 + falloff * 0.15
-			# Signed-power shaping to increase extremes (Option B) + slight linear contrast
-			var gamma: float = 0.65
+				var falloff: float = clamp(1.0 - r * island_falloff_strength, 0.0, 1.0)
+				var base_weight: float = 1.0 - island_center_blend
+				hval = hval * base_weight + falloff * island_center_blend
+			# Signed-power shaping + contrast controls (parameterized for tuning).
 			var a: float = abs(hval)
-			hval = (1.0 if hval >= 0.0 else -1.0) * pow(a, gamma)
-			hval *= 1.10
+			hval = (1.0 if hval >= 0.0 else -1.0) * pow(a, height_gamma)
+			hval *= height_contrast
 			hval = clamp(hval, -1.0, 1.0)
 
 			var i: int = x + y * w

@@ -90,6 +90,63 @@ func build_ascii(
 		light_field: PackedFloat32Array = PackedFloat32Array(),
 		plate_boundary_mask: PackedByteArray = PackedByteArray()
 	) -> String:
+	return build_ascii_rows(
+		w,
+		h,
+		height,
+		is_land,
+		turquoise_mask,
+		turquoise_strength,
+		beach_mask,
+		water_distance,
+		biomes,
+		sea_level,
+		rng_seed,
+		temperature,
+		temp_min_c,
+		temp_max_c,
+		shelf_noise,
+		lake_mask,
+		river_mask,
+		pooled_lake_mask,
+		lava_mask,
+		clouds,
+		lake_freeze,
+		light_field,
+		plate_boundary_mask,
+		0,
+		h
+	)
+
+func build_ascii_rows(
+		w: int,
+		h: int,
+		height: PackedFloat32Array,
+		is_land: PackedByteArray,
+		turquoise_mask: PackedByteArray = PackedByteArray(),
+		turquoise_strength: PackedFloat32Array = PackedFloat32Array(),
+		beach_mask: PackedByteArray = PackedByteArray(),
+		water_distance: PackedFloat32Array = PackedFloat32Array(),
+		biomes: PackedInt32Array = PackedInt32Array(),
+		sea_level: float = 0.0,
+		rng_seed: int = 0,
+		temperature: PackedFloat32Array = PackedFloat32Array(),
+		temp_min_c: float = -20.0,
+		temp_max_c: float = 40.0,
+		shelf_noise: PackedFloat32Array = PackedFloat32Array(),
+		lake_mask: PackedByteArray = PackedByteArray(),
+		river_mask: PackedByteArray = PackedByteArray(),
+		pooled_lake_mask: PackedByteArray = PackedByteArray(),
+		lava_mask: PackedByteArray = PackedByteArray(),
+		clouds: PackedFloat32Array = PackedFloat32Array(),
+		lake_freeze: PackedByteArray = PackedByteArray(),
+		light_field: PackedFloat32Array = PackedFloat32Array(),
+		plate_boundary_mask: PackedByteArray = PackedByteArray(),
+		start_row: int = 0,
+		end_row: int = -1
+	) -> String:
+	var row0: int = clamp(start_row, 0, max(0, h))
+	var row1: int = h if end_row < 0 else clamp(end_row, row0, h)
 	var sb: PackedStringArray = PackedStringArray()
 	var use_light: bool = light_field.size() == w * h
 	var total: int = w * h
@@ -110,7 +167,7 @@ func build_ascii(
 	var have_temp: bool = _safe_size(temperature) == total
 	var have_boundaries: bool = _safe_size(plate_boundary_mask) == total
 
-	for y in range(h):
+	for y in range(row0, row1):
 		for x in range(w):
 			var i: int = x + y * w
 

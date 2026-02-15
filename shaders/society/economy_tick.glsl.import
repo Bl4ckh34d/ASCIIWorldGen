@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://yyqkvx1kq2lk"
+path="res://.godot/imported/economy_tick.glsl-a7ba22549f00a30ee28c0fdaad29b44d.res"
+
+[deps]
+
+source_file="res://shaders/society/economy_tick.glsl"
+dest_files=["res://.godot/imported/economy_tick.glsl-a7ba22549f00a30ee28c0fdaad29b44d.res"]
+
+[params]
+

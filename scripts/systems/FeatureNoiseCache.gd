@@ -193,3 +193,12 @@ func _value_noise(px: float, py: float, scale: float, s: int) -> float:
 
 static func _hash(x: int, y: int, s: int) -> int:
 	return abs(int(x) * 73856093 ^ int(y) * 19349663 ^ int(s) * 83492791)
+
+func cleanup() -> void:
+	if _rd != null:
+		if _pipeline.is_valid():
+			_rd.free_rid(_pipeline)
+		if _shader.is_valid():
+			_rd.free_rid(_shader)
+	_pipeline = RID()
+	_shader = RID()

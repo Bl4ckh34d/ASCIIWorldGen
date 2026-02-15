@@ -1,6 +1,6 @@
 # File: res://scripts/rendering/AsciiCharacterMapper.gd
-class_name AsciiCharacterMapper
 extends RefCounted
+class_name AsciiCharacterMapper
 
 # Maps world data to ASCII characters for GPU rendering
 # Ported from AsciiStyler.gd glyph selection logic

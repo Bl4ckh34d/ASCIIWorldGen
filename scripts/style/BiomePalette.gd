@@ -41,6 +41,8 @@ func color_for_biome(biome: int, is_beach: bool) -> Color:
 				return Color(0.92, 0.86, 0.40)
 			222: # NPC: Shopkeeper
 				return Color(0.35, 0.90, 0.55)
+			254: # Worldmap: unvisited/unknown
+				return Color(0.22, 0.22, 0.24)
 			_:
 				return Color(1.0, 1.0, 1.0)
 	match biome:

@@ -205,6 +205,10 @@ Implementation plan (incremental):
 1. M0/M1: regional generator ignores weather; keep ASCII visuals.
 2. M2: add a simple weather overlay driven by per-tile values sampled from the world generator at time of entry (store in `GameState`).
 3. Later: allow weather to evolve slowly with world time and world-map cloud/hydro ticks.
+Status: scaffold implemented (2026-02-12):
+- `GameState` now tracks per-tile regional biome transition windows when world biome snapshots change.
+- `RegionalChunkGenerator` consumes transition overrides (`from_biome -> to_biome + progress`) and applies non-homogeneous per-cell transition masks.
+- `RegionalMap` refreshes transition overrides over time and invalidates chunk cache only when quantized transition progress changes.
 
 ## Implementation Milestones
 
@@ -247,9 +251,11 @@ Implementation plan (incremental):
   - Log chunk generation counts per step.
 
 ## Open Questions (Need Your Answers)
+Locked decisions (2026-02-09):
 1. Blend tuning:
-   - What blend band width do you want initially (`band_m`)? Default proposal: `8m`.
+   - Initial blend band width: `band_m = 8m` (refine later).
 2. Water wading:
-   - How deep should “wadeable” water be (in tiles/meters)? Default proposal: `2-3m` from shore.
-3. Tile change definition:
-   - For persistence, does “world tile changed” mean biome-id changed only, or do climate fields (humidity/clouds) changing also count as “changed” for local appearance?
+   - Wading depth target: ~`1.5m` (human wading).
+3. Regional climate/biome evolution:
+   - World map remains the authoritative simulation for climate+biome transitions, but the regional view must *animate* the change gradually over days (realtime gameplay), and not homogeneously: different parts of the 96x96 region shift at different times as the transition approaches.
+   - Persistence target: revisits reproduce the same regional map for the same world time and seed; as world climate/biomes shift, the regional map converges toward the new target state progressively.

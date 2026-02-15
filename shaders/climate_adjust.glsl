@@ -4,6 +4,11 @@
 // Raw GLSL compute shader for ClimateAdjust (Godot RenderingDevice)
 // Inputs: height, is_land (u32 0/1), distance_to_coast, temp_noise, moist_noise_base, flow_u, flow_v
 // Outputs: temperature, moisture, precip
+// Layout summary (set=0):
+//   b0 height_data, b1 is_land_data, b2 distance_to_coast, b3 temp_noise, b4 moist_noise_base
+//   b5 flow_u, b6 flow_v, b7 out_temp, b8 out_moist, b9 out_precip, b10 light_data
+// Push constants:
+//   ivec2(width,height) + 16 floats (sea/temp/moist/season/diurnal terms), padded to 80 bytes.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -67,6 +72,12 @@ float sample_bilinear_moist(int W, int H, float fx, float fy) {
     float vx0 = mix(v00, v10, tx);
     float vx1 = mix(v01, v11, tx);
     return mix(vx0, vx1, ty);
+}
+
+float sample_point_moist(int W, int H, float fx, float fy) {
+    int xi = int(clamp(round(fx), 0.0, float(W - 1)));
+    int yi = int(clamp(round(fy), 0.0, float(H - 1)));
+    return MoistBase.moist_noise_base_data[xi + yi * W];
 }
 
 void main() {
@@ -148,57 +159,14 @@ void main() {
     float temp_scale = clamp(PC.temp_scale, 0.6, 1.4);          // Limit scaling
     t = clamp01((t + temp_offset - 0.5) * temp_scale + 0.5);
 
-    // Shore temperature anchoring: for first ~2 cells into the ocean,
-    // blend ocean temperature toward adjacent land temperature so polar
-    // coastlines don't have an unfrozen water rim
+    // Shore temperature anchoring:
+    // distance-only attenuation to avoid expensive 8-neighbor shoreline scans.
     if (!land_px) {
-        float d = Dist.dist_data[i];
-        if (d <= 2.0) {
-            float t_land_sum = 0.0;
-            int cnt = 0;
-            for (int dy = -1; dy <= 1; ++dy) {
-                for (int dx = -1; dx <= 1; ++dx) {
-                    if (dx == 0 && dy == 0) { continue; }
-                    int nx = int(x) + dx;
-                    int ny = int(y) + dy;
-                    if (nx < 0 || ny < 0 || nx >= W || ny >= H) { continue; }
-                    int j = nx + ny * W;
-                    if (IsLand.is_land_data[j] != 0u) {
-                        float lat2 = abs(float(ny) / max(1.0, float(H) - 1.0) - 0.5) * 2.0;
-                        float u2 = 1.0 - lat2;
-                        float t_lat2 = 0.65 * pow(u2, 0.8) + 0.35 * pow(u2, 1.6);
-                        float rel_elev2 = max(0.0, Height.height_data[j] - PC.sea_level);
-                        float elev_cool2 = clamp(rel_elev2 * 1.2, 0.0, 1.0);
-                        float zonal2 = 0.5 + 0.5 * sin(6.28318 * (float(ny) / float(H) + 0.11));
-                        float t_base2 = t_lat2 * 0.82 + zonal2 * 0.06 - elev_cool2 * 0.9;
-                        float t_noise2 = 0.18 * TempNoise.temp_noise_data[j];
-                        float t_raw2 = t_base2 + t_noise2;
-                        float dc2 = clamp(Dist.dist_data[j] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
-                        float factor2 = (1.0 + 0.8 * dc2);
-                        float t2 = clamp01(t_base2 + (t_raw2 - t_base2) * factor2);
-                        float amp_lat2 = mix(PC.season_amp_equator, PC.season_amp_pole, pow(lat2, 1.2));
-                        float cont_amp2 = 1.0; // neighbor is land by construction here
-                        float amp_cont2 = mix(PC.season_ocean_damp, 1.0, cont_amp2);
-                        float lat_norm_signed2 = 0.5 - (float(ny) / max(1.0, float(H) - 1.0));
-                        float hemi2 = clamp(lat_norm_signed2 * 2.0, -1.0, 1.0);
-                        float equator_fade2 = smoothstep(0.03, 0.20, lat2);
-                        float season2 = amp_lat2 * amp_cont2 * cos(6.28318 * PC.season_phase) * hemi2 * equator_fade2;
-                        t2 = clamp01(t2 + season2);
-                        // Apply same temperature bounds to shore calculations
-                        float temp_offset2 = clamp(PC.temp_base_offset, -0.3, 0.3);
-                        float temp_scale2 = clamp(PC.temp_scale, 0.6, 1.4);
-                        t2 = clamp01((t2 + temp_offset2 - 0.5) * temp_scale2 + 0.5);
-                        t_land_sum += t2;
-                        cnt++;
-                    }
-                }
-            }
-            if (cnt > 0) {
-                float t_land_avg = t_land_sum / float(cnt);
-                float wblend = smoothstep(0.0, 2.0, d);
-                t = mix(t_land_avg, t, wblend);
-            }
-        }
+        float d = max(0.0, Dist.dist_data[i]);
+        float shore_strength = 1.0 - smoothstep(0.0, 4.0, d);
+        float polar_pull = smoothstep(0.55, 1.0, lat);
+        float shore_target = clamp01(t_climatology - polar_pull * 0.08);
+        t = mix(t, shore_target, 0.75 * shore_strength);
     }
 
     float m_base = 0.5 + 0.16 * sin(6.28318 * (float(y) / float(H) * 1.4 + 0.17));
@@ -207,7 +175,8 @@ void main() {
     float adv_v = FlowV.flow_v_data[i];
     float sx = clamp(float(x) + adv_u * 6.0, 0.0, float(W - 1));
     float sy = clamp(float(y) + adv_v * 6.0, 0.0, float(H - 1));
-    float m_adv = 0.2 * sample_bilinear_moist(W, H, sx * PC.noise_x_scale, sy * PC.noise_x_scale);
+    // Keep one bilinear path for baseline moisture and use point sample for advection to cut fetches.
+    float m_adv = 0.2 * sample_point_moist(W, H, sx * PC.noise_x_scale, sy * PC.noise_x_scale);
 
     float local_day = 0.5 - 0.5 * cos(6.28318 * (PC.time_of_day + float(x) / float(max(1, W))));
     float night = 1.0 - local_day;

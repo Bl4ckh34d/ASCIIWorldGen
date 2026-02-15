@@ -2062,6 +2062,15 @@ func get_width() -> int:
 func get_height() -> int:
 	return config.height
 
+func _decode_u32_mask_to_u8(mask_u32: PackedInt32Array, size: int) -> PackedByteArray:
+	var out := PackedByteArray()
+	out.resize(max(0, size))
+	if mask_u32.size() != size:
+		return out
+	for i in range(size):
+		out[i] = 1 if int(mask_u32[i]) != 0 else 0
+	return out
+
 func get_biome_snapshot_from_gpu(max_cells: int = 250000) -> PackedInt32Array:
 	# `last_biomes` is not guaranteed to stay in sync in GPU-only runtime.
 	# For gameplay (regional/local maps) we need an authoritative snapshot.
@@ -2075,10 +2084,35 @@ func get_biome_snapshot_from_gpu(max_cells: int = 250000) -> PackedInt32Array:
 	if _gpu_buffer_manager == null:
 		return last_biomes.duplicate()
 	ensure_persistent_buffers(false)
+	if RenderingServer.has_method("force_sync"):
+		RenderingServer.force_sync()
 	var bytes: PackedByteArray = read_persistent_buffer_region("biome_id", 0, size * 4)
 	if bytes.size() != size * 4:
 		return last_biomes.duplicate()
 	return bytes.to_int32_array()
+
+func get_land_snapshot_from_gpu(max_cells: int = 250000) -> PackedByteArray:
+	# Transition-point readback for validating biome snapshots.
+	var w: int = int(config.width)
+	var h: int = int(config.height)
+	var size: int = w * h
+	if size <= 0:
+		return PackedByteArray()
+	if size > max_cells:
+		return PackedByteArray()
+	if _gpu_buffer_manager == null:
+		return last_is_land.duplicate()
+	ensure_persistent_buffers(false)
+	if RenderingServer.has_method("force_sync"):
+		RenderingServer.force_sync()
+	var bytes: PackedByteArray = read_persistent_buffer_region("is_land", 0, size * 4)
+	if bytes.size() != size * 4:
+		return last_is_land.duplicate()
+	var u32_vals: PackedInt32Array = bytes.to_int32_array()
+	var out: PackedByteArray = _decode_u32_mask_to_u8(u32_vals, size)
+	if out.size() == size:
+		return out
+	return last_is_land.duplicate()
 
 func get_cell_info(x: int, y: int) -> Dictionary:
 	if x < 0 or y < 0 or x >= config.width or y >= config.height:

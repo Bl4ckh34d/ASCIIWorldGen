@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bechlgxman2rg"
+path="res://.godot/imported/society_overlay_pack.glsl-0bcbedec5bf539164c5e8027cf83f48f.res"
+
+[deps]
+
+source_file="res://shaders/society/society_overlay_pack.glsl"
+dest_files=["res://.godot/imported/society_overlay_pack.glsl-0bcbedec5bf539164c5e8027cf83f48f.res"]
+
+[params]
+

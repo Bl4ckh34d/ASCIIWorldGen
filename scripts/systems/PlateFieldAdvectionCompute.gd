@@ -95,3 +95,11 @@ func advect_i32_gpu_buffers(
 	_rd.free_rid(buf_pv)
 	return true
 
+func cleanup() -> void:
+	if _rd != null:
+		if _pipeline.is_valid():
+			_rd.free_rid(_pipeline)
+		if _shader.is_valid():
+			_rd.free_rid(_shader)
+	_pipeline = RID()
+	_shader = RID()

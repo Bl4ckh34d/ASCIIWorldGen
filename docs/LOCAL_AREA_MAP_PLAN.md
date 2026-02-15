@@ -52,7 +52,8 @@ Implemented in the current scaffold (initial pass):
 - Houses spawn 0..4 NPCs in common “family constellations”.
 - Shops are houses flagged as `is_shop` and spawn exactly 1 shopkeeper + 0..N customers.
 - NPCs pick a random destination and use **A*** pathfinding to walk there in realtime (shopkeepers are stationary).
-- `E` interacts with adjacent NPCs and opens placeholder dialogue (time pauses while the dialogue popup is open).
+- `E` interacts with adjacent NPCs and opens dialogue (time pauses while the dialogue popup is open).
+- Shopkeeper interaction opens a dedicated local **Shop overlay scaffold** (buy/sell baseline, deterministic stock, gold/inventory hooks).
 
 Target behavior:
 - Houses can have NPCs (residents). Later: they can wander locally (simple random walk) and react to time-of-day/weather.
@@ -61,7 +62,7 @@ Target behavior:
   - Start with placeholder dialogue (static lines) and expand toward quest hooks later.
 - Shops:
   - Some interiors are shops with a shopkeeper NPC.
-  - Shop UI is a dedicated overlay (buy/sell, gold, item details).
+  - Shop UI is a dedicated overlay (buy/sell, gold, item details) in v0 scaffold form.
   - Inventory rules should stay consistent with the slot-bag system (equipment occupies slots, consumables stack).
 
 ## Data Contracts
@@ -158,11 +159,8 @@ M3: Multi-floor (later)
 Option A: Contact triggers a battle (simple)
 - If player steps onto `enemy_marker`, trigger `SceneRouter.goto_battle(...)`.
 
-Option B: Random encounters inside dungeon (later)
-- Roll steps similarly to regional but with different tables.
-
-Milestone:
-- Start with Option A for dungeons only.
+Option B: Random encounters inside dungeon (implemented)
+- Step-based danger meter (FF-style, invisible), separate from overworld meter and persisted per-POI.
 
 ## Scene Flow
 Entry:
@@ -185,7 +183,7 @@ Clearing rules:
   - Any per-POI state you choose (if we implement chests/enemies persistence).
 
 Schema:
-- `GameState.SAVE_SCHEMA_VERSION` is already at 2; adding POI instance state likely bumps to 3.
+- Save schema is versioned; current: `SAVE_SCHEMA_VERSION=4`.
 
 ## Implementation Milestones
 
@@ -193,20 +191,30 @@ Schema:
 - Add `scripts/gameplay/local/LocalAreaGenerator.gd`
 - Add `scripts/gameplay/local/LocalAreaTiles.gd` (ids, glyphs, colors)
 - Refactor `LocalAreaScene.gd` to render from generated arrays.
+Status: scaffold implemented (`LocalAreaGenerator` + `LocalAreaTiles` added; `LocalAreaScene` now consumes generator output).
 
 ### M1: Add Interaction + Chests
 - Add chests and an `E` interaction.
 - Grant items via `GameState.party.add_item(...)`.
 - Persist opened state (minimal).
+Status: scaffold implemented (v0):
+- Universal `E` interaction is wired for NPCs + chest interaction.
+- Main chest grants deterministic loot and persists opened state.
 
 ### M2: Dungeon Multi-Room + Enemy Triggers
 - Implement rooms + corridors.
 - Place enemy markers that start battles.
 - Persist defeated state (optional).
+Status: scaffold implemented (v0):
+- Procedural rooms/corridors with guaranteed boss path are active.
+- Dungeon random encounters use a step-based danger meter.
 
 ### M3: Dungeon Clear Conditions
 - Decide and enforce what “cleared” means (boss, loot, visited, etc).
 - Ensure regional map uses cleared state (already shows `C`).
+Status: scaffold implemented (v0):
+- Dungeon clear condition is locked to boss defeated.
+- Regional map renders cleared dungeon marker (`202`).
 
 ## Testing / Verification
 - Determinism:
@@ -216,10 +224,23 @@ Schema:
 - Save/load:
   - Save inside POI, load, exit: returns correctly and state remains.
 
+## Dungeon Generation (Implemented v0)
+- Procedural generator with guaranteed solvability:
+  - A "golden path" from entrance to boss (boss always reachable).
+  - Larger dungeon footprints than houses (currently `160x90` cells; tune as needed).
+  - Extra branches/side rooms for complexity.
+- Random encounters inside dungeons:
+  - Step-based danger meter, FF-style (invisible to player).
+- Determinism:
+  - Generation keyed by `world_seed_hash` + `poi_id`.
+- Still planned (later):
+  - Keys/locks/gates, multi-floor dungeons, themed rooms, trap density, etc.
+
 ## Open Questions (Need Your Answers)
-Decisions per your answers:
-1. Dungeon “cleared” = main boss defeated (usually gates the main treasure).
-2. Houses can have battles only in rare event/quest-driven cases (not baseline).
-3. POI interiors are persistent (no re-looting on re-entry).
+Locked decisions (2026-02-09):
+1. Dungeon “cleared” means: main boss defeated.
+2. Houses can have battles, but only in rare quest/event-driven cases (not baseline).
+3. POI interiors persist: no re-looting on re-entry.
 4. `E` is the universal interact key in local areas.
-5. No must-have objects immediately; house furniture can be location-appropriate (beds/tables/chairs/hearth/etc.).
+5. Houses have must-have furniture for lived-in spaces:
+   - Bed, hearth, toilet (shitter), stools/chairs, table (plus other location-appropriate props).

@@ -1,9 +1,11 @@
 # File: res://scripts/rendering/GPUAsciiRenderer.gd
-class_name GPUAsciiRenderer
 extends Control
+class_name GPUAsciiRenderer
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # Integration layer for GPU-based ASCII rendering
 # Replaces RichTextLabel-based rendering with high-performance GPU system
+const Log = preload("res://scripts/systems/Logger.gd")
 
 # Rendering components
 var quad_renderer: Control
@@ -22,15 +24,32 @@ func _init():
 
 func initialize_gpu_rendering(font: Font, font_size: int, width: int, height: int) -> bool:
 	"""Initialize GPU rendering system"""
-	
-	# debug removed
-	
+	if RenderingServer.get_rendering_device() == null:
+		Log.event_kv(Log.LogLevel.ERROR, "render", "gpu_ascii_init", "rd_null")
+		push_error("GPUAsciiRenderer: RenderingDevice unavailable (GPU-only mode).")
+		is_gpu_rendering_enabled = false
+		return false
+	if font == null:
+		Log.event_kv(Log.LogLevel.ERROR, "render", "gpu_ascii_init", "font_null")
+		push_error("GPUAsciiRenderer: missing font for initialization.")
+		is_gpu_rendering_enabled = false
+		return false
+	if width <= 0 or height <= 0:
+		Log.event_kv(Log.LogLevel.ERROR, "render", "gpu_ascii_init", "invalid_size", -1, -1.0, {"w": width, "h": height})
+		push_error("GPUAsciiRenderer: invalid map dimensions (%d x %d)." % [width, height])
+		is_gpu_rendering_enabled = false
+		return false
+	if quad_renderer != null and is_instance_valid(quad_renderer):
+		quad_renderer.queue_free()
+		quad_renderer = null
+
 	# Try to create GPU renderer
 	if _create_gpu_renderer(font, font_size, width, height):
-		# debug removed
+		Log.event_kv(Log.LogLevel.INFO, "render", "gpu_ascii_init", "ok", -1, -1.0, {"w": width, "h": height, "font_size": font_size})
 		is_gpu_rendering_enabled = true
 		return true
 	else:
+		Log.event_kv(Log.LogLevel.ERROR, "render", "gpu_ascii_init", "create_failed", -1, -1.0, {"w": width, "h": height, "font_size": font_size})
 		push_error("GPU ASCII renderer initialization failed; CPU fallback renderer is disabled.")
 		is_gpu_rendering_enabled = false
 		return false
@@ -54,8 +73,11 @@ func _create_gpu_renderer(font: Font, font_size: int, width: int, height: int) -
 		quad_renderer.queue_free()
 		quad_renderer = null
 		return false
-	
-	quad_renderer.initialize_rendering(font, font_size, width, height)
+	quad_renderer.call("initialize_rendering", font, font_size, width, height)
+	if "is_initialized" in quad_renderer and not VariantCasts.to_bool(quad_renderer.is_initialized):
+		quad_renderer.queue_free()
+		quad_renderer = null
+		return false
 	
 	# Set up viewport to fill this control and ensure it's behind overlays
 	quad_renderer.z_index = 0
@@ -260,6 +282,11 @@ func set_lava_texture_override(tex: Texture2D) -> void:
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_lava_texture_override"):
 		quad_renderer.set_lava_texture_override(tex)
 
+func set_society_overlay_texture_override(tex: Texture2D) -> void:
+	"""Provide a GPU-packed society overlay texture (human/wildlife) to the renderer."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_society_overlay_texture_override"):
+		quad_renderer.set_society_overlay_texture_override(tex)
+
 func set_world_data_1_override(tex: Texture2D) -> void:
 	"""Provide a GPU-packed world_data_1 texture to the renderer."""
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_world_data_1_override"):
@@ -322,9 +349,13 @@ func _screen_to_world(screen_pos: Vector2) -> Vector2:
 
 # Cleanup
 
+func cleanup_renderer_resources() -> void:
+	if quad_renderer != null and is_instance_valid(quad_renderer):
+		if quad_renderer.has_method("cleanup"):
+			quad_renderer.call("cleanup")
+		quad_renderer.free()
+	quad_renderer = null
+
 func _exit_tree() -> void:
 	"""Clean up resources"""
-	
-	if quad_renderer:
-		quad_renderer.queue_free()
-		quad_renderer = null
+	cleanup_renderer_resources()

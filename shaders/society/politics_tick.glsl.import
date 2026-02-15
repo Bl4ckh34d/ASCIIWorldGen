@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bt57hl47ixuyq"
+path="res://.godot/imported/politics_tick.glsl-238f8592e0ef0a634301d88b7684fc70.res"
+
+[deps]
+
+source_file="res://shaders/society/politics_tick.glsl"
+dest_files=["res://.godot/imported/politics_tick.glsl-238f8592e0ef0a634301d88b7684fc70.res"]
+
+[params]
+

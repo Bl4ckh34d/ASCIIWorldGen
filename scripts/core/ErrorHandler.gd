@@ -1,6 +1,7 @@
 # File: res://scripts/core/ErrorHandler.gd
-class_name ErrorHandler
 extends RefCounted
+class_name ErrorHandler
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # Standardized error handling patterns for the world generation system
 # Provides consistent error reporting, recovery, and logging
@@ -68,6 +69,7 @@ class ErrorResult:
 
 # Static error handling functions
 const WorldConstants = preload("res://scripts/core/WorldConstants.gd")
+const Log = preload("res://scripts/systems/Logger.gd")
 static func success(message: String = "") -> ErrorResult:
 	"""Create a success result"""
 	return ErrorResult.new(true, ErrorCode.NONE, message)
@@ -136,6 +138,32 @@ static func log_error(err: ErrorResult) -> void:
 	full_message += " " + err.message
 	if err.error_code != ErrorCode.NONE:
 		full_message += " (Code: " + str(err.error_code) + ")"
+
+	var lvl: int = Log.LogLevel.INFO
+	match err.severity:
+		ErrorSeverity.INFO:
+			lvl = Log.LogLevel.INFO
+		ErrorSeverity.WARNING:
+			lvl = Log.LogLevel.WARNING
+		ErrorSeverity.ERROR:
+			lvl = Log.LogLevel.ERROR
+		ErrorSeverity.CRITICAL:
+			lvl = Log.LogLevel.ERROR
+	Log.event_kv(
+		lvl,
+		"error_handler",
+		"handle",
+		"logged",
+		-1,
+		-1.0,
+		{
+			"context": err.context,
+			"code": int(err.error_code),
+			"severity": int(err.severity),
+			"recovery_suggested": VariantCasts.to_bool(err.recovery_suggested),
+			"message": err.message,
+		}
+	)
 	
 	# Use appropriate Godot logging function
 	match err.severity:
@@ -197,7 +225,8 @@ static func attempt_gpu_fallback(operation_name: String, cpu_callable: Callable)
 
 static func attempt_memory_recovery(operation: String, reduce_callable: Callable) -> ErrorResult:
 	"""Attempt to recover from memory issues"""
-	# Force garbage collection (approximate via Performance monitor)
+	# MEMORY_STATIC is an approximation of static memory only; it may not reflect
+	# all transient allocations. We use it as a coarse trend signal in scaffolding.
 	var before_mb = float(Performance.get_monitor(Performance.MEMORY_STATIC)) / (1024.0 * 1024.0)
 	
 	# Call system cleanup

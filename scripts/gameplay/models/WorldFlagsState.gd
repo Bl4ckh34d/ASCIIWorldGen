@@ -1,5 +1,6 @@
 extends RefCounted
 class_name WorldFlagsStateModel
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 var discovered_pois: Dictionary = {}
 var cleared_pois: Dictionary = {}
@@ -31,7 +32,7 @@ func mark_poi_cleared(poi_id: String) -> void:
 	cleared_pois[poi_id] = true
 
 func is_poi_cleared(poi_id: String) -> bool:
-	return bool(cleared_pois.get(poi_id, false))
+	return VariantCasts.to_bool(cleared_pois.get(poi_id, false))
 
 func apply_poi_instance_patch(poi_id: String, patch: Dictionary) -> void:
 	if poi_id.is_empty() or patch.is_empty():
@@ -55,7 +56,7 @@ func get_poi_instance_state(poi_id: String) -> Dictionary:
 
 func is_poi_boss_defeated(poi_id: String) -> bool:
 	var st: Dictionary = get_poi_instance_state(poi_id)
-	return bool(st.get("boss_defeated", false))
+	return VariantCasts.to_bool(st.get("boss_defeated", false))
 
 func mark_world_tile_visited(world_x: int, world_y: int) -> void:
 	var k: String = "%d,%d" % [world_x, world_y]
@@ -63,12 +64,12 @@ func mark_world_tile_visited(world_x: int, world_y: int) -> void:
 
 func is_world_tile_visited(world_x: int, world_y: int) -> bool:
 	var k: String = "%d,%d" % [world_x, world_y]
-	return bool(visited_world_tiles.get(k, false))
+	return VariantCasts.to_bool(visited_world_tiles.get(k, false))
 
 func register_battle_result(result_data: Dictionary) -> void:
-	if bool(result_data.get("victory", false)):
+	if VariantCasts.to_bool(result_data.get("victory", false)):
 		battles_won += 1
-	elif bool(result_data.get("escaped", false)):
+	elif VariantCasts.to_bool(result_data.get("escaped", false)):
 		battles_fled += 1
 	else:
 		battles_lost += 1

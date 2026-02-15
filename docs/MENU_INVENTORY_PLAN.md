@@ -71,6 +71,7 @@ Rule (per your direction):
 Where this lives:
 - Initially: a Menu action (“Rest”) that is only enabled when the current location/POI supports it.
 - Later: actual POI interactions (Innkeeper, Temple services) should drive the same underlying “rest” API.
+Status: scaffold implemented (menu hotkey `R` calls `GameState.rest_until_morning()` when local rest context allows it).
 
 Notes:
 - Rest should advance time to the next morning and can affect encounter chances and weather (later).
@@ -166,7 +167,8 @@ Keep slot-based saves:
 
 Planned enhancements:
 - Add “confirm overwrite” prompt (later).
-- Add slot metadata (timestamp, location, party level) shown in the OptionButton (later).
+- Add slot metadata (timestamp, location, party level) shown in the OptionButton.
+Status: scaffold implemented (save payload carries metadata and menu slot labels are enriched from per-slot metadata reads).
 
 ### Quit / Return Flow
 Clarify two different actions:
@@ -209,18 +211,26 @@ Where to apply:
 - Implement per-member `bag` slot grids and derived `party.inventory` view.
 - Implement right-click context actions: Use, Equip/Unequip, Drop.
 - Implement drag & drop between slots (swap; merge stacks for same stackable item).
+Status: scaffold implemented (v0):
+- Per-member bag slots + derived party inventory view are wired.
+- Context actions (`Use`, `Equip/Unequip`, `Drop`) and drag/swap flows are implemented.
 
 ### M2: HP/MP Bars in Menu
 - Show HP/MP bars next to party members.
 - Show HP/MP bars in “use item” target picker.
+Status: scaffold implemented (v0):
+- Party rows and item target picker both expose HP/MP bars.
 
 ### M3: Derived Stats + Battle Hook
 - Compute total stats (base + bonuses).
 - Update battle power / damage formulas to use totals (even if crude at first).
+Status: scaffold implemented (v0):
+- Equipment bonuses feed derived combat stats in party/battle state preparation.
 
 ### M4: Save Slot Metadata (Optional)
 - Store a small sidecar file or embed slot metadata in save payload.
 - Show it in menu slot picker.
+Status: scaffold implemented (embedded payload metadata + OptionButton label rendering).
 
 ## Testing / Verification
 - Inventory integrity:
@@ -234,7 +244,7 @@ Where to apply:
   - All buttons work with both mouse and keyboard.
 
 ## Open Questions (Need Your Answers)
-Decisions per your answers:
+Locked decisions (2026-02-09):
 1. In interiors, `Esc` opens the menu (key rebinding later).
 2. Equipped items remain in inventory and occupy a slot while equipped (Valheim-like).
 3. “Quit” quits the game to desktop (world map is on `M`).

@@ -86,3 +86,13 @@ func widen_deltas_gpu_buffers(
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
 	return true
+
+func cleanup() -> void:
+	if _rd != null:
+		if _delta_pipeline.is_valid():
+			_rd.free_rid(_delta_pipeline)
+		if _delta_shader.is_valid():
+			_rd.free_rid(_delta_shader)
+	_delta_pipeline = RID()
+	_delta_shader = RID()
+	_broken = false

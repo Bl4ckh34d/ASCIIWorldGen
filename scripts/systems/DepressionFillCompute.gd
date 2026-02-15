@@ -169,3 +169,30 @@ func compute_lake_mask_gpu_buffers(
 	_rd.free_rid(mask_set)
 	_rd.free_rid(changed_buf)
 	return true
+
+func cleanup() -> void:
+	if _rd != null:
+		if _clear_pipeline.is_valid():
+			_rd.free_rid(_clear_pipeline)
+		if _clear_shader.is_valid():
+			_rd.free_rid(_clear_shader)
+		if _lake_mask_pipeline.is_valid():
+			_rd.free_rid(_lake_mask_pipeline)
+		if _lake_mask_shader.is_valid():
+			_rd.free_rid(_lake_mask_shader)
+		if _fill_seed_pipeline.is_valid():
+			_rd.free_rid(_fill_seed_pipeline)
+		if _fill_seed_shader.is_valid():
+			_rd.free_rid(_fill_seed_shader)
+		if _fill_pipeline.is_valid():
+			_rd.free_rid(_fill_pipeline)
+		if _fill_shader.is_valid():
+			_rd.free_rid(_fill_shader)
+	_clear_pipeline = RID()
+	_clear_shader = RID()
+	_lake_mask_pipeline = RID()
+	_lake_mask_shader = RID()
+	_fill_seed_pipeline = RID()
+	_fill_seed_shader = RID()
+	_fill_pipeline = RID()
+	_fill_shader = RID()

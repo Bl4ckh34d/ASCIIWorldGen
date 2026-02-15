@@ -69,6 +69,8 @@ func blend_to_buffer(
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(new_biome_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(out_biome_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h, rng_seed, epoch])
 	var floats := PackedFloat32Array([
@@ -98,3 +100,13 @@ func blend_to_buffer(
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
 	return true
+
+func cleanup() -> void:
+	if _rd != null:
+		if _pipeline.is_valid():
+			_rd.free_rid(_pipeline)
+		if _shader.is_valid():
+			_rd.free_rid(_shader)
+	_pipeline = RID()
+	_shader = RID()
+	_rd = null

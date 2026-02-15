@@ -53,7 +53,7 @@ These are the core scripts we’ll likely keep and adapt:
 - `scripts/generation/BiomeClassifier.gd` – biome assignment
 - `scripts/style/WaterPalette.gd` – ocean depth coloring
 - `scripts/style/AsciiStyler.gd` – ASCII rendering with colors
-- `scripts/systems/ContinentalShelf.gd` – shallow water + beach masks
+- `scripts/systems/ContinentalShelfCompute.gd` – shallow water + beach masks
 
 Current runtime direction:
 - Keep the GPU compute pipeline as the primary runtime path.
@@ -103,13 +103,18 @@ Current runtime direction:
 - Local POI interiors: `docs/LOCAL_AREA_MAP_PLAN.md`
 - Battle system: `docs/BATTLE_SYSTEM_EXPANSION_PLAN.md`
 - Menu + inventory + equipment: `docs/MENU_INVENTORY_PLAN.md`
+- Civilization (wildlife + humans + epochs): `docs/CIVILIZATION_PLAN.md`
+- NPCs + politics + economy: `docs/NPC_POLITICS_ECONOMY_PLAN.md`
 
 ## Open Questions / To Decide
-- Confirm target world resolution or increase for game map.
-- Decide how to prompt for seed (start menu, dialog, command line).
-- Decide how much of the existing UI stays vs. replaced.
-- Decide if worldgen should be a separate scene or embedded in the main game scene.
-- Decide how encounters are triggered (steps, tiles, time-based).
+Locked decisions (2026-02-09):
+- World resolution: keep current for early alpha.
+- Seed prompt: leave as-is for early alpha.
+- UI direction: keep current UI for early alpha; revisit later once core loop is stable.
+- Worldgen vs world map:
+  - "Worldgen" is the accelerated simulation mode where we can speed up time and watch the world evolve.
+  - "World map" is the macro navigation view during gameplay; it runs the same simulation systems, but much slower (nearly static over a playthrough).
+- Encounters: step-based danger meter (FF-style): each step increases encounter chance; after each step we roll a dice check; on encounter, meter resets/adjusts.
 
 ## Design Decisions Log
 - 2026-02-05: Pivot from new Python/terminal project to existing Godot worldgen project.
@@ -128,6 +133,7 @@ Current runtime direction:
   - Regional map prototype:
     - Deterministic biome-aware ASCII terrain generation.
     - Player movement and seamless cross-tile traversal (X wrap, Y clamp).
+    - Incremental redraw path for movement (edge-only cell re-sampling over cached field buffers), with partial GPU edge uploads in `GpuMapView`, live F3 HUD redraw/upload percentiles, and perf harness (`tools_regional_redraw_perf.gd`).
     - Seeded POI placement + entry to interior scene.
     - Seeded random encounter entry to battle scene.
   - Battle prototype:
@@ -146,18 +152,22 @@ Current runtime direction:
     - `SceneRouter` autoload for centralized scene transitions.
     - Data models for party members/party state/time state.
     - Additional persistent models for settings, quests, and world flags/progress.
+    - New persistent scaffolding models: economy, politics, NPC world state (background daily tick).
+    - Civilization epoch scaffolding: delayed epoch shifts (years/decades with rare month-fast jumps) and epoch multipliers wired into economy/politics/NPC symbolic ticks.
+    - Epoch gameplay hook (first slice): encounter rate/difficulty/reward scaling and local shop buy/sell multipliers now consume epoch + local scarcity/war pressure.
+    - Epoch NPC behavior hook (next slice): local interior NPC density/move cadence/disposition and dialogue stubs now consume epoch + local scarcity/war pressure.
     - Data catalogs for items, enemies, and POI types.
     - Deterministic registries for POIs and encounters.
     - Battle state machine scaffold driving command resolution + rewards payload.
-    - Versioned JSON save/load schema (`SAVE_SCHEMA_VERSION=3`).
+    - Versioned JSON save/load schema (`SAVE_SCHEMA_VERSION=6`).
     - Multi-slot save scaffolding (`slot_0..slot_2`) via scene contracts.
     - Tabbed menu overlay (`Overview`, `Party`, `Characters`, `Stats`, `Quests`, `Settings`) wired to live data + save/load/settings apply.
       - Characters tab: per-member slot inventory (Valheim-like), HP/MP bars, right-click Use/Equip/Drop, drag & drop between slots.
 - Pending/Next:
   - Replace prototype ASCII local/regional rendering with full art/render layer.
-  - Make regional generation truly continuous across tile edges via shared edge constraints/chunk cache.
-  - Add full party/inventory/stats data models and menu wiring.
-  - Integrate time/day-night progression into movement, POIs, and battles.
+  - Continue regional continuity/perf tuning (generation seams are scaffolded; tuning remains).
+  - Expand civilization epoch effects from metadata into gameplay consequences (economy/politics/NPC behavior modifiers).
+  - Deepen time/day-night effects (baseline hooks exist; expand tables and balancing).
 
 ## Working Agreement
 - Keep this file updated with decisions, scope, and next steps so other agents can continue without re-discovery.

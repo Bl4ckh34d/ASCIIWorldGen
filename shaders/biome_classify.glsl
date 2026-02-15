@@ -1,6 +1,12 @@
 #[compute]
 #version 450
 // File: res://shaders/biome_classify.glsl
+// Layout summary (set=0):
+//   b0 height_data, b1 is_land_data, b2 temp_norm, b3 moist_norm, b4 beach_mask
+//   b5 desert_field(optional), b6 out_biome, b7 fertility, b8 biome_noise_field(optional)
+// Notes:
+//   - Classify pass keeps neighbor sampling lightweight (orthogonal moisture blend only).
+//   - Spatial smoothing should use the dedicated `biome_smooth.glsl` pass(es).
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -70,6 +76,12 @@ float tri_noise(uint x, uint y, float phase) {
     return clamp((0.66 * n1 + 0.34 * n2) * 0.5 + 0.5, 0.0, 1.0);
 }
 
+float sample_moist_clamped(int x, int y, int W, int H) {
+    int cx = clamp(x, 0, W - 1);
+    int cy = clamp(y, 0, H - 1);
+    return clamp01(Moist.moist_norm[cx + cy * W]);
+}
+
 void main() {
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
@@ -105,18 +117,17 @@ void main() {
         n2u = clamp01(BiomeNoise.biome_noise_field[j2]);
     }
     float m_j = clamp01(raw_m + PC.moist_noise_strength * (n1 - 0.5) + PC.moist_noise_strength2 * (n2u - 0.5));
-    // neighbor average to introduce split/merge islands
-    float sum_nb = 0.0; int cnt = 0;
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            int nx = int(x) + dx; int ny = int(y) + dy;
-            if (nx < 0 || ny < 0 || nx >= W || ny >= PC.height) continue;
-            int j = nx + ny * W;
-            sum_nb += clamp01(Moist.moist_norm[j]);
-            cnt++;
-        }
+    // Lightweight neighbor blend: orthogonal-only sampling keeps classify pass cheap.
+    int xi = int(x);
+    int yi = int(y);
+    float m_nb = raw_m;
+    if (PC.moist_island_factor > 0.0001) {
+        float m_w = sample_moist_clamped(xi - 1, yi, W, PC.height);
+        float m_e = sample_moist_clamped(xi + 1, yi, W, PC.height);
+        float m_n = sample_moist_clamped(xi, yi - 1, W, PC.height);
+        float m_s = sample_moist_clamped(xi, yi + 1, W, PC.height);
+        m_nb = (raw_m + m_w + m_e + m_n + m_s) * 0.2;
     }
-    float m_nb = (cnt > 0) ? (sum_nb / float(cnt)) : raw_m;
     float island_mix = clamp(PC.moist_island_factor * n2u, 0.0, 1.0);
     float m_eff = clamp01(mix(m_j, m_nb, island_mix));
     // reduce moisture at higher elevations to reflect orographic dryness

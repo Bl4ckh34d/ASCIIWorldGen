@@ -1,4 +1,5 @@
 extends SceneTree
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 class DummyWorld:
 	extends RefCounted
@@ -16,6 +17,16 @@ const MAX_INLAND_RATIO: float = 0.32
 const MAX_OCEAN_DRIFT: float = 0.20
 const MAX_NET_HEIGHT_BIAS: float = 0.16
 
+func _cleanup_if_supported(obj: Variant) -> void:
+	if obj == null:
+		return
+	if obj is Object:
+		var ref_obj: Object = obj as Object
+		if ref_obj.has_method("cleanup"):
+			ref_obj.call("cleanup")
+		elif ref_obj.has_method("clear"):
+			ref_obj.call("clear")
+
 func _run_case(seed_value: int) -> Dictionary:
 	var WG = load("res://scripts/WorldGenerator.gd")
 	var PlateSystem = load("res://scripts/systems/PlateSystem.gd")
@@ -31,6 +42,7 @@ func _run_case(seed_value: int) -> Dictionary:
 	})
 	var generated_land: PackedByteArray = gen.generate()
 	if generated_land.is_empty():
+		_cleanup_if_supported(gen)
 		return {"ok": false, "seed": seed_value, "error": "generation_failed"}
 	var plate = PlateSystem.new()
 	plate.initialize(gen)
@@ -51,21 +63,22 @@ func _run_case(seed_value: int) -> Dictionary:
 		"water": water_stats,
 		"tectonics": tectonics,
 	}
-	if gen.has_method("clear"):
-		gen.clear()
+	_cleanup_if_supported(plate)
+	_cleanup_if_supported(hydro)
+	_cleanup_if_supported(gen)
 	return out
 
 func _init() -> void:
 	var failures: PackedStringArray = PackedStringArray()
 	for seed_value in CASE_SEEDS:
 		var result: Dictionary = _run_case(seed_value)
-		if not bool(result.get("ok", false)):
+		if not VariantCasts.to_bool(result.get("ok", false)):
 			failures.append("seed %d: %s" % [int(result.get("seed", seed_value)), String(result.get("error", "unknown_error"))])
 			continue
 		var metrics: Dictionary = result.get("metrics", {})
 		var water: Dictionary = result.get("water", {})
 		var tectonics: Dictionary = result.get("tectonics", {})
-		if not bool(metrics.get("ok", false)):
+		if not VariantCasts.to_bool(metrics.get("ok", false)):
 			failures.append("seed %d: gpu_metrics_unavailable" % int(result.get("seed", seed_value)))
 			continue
 		var total_cells: float = max(1.0, float(metrics.get("total_cells", 0.0)))

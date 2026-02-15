@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ccttmmjnj3pgy"
+path="res://.godot/imported/civilization_tick.glsl-85e18e6e81c67f424f620d47bf68f5fe.res"
+
+[deps]
+
+source_file="res://shaders/society/civilization_tick.glsl"
+dest_files=["res://.godot/imported/civilization_tick.glsl-85e18e6e81c67f424f620d47bf68f5fe.res"]
+
+[params]
+

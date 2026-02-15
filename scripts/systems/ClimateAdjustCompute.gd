@@ -1,11 +1,15 @@
 # File: res://scripts/systems/ClimateAdjustCompute.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 ## GPU ClimateAdjust using Godot 4 RenderingDevice and compute shaders.
 
-var CLIMATE_SHADER_FILE: RDShaderFile = load("res://shaders/climate_adjust.glsl")
-var CYCLE_APPLY_SHADER_FILE: RDShaderFile = load("res://shaders/cycle_apply.glsl")
-var DAY_NIGHT_LIGHT_SHADER_FILE: RDShaderFile = load("res://shaders/day_night_light.glsl")
+const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
+
+const CLIMATE_SHADER_PATH: String = "res://shaders/climate_adjust.glsl"
+const CYCLE_APPLY_SHADER_PATH: String = "res://shaders/cycle_apply.glsl"
+const DAY_NIGHT_LIGHT_SHADER_PATH: String = "res://shaders/day_night_light.glsl"
 
 var _rd: RenderingDevice
 var _shader: RID
@@ -14,25 +18,10 @@ var _cycle_shader: RID
 var _cycle_pipeline: RID
 var _light_shader: RID
 var _light_pipeline: RID
+var _buf_mgr: GPUBufferManager = null
 
-func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
-	if file == null:
-		return null
-	var versions: Array = file.get_version_list()
-	if versions.is_empty():
-		return null
-	var chosen_version: Variant = null
-	for v in versions:
-		if v == null:
-			continue
-		if chosen_version == null:
-			chosen_version = v
-		if String(v) == "vulkan":
-			chosen_version = v
-			break
-	if chosen_version == null:
-		return null
-	return file.get_spirv(chosen_version)
+func _init() -> void:
+	_buf_mgr = GPUBufferManager.new()
 
 func _compute_stage_error_text(spirv: RDShaderSPIRV) -> String:
 	if spirv == null:
@@ -57,39 +46,38 @@ func _compute_stage_bytecode_size(spirv: RDShaderSPIRV) -> int:
 	return -1
 
 func _ensure_device_and_pipeline() -> void:
-	if _rd == null:
-		_rd = RenderingServer.get_rendering_device()
-	if not _shader.is_valid():
-		var spirv: RDShaderSPIRV = _get_spirv(CLIMATE_SHADER_FILE)
-		if spirv == null:
-			push_error("ClimateAdjustCompute: failed to load SPIR-V for res://shaders/climate_adjust.glsl")
-			return
-		var compile_err: String = _compute_stage_error_text(spirv)
-		if not compile_err.is_empty():
-			push_error("ClimateAdjustCompute: climate_adjust compute compile error: %s" % compile_err)
-			return
-		var bc_size: int = _compute_stage_bytecode_size(spirv)
-		if bc_size == 0:
-			push_error("ClimateAdjustCompute: climate_adjust compute bytecode is empty")
-			return
-		_shader = _rd.shader_create_from_spirv(spirv)
-		if not _shader.is_valid():
-			push_error("ClimateAdjustCompute: shader_create_from_spirv failed for res://shaders/climate_adjust.glsl")
-			return
-	if not _pipeline.is_valid() and _shader.is_valid():
-		_pipeline = _rd.compute_pipeline_create(_shader)
-	if not _cycle_shader.is_valid():
-		var cycle_spirv: RDShaderSPIRV = _get_spirv(CYCLE_APPLY_SHADER_FILE)
-		if cycle_spirv != null:
-			_cycle_shader = _rd.shader_create_from_spirv(cycle_spirv)
-	if not _cycle_pipeline.is_valid() and _cycle_shader.is_valid():
-		_cycle_pipeline = _rd.compute_pipeline_create(_cycle_shader)
-	if not _light_shader.is_valid():
-		var light_spirv: RDShaderSPIRV = _get_spirv(DAY_NIGHT_LIGHT_SHADER_FILE)
-		if light_spirv != null:
-			_light_shader = _rd.shader_create_from_spirv(light_spirv)
-	if not _light_pipeline.is_valid() and _light_shader.is_valid():
-		_light_pipeline = _rd.compute_pipeline_create(_light_shader)
+	var state_climate: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_shader,
+		_pipeline,
+		CLIMATE_SHADER_PATH,
+		"climate_adjust"
+	)
+	_rd = state_climate.get("rd", null)
+	_shader = state_climate.get("shader", RID())
+	_pipeline = state_climate.get("pipeline", RID())
+	if not VariantCasts.to_bool(state_climate.get("ok", false)):
+		return
+
+	var state_cycle: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_cycle_shader,
+		_cycle_pipeline,
+		CYCLE_APPLY_SHADER_PATH,
+		"cycle_apply"
+	)
+	_cycle_shader = state_cycle.get("shader", RID())
+	_cycle_pipeline = state_cycle.get("pipeline", RID())
+
+	var state_light: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_light_shader,
+		_light_pipeline,
+		DAY_NIGHT_LIGHT_SHADER_PATH,
+		"day_night_light"
+	)
+	_light_shader = state_light.get("shader", RID())
+	_light_pipeline = state_light.get("pipeline", RID())
 
 func _pack_push_constants(width: int, height: int, params: Dictionary, ocean_frac: float) -> PackedByteArray:
 	var arr := PackedByteArray()
@@ -226,18 +214,18 @@ func evaluate_to_buffers_gpu(
 	var size: int = max(0, w * h)
 	if size == 0:
 		return false
-	var dummy := PackedFloat32Array(); dummy.resize(size)
-	var buf_temp_noise: RID = _rd.storage_buffer_create(dummy.to_byte_array().size(), dummy.to_byte_array())
-	var buf_moist_base_offset: RID = _rd.storage_buffer_create(dummy.to_byte_array().size(), dummy.to_byte_array())
-	var buf_flow_u: RID = _rd.storage_buffer_create(dummy.to_byte_array().size(), dummy.to_byte_array())
-	var buf_flow_v: RID = _rd.storage_buffer_create(dummy.to_byte_array().size(), dummy.to_byte_array())
+	if _buf_mgr == null:
+		_buf_mgr = GPUBufferManager.new()
+	var bytes_size: int = size * 4
+	var buf_temp_noise: RID = _buf_mgr.ensure_buffer("clim_temp_noise", bytes_size)
+	var buf_moist_base_offset: RID = _buf_mgr.ensure_buffer("clim_moist_base", bytes_size)
+	var buf_flow_u: RID = _buf_mgr.ensure_buffer("clim_flow_u", bytes_size)
+	var buf_flow_v: RID = _buf_mgr.ensure_buffer("clim_flow_v", bytes_size)
+	if not (buf_temp_noise.is_valid() and buf_moist_base_offset.is_valid() and buf_flow_u.is_valid() and buf_flow_v.is_valid()):
+		return false
 	var xscale: float = float(params.get("noise_x_scale", 1.0))
 	var noise_ok: bool = _compute_noise_fields_gpu_to_buffers(w, h, params, xscale, buf_temp_noise, buf_moist_base_offset, buf_flow_u, buf_flow_v)
 	if not noise_ok:
-		_rd.free_rid(buf_temp_noise)
-		_rd.free_rid(buf_moist_base_offset)
-		_rd.free_rid(buf_flow_u)
-		_rd.free_rid(buf_flow_v)
 		return false
 	var uniforms: Array = []
 	var u0: RDUniform = RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(height_buf); uniforms.append(u0)
@@ -257,6 +245,8 @@ func evaluate_to_buffers_gpu(
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 80, "ClimateAdjustCompute.evaluate"):
+		return false
 	var groups_x: int = int(ceil(float(w) / 16.0))
 	var groups_y: int = int(ceil(float(h) / 16.0))
 	var cl_id: int = _rd.compute_list_begin()
@@ -266,10 +256,6 @@ func evaluate_to_buffers_gpu(
 	_rd.compute_list_dispatch(cl_id, groups_x, groups_y, 1)
 	_rd.compute_list_end()
 	_rd.free_rid(uniform_set)
-	_rd.free_rid(buf_temp_noise)
-	_rd.free_rid(buf_moist_base_offset)
-	_rd.free_rid(buf_flow_u)
-	_rd.free_rid(buf_flow_v)
 	return true
 
 # GPU-only fast path: apply cycles in-place or into provided output buffer (no readback).
@@ -308,6 +294,8 @@ func apply_cycles_only_gpu(w: int, h: int, temp_buf: RID, land_buf: RID, dist_bu
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 64, "ClimateAdjustCompute.cycle"):
+		return false
 	var groups_x: int = int(ceil(float(w) / 16.0))
 	var groups_y: int = int(ceil(float(h) / 16.0))
 	var cl_id: int = _rd.compute_list_begin()
@@ -359,6 +347,8 @@ func evaluate_light_field_gpu(w: int, h: int, params: Dictionary, height_buf: RI
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 48, "ClimateAdjustCompute.light"):
+		return false
 	var groups_x: int = int(ceil(float(w) / 16.0))
 	var groups_y: int = int(ceil(float(h) / 16.0))
 	var cl_id: int = _rd.compute_list_begin()
@@ -369,3 +359,21 @@ func evaluate_light_field_gpu(w: int, h: int, params: Dictionary, height_buf: RI
 	_rd.compute_list_end()
 	_rd.free_rid(uniform_set)
 	return true
+
+func cleanup() -> void:
+	if _buf_mgr != null:
+		_buf_mgr.cleanup()
+	ComputeShaderBase.free_rids(_rd, [
+		_pipeline,
+		_shader,
+		_cycle_pipeline,
+		_cycle_shader,
+		_light_pipeline,
+		_light_shader,
+	])
+	_pipeline = RID()
+	_shader = RID()
+	_cycle_pipeline = RID()
+	_cycle_shader = RID()
+	_light_pipeline = RID()
+	_light_shader = RID()

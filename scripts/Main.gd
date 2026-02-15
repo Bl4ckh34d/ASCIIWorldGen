@@ -2644,18 +2644,44 @@ func _on_tile_clicked(x: int, y: int, button_index: int) -> void:
 		if info_label:
 			info_label.text = "Cannot enter ocean/ice tiles."
 		return
+	var world_size: int = int(generator.get_width()) * int(generator.get_height())
+	var transition_land_mask: PackedByteArray = PackedByteArray()
+	if generator.has_method("get_land_snapshot_from_gpu"):
+		transition_land_mask = generator.get_land_snapshot_from_gpu(world_size)
+	var transition_biomes: PackedInt32Array = _capture_transition_world_biomes(
+		x,
+		y,
+		int(cell_info.get("biome", -1)),
+		transition_land_mask
+	)
+	var transition_render: Dictionary = _capture_transition_world_render_fields(world_size, transition_land_mask)
+	if _is_transition_snapshot_degenerate(transition_biomes, world_size):
+		if startup_state != null:
+			var startup_biomes: PackedInt32Array = PackedInt32Array()
+			var startup_biomes_v: Variant = startup_state.get("world_biome_ids")
+			if startup_biomes_v is PackedInt32Array:
+				startup_biomes = startup_biomes_v
+			if _is_biome_snapshot_usable(startup_biomes, world_size, -1) and not _is_transition_snapshot_degenerate(startup_biomes, world_size):
+				transition_biomes = _enforce_snapshot_anchor(
+					startup_biomes,
+					int(generator.get_width()),
+					int(generator.get_height()),
+					x,
+					y,
+					int(cell_info.get("biome", -1))
+				)
+				transition_render = _get_startup_world_render_fields(startup_state, world_size)
 	if game_state != null and game_state.has_method("initialize_world_snapshot"):
-		var biome_snapshot: PackedInt32Array = generator.last_biomes
-		# In GPU-only runtime, `last_biomes` can be stale; read the authoritative GPU buffer.
-		if "get_biome_snapshot_from_gpu" in generator:
-			var gpu_biomes: PackedInt32Array = generator.get_biome_snapshot_from_gpu()
-			if gpu_biomes.size() == generator.get_width() * generator.get_height():
-				biome_snapshot = gpu_biomes
 		game_state.initialize_world_snapshot(
 			generator.get_width(),
 			generator.get_height(),
 			int(generator.config.rng_seed),
-			biome_snapshot
+			transition_biomes,
+			transition_render.get("height_raw", PackedFloat32Array()),
+			transition_render.get("temperature", PackedFloat32Array()),
+			transition_render.get("moisture", PackedFloat32Array()),
+			transition_render.get("land_mask", PackedByteArray()),
+			transition_render.get("beach_mask", PackedByteArray())
 		)
 	if game_state != null and game_state.has_method("set_location"):
 		game_state.set_location(
@@ -2669,18 +2695,18 @@ func _on_tile_clicked(x: int, y: int, button_index: int) -> void:
 		)
 		if startup_state != null:
 			if startup_state.has_method("set_world_snapshot"):
-				var biome_snapshot2: PackedInt32Array = generator.last_biomes
-				if "get_biome_snapshot_from_gpu" in generator:
-					var gpu_biomes2: PackedInt32Array = generator.get_biome_snapshot_from_gpu()
-					if gpu_biomes2.size() == generator.get_width() * generator.get_height():
-						biome_snapshot2 = gpu_biomes2
 				startup_state.set_world_snapshot(
 					generator.get_width(),
 					generator.get_height(),
 					int(generator.config.rng_seed),
-					biome_snapshot2
+					transition_biomes,
+					transition_render.get("height_raw", PackedFloat32Array()),
+					transition_render.get("temperature", PackedFloat32Array()),
+					transition_render.get("moisture", PackedFloat32Array()),
+					transition_render.get("land_mask", PackedByteArray()),
+					transition_render.get("beach_mask", PackedByteArray())
 				)
-		if startup_state.has_method("set_selected_world_tile"):
+		if startup_state != null and startup_state.has_method("set_selected_world_tile"):
 			startup_state.set_selected_world_tile(
 				x,
 				y,
@@ -2700,6 +2726,207 @@ func _on_tile_clicked(x: int, y: int, button_index: int) -> void:
 		)
 	else:
 		get_tree().change_scene_to_file(REGIONAL_MAP_SCENE_PATH)
+
+func _capture_transition_world_biomes(
+	anchor_x: int,
+	anchor_y: int,
+	anchor_biome: int,
+	preferred_land_mask: PackedByteArray = PackedByteArray()
+) -> PackedInt32Array:
+	if generator == null:
+		return PackedInt32Array()
+	var w: int = int(generator.get_width())
+	var h: int = int(generator.get_height())
+	var size: int = w * h
+	if size <= 0:
+		return PackedInt32Array()
+	var expected_land_cells: int = -1
+	var land_mask: PackedByteArray = preferred_land_mask
+	expected_land_cells = _count_land_cells_from_mask(land_mask, size)
+	if expected_land_cells <= 0 and generator.has_method("get_land_snapshot_from_gpu"):
+		land_mask = generator.get_land_snapshot_from_gpu(size)
+		expected_land_cells = _count_land_cells_from_mask(land_mask, size)
+	if expected_land_cells <= 0 and "last_is_land" in generator:
+		land_mask = generator.last_is_land
+		expected_land_cells = _count_land_cells_from_mask(land_mask, size)
+
+	var gpu_biomes: PackedInt32Array = PackedInt32Array()
+	if generator.has_method("get_biome_snapshot_from_gpu"):
+		gpu_biomes = generator.get_biome_snapshot_from_gpu(size)
+	if _is_biome_snapshot_usable(gpu_biomes, size, expected_land_cells):
+		return _enforce_snapshot_anchor(gpu_biomes, w, h, anchor_x, anchor_y, anchor_biome)
+
+	var mirror_biomes: PackedInt32Array = PackedInt32Array()
+	if "last_biomes" in generator:
+		mirror_biomes = generator.last_biomes
+	if _is_biome_snapshot_usable(mirror_biomes, size, expected_land_cells):
+		return _enforce_snapshot_anchor(mirror_biomes, w, h, anchor_x, anchor_y, anchor_biome)
+
+	if land_mask.size() == size and expected_land_cells > 0:
+		var from_land: PackedInt32Array = _build_biome_snapshot_from_land_mask(land_mask, size, anchor_biome)
+		if not _is_transition_snapshot_degenerate(from_land, size):
+			return _enforce_snapshot_anchor(from_land, w, h, anchor_x, anchor_y, anchor_biome)
+
+	var empty := PackedInt32Array()
+	empty.resize(size)
+	empty.fill(0)
+	return _enforce_snapshot_anchor(empty, w, h, anchor_x, anchor_y, anchor_biome)
+
+func _is_biome_snapshot_usable(snapshot: PackedInt32Array, size: int, expected_land_cells: int) -> bool:
+	if snapshot.size() != size:
+		return false
+	var non_ocean_cells: int = _count_non_ocean_cells(snapshot)
+	if expected_land_cells > 0:
+		if non_ocean_cells <= 0:
+			return false
+		if expected_land_cells > 64:
+			var min_expected: int = max(8, int(floor(float(expected_land_cells) * 0.15)))
+			if non_ocean_cells < min_expected:
+				return false
+	# Guard against collapsed single-biome land snapshots on full-size worlds.
+	if _is_transition_snapshot_degenerate(snapshot, size):
+		return false
+	return non_ocean_cells > 0 or expected_land_cells <= 0
+
+func _is_transition_snapshot_degenerate(snapshot: PackedInt32Array, size: int) -> bool:
+	if snapshot.size() != size:
+		return true
+	var non_ocean_cells: int = 0
+	var first_land_biome: int = -1
+	var has_second_biome: bool = false
+	for bid_v in snapshot:
+		var bid: int = int(bid_v)
+		if bid <= 1:
+			continue
+		non_ocean_cells += 1
+		if first_land_biome < 0:
+			first_land_biome = bid
+		elif bid != first_land_biome:
+			has_second_biome = true
+			break
+	if non_ocean_cells <= 0:
+		return true
+	# Small maps/chunks can be legitimately one-biome; full world snapshots should not collapse.
+	if size >= 16384 and non_ocean_cells >= 1024 and not has_second_biome:
+		return true
+	return false
+
+func _count_non_ocean_cells(snapshot: PackedInt32Array) -> int:
+	var count: int = 0
+	for bid_v in snapshot:
+		var bid: int = int(bid_v)
+		if bid > 1:
+			count += 1
+	return count
+
+func _count_land_cells_from_mask(mask: PackedByteArray, size: int) -> int:
+	if mask.size() != size:
+		return -1
+	var count: int = 0
+	for i in range(size):
+		if int(mask[i]) != 0:
+			count += 1
+	return count
+
+func _build_biome_snapshot_from_land_mask(mask: PackedByteArray, size: int, anchor_biome: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	out.resize(size)
+	var land_biome: int = anchor_biome if anchor_biome > 1 else 7
+	for i in range(size):
+		out[i] = land_biome if int(mask[i]) != 0 else 0
+	return out
+
+func _capture_transition_world_render_fields(
+	size: int,
+	preferred_land_mask: PackedByteArray = PackedByteArray()
+) -> Dictionary:
+	var out: Dictionary = {
+		"height_raw": PackedFloat32Array(),
+		"temperature": PackedFloat32Array(),
+		"moisture": PackedFloat32Array(),
+		"land_mask": PackedByteArray(),
+		"beach_mask": PackedByteArray(),
+	}
+	if generator == null or size <= 0:
+		return out
+	if "last_height" in generator:
+		var h_raw: PackedFloat32Array = generator.last_height
+		if h_raw.size() == size:
+			out["height_raw"] = h_raw.duplicate()
+	if "last_temperature" in generator:
+		var temp: PackedFloat32Array = generator.last_temperature
+		if temp.size() == size:
+			out["temperature"] = temp.duplicate()
+	if "last_moisture" in generator:
+		var moist: PackedFloat32Array = generator.last_moisture
+		if moist.size() == size:
+			out["moisture"] = moist.duplicate()
+	var land_mask: PackedByteArray = preferred_land_mask
+	if land_mask.size() != size and "last_is_land" in generator:
+		land_mask = generator.last_is_land
+	if land_mask.size() == size:
+		out["land_mask"] = land_mask.duplicate()
+	if "last_beach" in generator:
+		var beach: PackedByteArray = generator.last_beach
+		if beach.size() == size:
+			out["beach_mask"] = beach.duplicate()
+	return out
+
+func _get_startup_world_render_fields(startup_state: Node, size: int) -> Dictionary:
+	var out: Dictionary = {
+		"height_raw": PackedFloat32Array(),
+		"temperature": PackedFloat32Array(),
+		"moisture": PackedFloat32Array(),
+		"land_mask": PackedByteArray(),
+		"beach_mask": PackedByteArray(),
+	}
+	if startup_state == null or size <= 0:
+		return out
+	var h_raw: PackedFloat32Array = PackedFloat32Array()
+	var temp: PackedFloat32Array = PackedFloat32Array()
+	var moist: PackedFloat32Array = PackedFloat32Array()
+	var land: PackedByteArray = PackedByteArray()
+	var beach: PackedByteArray = PackedByteArray()
+	var h_raw_v: Variant = startup_state.get("world_height_raw")
+	var temp_v: Variant = startup_state.get("world_temperature")
+	var moist_v: Variant = startup_state.get("world_moisture")
+	var land_v: Variant = startup_state.get("world_land_mask")
+	var beach_v: Variant = startup_state.get("world_beach_mask")
+	if h_raw_v is PackedFloat32Array:
+		h_raw = h_raw_v
+	if temp_v is PackedFloat32Array:
+		temp = temp_v
+	if moist_v is PackedFloat32Array:
+		moist = moist_v
+	if land_v is PackedByteArray:
+		land = land_v
+	if beach_v is PackedByteArray:
+		beach = beach_v
+	if h_raw.size() == size:
+		out["height_raw"] = h_raw.duplicate()
+	if temp.size() == size:
+		out["temperature"] = temp.duplicate()
+	if moist.size() == size:
+		out["moisture"] = moist.duplicate()
+	if land.size() == size:
+		out["land_mask"] = land.duplicate()
+	if beach.size() == size:
+		out["beach_mask"] = beach.duplicate()
+	return out
+
+func _enforce_snapshot_anchor(snapshot: PackedInt32Array, w: int, h: int, anchor_x: int, anchor_y: int, anchor_biome: int) -> PackedInt32Array:
+	var out: PackedInt32Array = snapshot.duplicate()
+	if out.size() != w * h:
+		return out
+	var ax0: int = posmod(anchor_x, max(1, w))
+	var ay0: int = clamp(anchor_y, 0, max(1, h) - 1)
+	var bid: int = anchor_biome if anchor_biome > 1 else 7
+	for oy in range(-1, 2):
+		for ox in range(-1, 2):
+			var ax: int = posmod(ax0 + ox, w)
+			var ay: int = clamp(ay0 + oy, 0, h - 1)
+			out[ax + ay * w] = bid
+	return out
 
 func _on_cursor_exited() -> void:
 	if info_label:

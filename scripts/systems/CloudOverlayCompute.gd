@@ -1,40 +1,26 @@
 # File: res://scripts/systems/CloudOverlayCompute.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-var CLOUD_SHADER_FILE: RDShaderFile = load("res://shaders/cloud_overlay.glsl")
+const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const CLOUD_SHADER_PATH: String = "res://shaders/cloud_overlay.glsl"
 
 var _rd: RenderingDevice
 var _shader: RID
 var _pipeline: RID
 
-func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
-	if file == null:
-		return null
-	var versions: Array = file.get_version_list()
-	if versions.is_empty():
-		return null
-	var chosen_version: Variant = null
-	for v in versions:
-		if v == null:
-			continue
-		if chosen_version == null:
-			chosen_version = v
-		if String(v) == "vulkan":
-			chosen_version = v
-			break
-	if chosen_version == null:
-		return null
-	return file.get_spirv(chosen_version)
-
-func _ensure() -> void:
-	if _rd == null:
-		_rd = RenderingServer.get_rendering_device()
-	if not _shader.is_valid():
-		var s: RDShaderSPIRV = _get_spirv(CLOUD_SHADER_FILE)
-		if s != null:
-			_shader = _rd.shader_create_from_spirv(s)
-	if not _pipeline.is_valid() and _shader.is_valid():
-		_pipeline = _rd.compute_pipeline_create(_shader)
+func _ensure() -> bool:
+	var state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_shader,
+		_pipeline,
+		CLOUD_SHADER_PATH,
+		"cloud_overlay"
+	)
+	_rd = state.get("rd", null)
+	_shader = state.get("shader", RID())
+	_pipeline = state.get("pipeline", RID())
+	return VariantCasts.to_bool(state.get("ok", false))
 
 func compute_clouds_to_buffer(
 		w: int,
@@ -52,7 +38,8 @@ func compute_clouds_to_buffer(
 			out_buf: RID
 		) -> bool:
 	"""GPU-only: write clouds into an existing buffer (no readback)."""
-	_ensure()
+	if not _ensure():
+		return false
 	if not _pipeline.is_valid():
 		return false
 	if not temp_buf.is_valid() or not moist_buf.is_valid() or not land_buf.is_valid() or not light_buf.is_valid() or not biome_buf.is_valid() or not height_buf.is_valid() or not wind_u_buf.is_valid() or not wind_v_buf.is_valid() or not out_buf.is_valid():
@@ -78,6 +65,9 @@ func compute_clouds_to_buffer(
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "CloudOverlayCompute"):
+		_rd.free_rid(u_set)
+		return false
 	var gx: int = int(ceil(float(w) / 16.0))
 	var gy: int = int(ceil(float(h) / 16.0))
 	var cl := _rd.compute_list_begin()
@@ -88,3 +78,8 @@ func compute_clouds_to_buffer(
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
 	return true
+
+func cleanup() -> void:
+	ComputeShaderBase.free_rids(_rd, [_pipeline, _shader])
+	_pipeline = RID()
+	_shader = RID()

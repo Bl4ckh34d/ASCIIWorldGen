@@ -1,4 +1,5 @@
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # Biome updater: GPU-only classification and post, with optional cryosphere-only mode.
 
@@ -42,6 +43,14 @@ const MAX_CRYOSPHERE_TRANSITION_DT_DAYS: float = 1.0
 var run_full_biome: bool = true
 var run_cryosphere: bool = true
 
+func _cleanup_if_supported(obj: Variant) -> void:
+	if obj == null:
+		return
+	if obj is Object:
+		var o: Object = obj as Object
+		if o.has_method("cleanup"):
+			o.call("cleanup")
+
 func initialize(gen: Object) -> void:
 	generator = gen
 	_biome_tex = load("res://scripts/systems/BiomeTextureCompute.gd").new()
@@ -54,8 +63,30 @@ func initialize(gen: Object) -> void:
 	_transition_compute = load("res://scripts/systems/BiomeTransitionCompute.gd").new()
 
 func set_update_modes(full_biome_enabled: bool, cryosphere_enabled: bool) -> void:
-	run_full_biome = bool(full_biome_enabled)
-	run_cryosphere = bool(cryosphere_enabled)
+	run_full_biome = VariantCasts.to_bool(full_biome_enabled)
+	run_cryosphere = VariantCasts.to_bool(cryosphere_enabled)
+
+func cleanup() -> void:
+	_cleanup_if_supported(_biome_tex)
+	_cleanup_if_supported(_lava_tex)
+	_cleanup_if_supported(_blend)
+	_cleanup_if_supported(_biome_compute)
+	_cleanup_if_supported(_biome_post_compute)
+	_cleanup_if_supported(_lithology_compute)
+	_cleanup_if_supported(_fertility_compute)
+	_cleanup_if_supported(_transition_compute)
+	_biome_tex = null
+	_lava_tex = null
+	_blend = null
+	_biome_compute = null
+	_biome_post_compute = null
+	_lithology_compute = null
+	_fertility_compute = null
+	_transition_compute = null
+	_height_cache_size = -1
+	_height_cache_refresh_counter = 0
+	_transition_epoch = 0
+	generator = null
 
 func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null:
@@ -150,6 +181,8 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		}
 		params["biome_noise_strength_c"] = 0.28
 		params["biome_moist_jitter"] = 0.012
+		params["biome_smoothing_enabled"] = true
+		params["biome_smoothing_passes"] = 1
 		# Keep biome noise phase stable across ticks to avoid large reclassification jumps.
 		params["biome_phase"] = generator.biome_phase if ("biome_phase" in generator) else 0.0
 		params["biome_moist_jitter2"] = 0.008
@@ -169,19 +202,31 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 
 		_height_cache_refresh_counter += 1
 		if _height_cache_size != size or _height_cache_refresh_counter >= HEIGHT_MINMAX_REFRESH_INTERVAL:
-			var min_h := 1e9
-			var max_h := -1e9
-			for hv in generator.last_height:
-				if hv < min_h:
-					min_h = hv
-				if hv > max_h:
-					max_h = hv
-			_height_min_cache = min_h
-			_height_max_cache = max_h
+			var metrics: Dictionary = {}
+			if "get_world_state_metrics_snapshot" in generator:
+				metrics = generator.get_world_state_metrics_snapshot()
+			if metrics.is_empty():
+				var min_h := 1e9
+				var max_h := -1e9
+				for hv in generator.last_height:
+					if hv < min_h:
+						min_h = hv
+					if hv > max_h:
+						max_h = hv
+				_height_min_cache = min_h
+				_height_max_cache = max_h
+			else:
+				_height_min_cache = float(metrics.get("min_h", _height_min_cache))
+				_height_max_cache = float(metrics.get("max_h", _height_max_cache))
+				params["world_state_metrics"] = metrics
 			_height_cache_size = size
 			_height_cache_refresh_counter = 0
 		params["min_h"] = _height_min_cache
 		params["max_h"] = _height_max_cache
+		if not params.has("world_state_metrics") and "get_world_state_metrics_snapshot" in generator:
+			var metrics_now: Dictionary = generator.get_world_state_metrics_snapshot()
+			if not metrics_now.is_empty():
+				params["world_state_metrics"] = metrics_now
 
 		if rock_buf.is_valid() and biome_tmp.is_valid() and flow_buf.is_valid() and fertility_buf.is_valid() and lava_buf.is_valid():
 			var lith_params := {
@@ -319,10 +364,14 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		var btex: Texture2D = _biome_tex.update_from_buffer(w, h, biome_buf)
 		if btex and "set_biome_texture_override" in generator:
 			generator.set_biome_texture_override(btex)
+		elif "set_biome_texture_override" in generator:
+			generator.set_biome_texture_override(null)
 	if lava_changed and _lava_tex:
 		var ltex: Texture2D = _lava_tex.update_from_buffer(w, h, lava_buf)
 		if ltex and "set_lava_texture_override" in generator:
 			generator.set_lava_texture_override(ltex)
+		elif "set_lava_texture_override" in generator:
+			generator.set_lava_texture_override(null)
 	var dirty := PackedStringArray()
 	if biome_changed:
 		dirty.append("biome")
@@ -433,5 +482,5 @@ func _copy_u32_buffer(src: RID, dst: RID, count: int) -> bool:
 	if not src.is_valid() or not dst.is_valid() or count <= 0:
 		return false
 	if "dispatch_copy_u32" in generator:
-		return bool(generator.dispatch_copy_u32(src, dst, count))
+		return VariantCasts.to_bool(generator.dispatch_copy_u32(src, dst, count))
 	return false

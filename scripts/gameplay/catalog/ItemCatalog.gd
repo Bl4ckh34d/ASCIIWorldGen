@@ -34,6 +34,7 @@ static func all_items() -> Dictionary:
 				"type": "damage",
 				"power": 16,
 				"target": "enemy",
+				"damage_type": "explosive",
 			},
 		},
 		"Bronze Sword": {

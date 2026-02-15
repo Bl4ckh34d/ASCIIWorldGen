@@ -1,4 +1,5 @@
 extends CanvasLayer
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
 const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
@@ -21,6 +22,7 @@ signal closed
 @onready var text_speed_value_label: Label = %TextSpeedValue
 @onready var auto_battle_check: CheckBox = %AutoBattleCheck
 @onready var apply_settings_button: Button = %ApplySettingsButton
+@onready var settings_dialog_bridge: AcceptDialog = $SettingsDialogBridge
 @onready var save_slot_option: OptionButton = %SaveSlotOption
 @onready var save_button: Button = %SaveButton
 @onready var load_button: Button = %LoadButton
@@ -88,7 +90,12 @@ func _wire_buttons() -> void:
 		quit_button.pressed.connect(_on_quit_pressed)
 	if close_button and not close_button.pressed.is_connected(_on_close_pressed):
 		close_button.pressed.connect(_on_close_pressed)
-	if apply_settings_button and not apply_settings_button.pressed.is_connected(_on_apply_settings_pressed):
+	if settings_dialog_bridge != null and settings_dialog_bridge.has_signal("apply_requested"):
+		var apply_cb := Callable(self, "_on_settings_dialog_apply_requested")
+		if not settings_dialog_bridge.is_connected("apply_requested", apply_cb):
+			settings_dialog_bridge.connect("apply_requested", apply_cb)
+	elif apply_settings_button and not apply_settings_button.pressed.is_connected(_on_apply_settings_pressed):
+		# Fallback for scenes without SettingsDialogBridge wiring.
 		apply_settings_button.pressed.connect(_on_apply_settings_pressed)
 
 func _wire_inventory_v2_controls() -> void:
@@ -112,6 +119,7 @@ func _wire_save_slots() -> void:
 	save_slot_option.add_item("Slot 2", 1)
 	save_slot_option.add_item("Slot 3", 2)
 	save_slot_option.select(0)
+	_refresh_save_slot_labels()
 
 func _apply_tab_titles() -> void:
 	if tabs == null:
@@ -136,6 +144,7 @@ func open_overlay(context_title: String = "Menu") -> void:
 	if status_label:
 		status_label.text = "Context: %s" % context_title
 	_sync_settings_controls()
+	_refresh_save_slot_labels()
 	_refresh_all_ui()
 	if game_events and game_events.has_signal("menu_opened"):
 		game_events.emit_signal("menu_opened", context_title)
@@ -168,18 +177,20 @@ func _on_inventory_changed(_inventory_data: Dictionary) -> void:
 func _on_save_pressed() -> void:
 	if game_state == null or not game_state.has_method("save_to_path"):
 		return
-	var ok_save: bool = bool(game_state.save_to_path(_selected_save_path()))
+	var ok_save: bool = VariantCasts.to_bool(game_state.save_to_path(_selected_save_path()))
 	if settings_text:
 		settings_text.text = "Saved." if ok_save else "Save failed."
+	_refresh_save_slot_labels()
 	if ok_save:
 		_refresh_snapshot()
 
 func _on_load_pressed() -> void:
 	if game_state == null or not game_state.has_method("load_from_path"):
 		return
-	var ok_load: bool = bool(game_state.load_from_path(_selected_save_path()))
+	var ok_load: bool = VariantCasts.to_bool(game_state.load_from_path(_selected_save_path()))
 	if settings_text:
 		settings_text.text = "Loaded." if ok_load else "Load failed (missing file/schema mismatch)."
+	_refresh_save_slot_labels()
 	if ok_load:
 		_sync_settings_controls()
 		_refresh_all_ui()
@@ -191,13 +202,21 @@ func _on_close_pressed() -> void:
 	close_overlay()
 
 func _on_apply_settings_pressed() -> void:
+	# Fallback path when SettingsDialogBridge is unavailable.
 	if game_state == null or not game_state.has_method("apply_settings_patch"):
 		return
 	var patch: Dictionary = {
 		"encounter_rate_multiplier": float(encounter_slider.value) if encounter_slider else 1.0,
 		"text_speed": float(text_speed_slider.value) if text_speed_slider else 1.0,
-		"auto_battle_enabled": bool(auto_battle_check.button_pressed) if auto_battle_check else false,
+		"auto_battle_enabled": VariantCasts.to_bool(auto_battle_check.button_pressed) if auto_battle_check else false,
 	}
+	game_state.apply_settings_patch(patch)
+	_sync_settings_controls()
+	_refresh_snapshot()
+
+func _on_settings_dialog_apply_requested(patch: Dictionary) -> void:
+	if game_state == null or not game_state.has_method("apply_settings_patch"):
+		return
 	game_state.apply_settings_patch(patch)
 	_sync_settings_controls()
 	_refresh_snapshot()
@@ -227,7 +246,9 @@ func _sync_settings_controls() -> void:
 		text_speed_slider.value = float(settings_data.get("text_speed", 1.0))
 		text_speed_slider.set_block_signals(false)
 	if auto_battle_check:
-		auto_battle_check.button_pressed = bool(settings_data.get("auto_battle_enabled", false))
+		auto_battle_check.button_pressed = VariantCasts.to_bool(settings_data.get("auto_battle_enabled", false))
+	if settings_dialog_bridge != null and "set_settings" in settings_dialog_bridge:
+		settings_dialog_bridge.set_settings(settings_data)
 	_update_setting_value_labels()
 
 func _selected_save_path() -> String:
@@ -236,12 +257,62 @@ func _selected_save_path() -> String:
 		slot_idx = save_slot_option.selected
 	return SceneContracts.save_slot_path(slot_idx)
 
+func _refresh_save_slot_labels() -> void:
+	if save_slot_option == null:
+		return
+	var selected_idx: int = save_slot_option.selected
+	for i in range(3):
+		var label: String = _save_slot_base_label(i)
+		if game_state != null and game_state.has_method("get_save_slot_metadata"):
+			var md: Dictionary = game_state.get_save_slot_metadata(SceneContracts.save_slot_path(i))
+			label = _format_save_slot_label(i, md)
+		save_slot_option.set_item_text(i, label)
+	if selected_idx >= 0 and selected_idx < save_slot_option.get_item_count():
+		save_slot_option.select(selected_idx)
+
+func _save_slot_base_label(slot_idx: int) -> String:
+	return "Slot %d" % (slot_idx + 1)
+
+func _format_save_slot_label(slot_idx: int, md: Dictionary) -> String:
+	var base: String = _save_slot_base_label(slot_idx)
+	if typeof(md) != TYPE_DICTIONARY or not VariantCasts.to_bool(md.get("exists", false)):
+		return base + " - Empty"
+	if VariantCasts.to_bool(md.get("corrupt", false)):
+		return base + " - Corrupt"
+	var t: String = String(md.get("time_compact", "")).strip_edges()
+	if t.is_empty():
+		t = _format_save_unix_short(int(md.get("saved_unix", 0)))
+	var loc: String = String(md.get("location_label", "")).strip_edges()
+	var avg_lv: float = max(0.0, float(md.get("party_avg_level", 0.0)))
+	var lv_text: String = "Lv %.1f" % avg_lv if avg_lv > 0.0 else "Lv ?"
+	if loc.is_empty():
+		return "%s - %s | %s" % [base, t, lv_text]
+	return "%s - %s | %s | %s" % [base, t, loc, lv_text]
+
+func _format_save_unix_short(unix_ts: int) -> String:
+	if unix_ts <= 0:
+		return "Unknown Time"
+	var dt: Dictionary = Time.get_datetime_dict_from_unix_time(unix_ts)
+	var y: int = int(dt.get("year", 0))
+	var m: int = int(dt.get("month", 0))
+	var d: int = int(dt.get("day", 0))
+	var h: int = int(dt.get("hour", 0))
+	var mi: int = int(dt.get("minute", 0))
+	if y <= 0:
+		return "Unknown Time"
+	return "%04d-%02d-%02d %02d:%02d" % [y, m, d, h, mi]
+
 func _refresh_snapshot() -> void:
 	if game_state == null or not game_state.has_method("get_menu_snapshot"):
 		_set_text(overview_text, PackedStringArray(["No game state available."]))
 		return
 	var snap: Dictionary = game_state.get_menu_snapshot()
-	_set_text(overview_text, snap.get("overview_lines", PackedStringArray()))
+	var overview_lines: PackedStringArray = _to_lines(snap.get("overview_lines", PackedStringArray()))
+	if game_state.has_method("can_rest_until_morning"):
+		var rest_gate: Dictionary = game_state.can_rest_until_morning()
+		if VariantCasts.to_bool(rest_gate.get("ok", false)):
+			overview_lines.append("Rest available here: press R to rest until morning.")
+	_set_text(overview_text, overview_lines)
 	_refresh_party_tab()
 	_set_text(quests_text, snap.get("quest_lines", PackedStringArray()))
 	if settings_text:
@@ -315,11 +386,12 @@ func _refresh_party_tab() -> void:
 		vbox.add_child(mp)
 
 		var stats_label := Label.new()
-		stats_label.text = "STR %d  DEF %d  AGI %d  INT %d" % [
-			int(entry.strength),
-			int(entry.defense),
-			int(entry.agility),
-			int(entry.intellect),
+		var totals: Dictionary = _member_total_stats(entry)
+		stats_label.text = "STR %s  DEF %s  AGI %s  INT %s" % [
+			_fmt_total_stat(int(totals.get("strength", int(entry.strength))), int(entry.strength)),
+			_fmt_total_stat(int(totals.get("defense", int(entry.defense))), int(entry.defense)),
+			_fmt_total_stat(int(totals.get("agility", int(entry.agility))), int(entry.agility)),
+			_fmt_total_stat(int(totals.get("intellect", int(entry.intellect))), int(entry.intellect)),
 		]
 		vbox.add_child(stats_label)
 
@@ -332,6 +404,46 @@ func _party_members() -> Array:
 	if p == null:
 		return []
 	return p.members
+
+func _member_total_stats(entry: Variant) -> Dictionary:
+	if entry == null:
+		return {
+			"strength": 0,
+			"defense": 0,
+			"agility": 0,
+			"intellect": 0,
+		}
+	var out: Dictionary = {
+		"strength": int(entry.strength),
+		"defense": int(entry.defense),
+		"agility": int(entry.agility),
+		"intellect": int(entry.intellect),
+	}
+	var eq: Variant = entry.equipment
+	if typeof(eq) != TYPE_DICTIONARY:
+		return out
+	var equipment: Dictionary = eq as Dictionary
+	for slot in ["weapon", "armor", "accessory"]:
+		var item_name: String = String(equipment.get(slot, ""))
+		if item_name.is_empty():
+			continue
+		var item: Dictionary = ItemCatalog.get_item(item_name)
+		var bonuses: Variant = item.get("stat_bonuses", {})
+		if typeof(bonuses) != TYPE_DICTIONARY:
+			continue
+		var b: Dictionary = bonuses as Dictionary
+		for k in b.keys():
+			var key: String = String(k)
+			if out.has(key):
+				out[key] = int(out.get(key, 0)) + int(b.get(k, 0))
+	return out
+
+func _fmt_total_stat(total: int, base: int) -> String:
+	var bonus: int = int(total) - int(base)
+	if bonus == 0:
+		return str(total)
+	var sign: String = "+" if bonus > 0 else ""
+	return "%d(%s%d)" % [total, sign, bonus]
 
 func _find_member_by_id(member_id: String) -> Variant:
 	for m in _party_members():
@@ -677,8 +789,23 @@ func _unhandled_input(event: InputEvent) -> void:
 			vp.set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_R:
+			_try_rest_until_morning()
+			if vp:
+				vp.set_input_as_handled()
+			return
 		if event.keycode == KEY_TAB:
 			close_overlay()
 			if vp:
 				vp.set_input_as_handled()
 			return
+
+func _try_rest_until_morning() -> void:
+	if game_state == null or not game_state.has_method("rest_until_morning"):
+		return
+	var out: Dictionary = game_state.rest_until_morning()
+	var msg: String = String(out.get("message", ""))
+	if settings_text and not msg.is_empty():
+		settings_text.text = msg
+	if VariantCasts.to_bool(out.get("ok", false)):
+		_refresh_all_ui()

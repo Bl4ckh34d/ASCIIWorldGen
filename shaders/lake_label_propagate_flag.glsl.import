@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cupnhsurg5hi8"
+path="res://.godot/imported/lake_label_propagate_flag.glsl-32c8962c748c56cf7127104fbfb91557.res"
+
+[deps]
+
+source_file="res://shaders/lake_label_propagate_flag.glsl"
+dest_files=["res://.godot/imported/lake_label_propagate_flag.glsl-32c8962c748c56cf7127104fbfb91557.res"]
+
+[params]
+

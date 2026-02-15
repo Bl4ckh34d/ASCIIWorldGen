@@ -89,6 +89,8 @@ func apply_gpu_buffers(
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 8; u.add_id(rock_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 9; u.add_id(flow_dir_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	if not u_set.is_valid():
+		return false
 
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h, biome_ice_sheet_id, biome_glacier_id, biome_desert_ice_id, 0, 0, 0])
@@ -119,3 +121,13 @@ func apply_gpu_buffers(
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
 	return true
+
+func cleanup() -> void:
+	if _rd != null:
+		if _pipeline.is_valid():
+			_rd.free_rid(_pipeline)
+		if _shader.is_valid():
+			_rd.free_rid(_shader)
+	_pipeline = RID()
+	_shader = RID()
+	_rd = null

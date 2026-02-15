@@ -1,9 +1,13 @@
 # File: res://scripts/systems/RiverCompute.gd
 extends RefCounted
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const SEED_NMS_SHADER := preload("res://shaders/river_seed_nms.glsl")
-const TRACE_SHADER := preload("res://shaders/river_trace.glsl")
-var CLEAR_U32_SHADER_FILE: RDShaderFile = load("res://shaders/clear_u32.glsl")
+const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
+
+const SEED_SHADER_PATH: String = "res://shaders/river_seed_nms.glsl"
+const TRACE_SHADER_PATH: String = "res://shaders/river_trace.glsl"
+const CLEAR_U32_SHADER_PATH: String = "res://shaders/clear_u32.glsl"
 
 var _rd: RenderingDevice
 var _seed_shader: RID
@@ -15,7 +19,20 @@ var _clear_pipeline: RID
 var _seeds_buf: RID
 var _front_a_buf: RID
 var _front_b_buf: RID
+var _active_flag_buf: RID
 var _buf_size: int = 0
+var _buf_mgr: GPUBufferManager = null
+var _last_trace_stats: Dictionary = {
+	"requested_max_iters": 0,
+	"executed_iters": 0,
+	"early_out": false,
+	"size_cells": 0,
+	"seed_threshold": 0.0,
+	"min_len": 0,
+}
+
+func _init() -> void:
+	_buf_mgr = GPUBufferManager.new()
 
 func _river_max_iters(w: int, h: int, min_len: int) -> int:
 	# Gameplay-oriented cap: shorter traces keep runtime predictable.
@@ -23,64 +40,68 @@ func _river_max_iters(w: int, h: int, min_len: int) -> int:
 	var cap: int = min(w + h, 96)
 	return max(min_len, cap)
 
-func _get_spirv(file: RDShaderFile) -> RDShaderSPIRV:
-	if file == null:
-		return null
-	var versions: Array = file.get_version_list()
-	if versions.is_empty():
-		return null
-	var chosen_version: Variant = null
-	for v in versions:
-		if v == null:
-			continue
-		if chosen_version == null:
-			chosen_version = v
-		if String(v) == "vulkan":
-			chosen_version = v
-			break
-	if chosen_version == null:
-		return null
-	return file.get_spirv(chosen_version)
+func _ensure() -> bool:
+	var seed_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_seed_shader,
+		_seed_pipeline,
+		SEED_SHADER_PATH,
+		"river_seed_nms"
+	)
+	_rd = seed_state.get("rd", null)
+	_seed_shader = seed_state.get("shader", RID())
+	_seed_pipeline = seed_state.get("pipeline", RID())
+	if not VariantCasts.to_bool(seed_state.get("ok", false)):
+		return false
 
-func _ensure() -> void:
-	if _rd == null:
-		_rd = RenderingServer.get_rendering_device()
-	if not _seed_shader.is_valid():
-		var s := _get_spirv(SEED_NMS_SHADER)
-		if s == null:
-			return
-		_seed_shader = _rd.shader_create_from_spirv(s)
-	if not _seed_pipeline.is_valid() and _seed_shader.is_valid():
-		_seed_pipeline = _rd.compute_pipeline_create(_seed_shader)
-	if not _trace_shader.is_valid():
-		var s2 := _get_spirv(TRACE_SHADER)
-		if s2 == null:
-			return
-		_trace_shader = _rd.shader_create_from_spirv(s2)
-	if not _trace_pipeline.is_valid() and _trace_shader.is_valid():
-		_trace_pipeline = _rd.compute_pipeline_create(_trace_shader)
-	if not _clear_shader.is_valid():
-		var sc: RDShaderSPIRV = _get_spirv(CLEAR_U32_SHADER_FILE)
-		if sc == null:
-			return
-		_clear_shader = _rd.shader_create_from_spirv(sc)
-	if not _clear_pipeline.is_valid() and _clear_shader.is_valid():
-		_clear_pipeline = _rd.compute_pipeline_create(_clear_shader)
+	var trace_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_trace_shader,
+		_trace_pipeline,
+		TRACE_SHADER_PATH,
+		"river_trace"
+	)
+	_trace_shader = trace_state.get("shader", RID())
+	_trace_pipeline = trace_state.get("pipeline", RID())
+	if not VariantCasts.to_bool(trace_state.get("ok", false)):
+		return false
+
+	var clear_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+		_rd,
+		_clear_shader,
+		_clear_pipeline,
+		CLEAR_U32_SHADER_PATH,
+		"clear_u32"
+	)
+	_clear_shader = clear_state.get("shader", RID())
+	_clear_pipeline = clear_state.get("pipeline", RID())
+	return VariantCasts.to_bool(clear_state.get("ok", false))
 
 func _ensure_frontier_buffers(size: int) -> void:
-	if _buf_size == size and _seeds_buf.is_valid() and _front_a_buf.is_valid() and _front_b_buf.is_valid():
+	if _buf_size == size and _seeds_buf.is_valid() and _front_a_buf.is_valid() and _front_b_buf.is_valid() and _active_flag_buf.is_valid():
 		return
+	if _buf_mgr == null:
+		_buf_mgr = GPUBufferManager.new()
 	_buf_size = size
-	if _seeds_buf.is_valid():
-		_rd.free_rid(_seeds_buf)
-	if _front_a_buf.is_valid():
-		_rd.free_rid(_front_a_buf)
-	if _front_b_buf.is_valid():
-		_rd.free_rid(_front_b_buf)
 	var bytes: int = size * 4
-	_seeds_buf = _rd.storage_buffer_create(bytes)
-	_front_a_buf = _rd.storage_buffer_create(bytes)
-	_front_b_buf = _rd.storage_buffer_create(bytes)
+	_seeds_buf = _buf_mgr.ensure_buffer("river_frontier_seeds", bytes)
+	_front_a_buf = _buf_mgr.ensure_buffer("river_frontier_a", bytes)
+	_front_b_buf = _buf_mgr.ensure_buffer("river_frontier_b", bytes)
+	_active_flag_buf = _buf_mgr.ensure_buffer("river_frontier_active", 4)
+
+func _read_active_flag() -> int:
+	if _rd == null or not _active_flag_buf.is_valid():
+		return 1
+	var bytes: PackedByteArray = _rd.buffer_get_data(_active_flag_buf, 0, 4)
+	if bytes.size() < 4:
+		return 1
+	var ints: PackedInt32Array = bytes.to_int32_array()
+	if ints.size() <= 0:
+		return 1
+	return int(ints[0])
+
+func get_last_trace_stats() -> Dictionary:
+	return _last_trace_stats.duplicate(true)
 
 func trace_rivers_gpu_buffers(
 		w: int, h: int,
@@ -94,7 +115,9 @@ func trace_rivers_gpu_buffers(
 		out_river_buf: RID,
 		clear_output: bool = true
 	) -> bool:
-	_ensure()
+	if not _ensure():
+		_last_trace_stats = {"requested_max_iters": 0, "executed_iters": 0, "early_out": false, "size_cells": 0, "seed_threshold": float(threshold), "min_len": int(min_len)}
+		return false
 	if not _seed_pipeline.is_valid() or not _trace_pipeline.is_valid() or not _clear_pipeline.is_valid():
 		return false
 	if not land_buf.is_valid() or not lake_buf.is_valid() or not flow_dir_buf.is_valid() or not flow_accum_buf.is_valid() or not out_river_buf.is_valid():
@@ -114,6 +137,8 @@ func trace_rivers_gpu_buffers(
 		var z_clear := PackedByteArray()
 		z_clear.resize(pad_clear)
 		pc_c.append_array(z_clear)
+	if not ComputeShaderBase.validate_push_constant_size(pc_c, 16, "RiverCompute.clear"):
+		return false
 	# Clear river output only when requested by caller (tile scheduler controls this).
 	if clear_output:
 		uniforms_c.clear()
@@ -155,6 +180,9 @@ func trace_rivers_gpu_buffers(
 	if pad_seed > 0:
 		var z_seed := PackedByteArray(); z_seed.resize(pad_seed)
 		pc.append_array(z_seed)
+	if not ComputeShaderBase.validate_push_constant_size(pc, 32, "RiverCompute.seed"):
+		_rd.free_rid(u_set)
+		return false
 	var gx: int = int(ceil(float(w) / 16.0)); var gy: int = int(ceil(float(h) / 16.0))
 	var cl := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(cl, _seed_pipeline)
@@ -178,7 +206,10 @@ func trace_rivers_gpu_buffers(
 	_rd.compute_list_end()
 	_rd.free_rid(u_set_c)
 	var max_iters: int = _river_max_iters(w, h, min_len)
+	var executed_iters: int = 0
+	var early_out: bool = false
 	for _iter in range(max_iters):
+		executed_iters = _iter + 1
 		uniforms.clear()
 		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(flow_dir_buf); uniforms.append(u)
 		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(land_buf); uniforms.append(u)
@@ -186,12 +217,42 @@ func trace_rivers_gpu_buffers(
 		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(buf_front_in); uniforms.append(u)
 		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 4; u.add_id(buf_front_out); uniforms.append(u)
 		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(out_river_buf); uniforms.append(u)
+		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(_active_flag_buf); uniforms.append(u)
 		u_set = _rd.uniform_set_create(uniforms, _trace_shader, 0)
+		# Reset "frontier has work" flag before this trace step.
+		uniforms_c.clear()
+		var uc_flag := RDUniform.new()
+		uc_flag.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+		uc_flag.binding = 0
+		uc_flag.add_id(_active_flag_buf)
+		uniforms_c.append(uc_flag)
+		u_set_c = _rd.uniform_set_create(uniforms_c, _clear_shader, 0)
+		var pc_flag := PackedByteArray()
+		pc_flag.append_array(PackedInt32Array([1]).to_byte_array())
+		var pad_flag := (16 - (pc_flag.size() % 16)) % 16
+		if pad_flag > 0:
+			var z_flag := PackedByteArray()
+			z_flag.resize(pad_flag)
+			pc_flag.append_array(z_flag)
+		if not ComputeShaderBase.validate_push_constant_size(pc_flag, 16, "RiverCompute.active_flag_clear"):
+			_rd.free_rid(u_set_c)
+			_rd.free_rid(u_set)
+			return false
+		var clear_flag_list := _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(clear_flag_list, _clear_pipeline)
+		_rd.compute_list_bind_uniform_set(clear_flag_list, u_set_c, 0)
+		_rd.compute_list_set_push_constant(clear_flag_list, pc_flag, pc_flag.size())
+		_rd.compute_list_dispatch(clear_flag_list, 1, 1, 1)
+		_rd.compute_list_end()
+		_rd.free_rid(u_set_c)
 		pc = PackedByteArray(); var total_arr := PackedInt32Array([size]); pc.append_array(total_arr.to_byte_array())
 		var pad_trace := (16 - (pc.size() % 16)) % 16
 		if pad_trace > 0:
 			var z_trace := PackedByteArray(); z_trace.resize(pad_trace)
 			pc.append_array(z_trace)
+		if not ComputeShaderBase.validate_push_constant_size(pc, 16, "RiverCompute.trace"):
+			_rd.free_rid(u_set)
+			return false
 		var g1d := int(ceil(float(size) / 256.0))
 		cl = _rd.compute_list_begin()
 		_rd.compute_list_bind_compute_pipeline(cl, _trace_pipeline)
@@ -199,6 +260,7 @@ func trace_rivers_gpu_buffers(
 		_rd.compute_list_set_push_constant(cl, pc, pc.size())
 		_rd.compute_list_dispatch(cl, g1d, 1, 1)
 		_rd.compute_list_end()
+		var active: int = _read_active_flag()
 		# swap frontiers
 		var tmp := buf_front_in
 		buf_front_in = buf_front_out
@@ -212,6 +274,10 @@ func trace_rivers_gpu_buffers(
 		if pad_clear > 0:
 			var z_clear3 := PackedByteArray(); z_clear3.resize(pad_clear)
 			pc_c.append_array(z_clear3)
+		if not ComputeShaderBase.validate_push_constant_size(pc_c, 16, "RiverCompute.frontier_clear"):
+			_rd.free_rid(u_set_c)
+			_rd.free_rid(u_set)
+			return false
 		clear_frontier_list = _rd.compute_list_begin()
 		_rd.compute_list_bind_compute_pipeline(clear_frontier_list, _clear_pipeline)
 		_rd.compute_list_bind_uniform_set(clear_frontier_list, u_set_c, 0)
@@ -220,5 +286,39 @@ func trace_rivers_gpu_buffers(
 		_rd.compute_list_end()
 		_rd.free_rid(u_set_c)
 		_rd.free_rid(u_set)
+		if active == 0:
+			early_out = true
+			break
+	_last_trace_stats = {
+		"requested_max_iters": max_iters,
+		"executed_iters": executed_iters,
+		"early_out": early_out,
+		"size_cells": size,
+		"seed_threshold": float(threshold),
+		"min_len": int(min_len),
+	}
 	# GPU-only: skip CPU pruning in this path
 	return true
+
+func cleanup() -> void:
+	if _buf_mgr != null:
+		_buf_mgr.cleanup()
+	ComputeShaderBase.free_rids(_rd, [
+		_seed_pipeline,
+		_seed_shader,
+		_trace_pipeline,
+		_trace_shader,
+		_clear_pipeline,
+		_clear_shader,
+	])
+	_seed_pipeline = RID()
+	_seed_shader = RID()
+	_trace_pipeline = RID()
+	_trace_shader = RID()
+	_clear_pipeline = RID()
+	_clear_shader = RID()
+	_seeds_buf = RID()
+	_front_a_buf = RID()
+	_front_b_buf = RID()
+	_active_flag_buf = RID()
+	_buf_size = 0

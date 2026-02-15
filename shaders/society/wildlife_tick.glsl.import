@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://d2wao1e4668io"
+path="res://.godot/imported/wildlife_tick.glsl-8cf9ae1fdf6fa09a020407b9b434f9db.res"
+
+[deps]
+
+source_file="res://shaders/society/wildlife_tick.glsl"
+dest_files=["res://.godot/imported/wildlife_tick.glsl-8cf9ae1fdf6fa09a020407b9b434f9db.res"]
+
+[params]
+

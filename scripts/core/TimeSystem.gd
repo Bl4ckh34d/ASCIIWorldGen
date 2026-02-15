@@ -8,9 +8,12 @@ var time_scale: float = 1.0  # Base speed (1x)
 var tick_days: float = 1.0 / 1440.0 # 1 minute per tick (much smaller time steps)
 var simulation_time_days: float = 0.0
 var days_per_year: float = 365.0  # Configurable year length
+var tick_hz: float = 60.0
 const MAX_SUBSTEP_DAYS: float = 6.0
 const MAX_SUBSTEPS_PER_TIMER_TICK: int = 64
 const MAX_ADVANCE_DAYS_PER_TIMER_TICK: float = MAX_SUBSTEP_DAYS * float(MAX_SUBSTEPS_PER_TIMER_TICK)
+const MIN_TICK_HZ: float = 1.0
+const MAX_TICK_HZ: float = 240.0
 
 var _accum_days: float = 0.0
 var _timer: Timer
@@ -18,9 +21,15 @@ var _timer: Timer
 func _ready() -> void:
 	# Create a precise timer for 60 FPS simulation ticks
 	_timer = Timer.new()
-	_timer.wait_time = 1.0 / 60.0
+	_apply_timer_wait_time()
 	_timer.timeout.connect(_on_timer_tick)
 	add_child(_timer)
+
+func _apply_timer_wait_time() -> void:
+	tick_hz = clamp(float(tick_hz), MIN_TICK_HZ, MAX_TICK_HZ)
+	var wait_s: float = 1.0 / tick_hz
+	if _timer != null:
+		_timer.wait_time = wait_s
 
 func _on_timer_tick() -> void:
 	if not running:
@@ -51,14 +60,27 @@ func _process(_delta: float) -> void:
 	pass
 
 func start() -> void:
+	if running:
+		push_warning("TimeSystem.start() called while already running.")
+		return
 	running = true
 	if _timer:
 		_timer.start()
 
 func pause() -> void:
+	if not running:
+		push_warning("TimeSystem.pause() called while already paused.")
+		return
 	running = false
 	if _timer:
 		_timer.stop()
+
+func resume() -> void:
+	if running:
+		return
+	running = true
+	if _timer:
+		_timer.start()
 
 func reset() -> void:
 	running = false
@@ -80,11 +102,25 @@ func step_once() -> void:
 
 func set_time_scale(v: float) -> void:
 	time_scale = max(0.0, v)
-	# Timer runs at constant 10 FPS regardless of time_scale
+	# Timer runs at configured tick_hz regardless of time_scale.
 	# Time scale affects simulation progression speed, not tick frequency
 
 func set_tick_days(v: float) -> void:
 	tick_days = max(1e-6, v)
+
+func set_tick_hz(v: float) -> void:
+	tick_hz = clamp(float(v), MIN_TICK_HZ, MAX_TICK_HZ)
+	_apply_timer_wait_time()
+
+func set_tick_interval_seconds(interval_sec: float) -> void:
+	var sec: float = max(1e-4, float(interval_sec))
+	set_tick_hz(1.0 / sec)
+
+func get_tick_interval_seconds() -> float:
+	return 1.0 / clamp(float(tick_hz), MIN_TICK_HZ, MAX_TICK_HZ)
+
+func get_tick_hz() -> float:
+	return tick_hz
 
 func get_year_float() -> float:
 	return simulation_time_days / days_per_year

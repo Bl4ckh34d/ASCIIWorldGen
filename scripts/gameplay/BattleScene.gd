@@ -1,4 +1,5 @@
 extends Control
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
 const BattleStateMachine = preload("res://scripts/gameplay/BattleStateMachine.gd")
@@ -95,6 +96,16 @@ func _ready() -> void:
 	elif opener == "back_attack":
 		_append_log("Ambushed from behind!")
 	_append_log("Enemies appeared: %s" % String(battle_data.get("enemy_group", "Wild Beasts")))
+	var enemy_tags_v: Variant = battle_data.get("enemy_tags", [])
+	if typeof(enemy_tags_v) == TYPE_ARRAY and (enemy_tags_v as Array).size() > 0:
+		var tags: Array[String] = []
+		for tv in enemy_tags_v as Array:
+			var s: String = String(tv).strip_edges()
+			if s.is_empty():
+				continue
+			tags.append(s)
+		if not tags.is_empty():
+			_append_log("Enemy traits: %s." % ", ".join(tags))
 	var st0: Dictionary = machine.get_state_summary()
 	var who: String = String(st0.get("select_member_name", "Party"))
 	_append_log("Choose command for %s: Attack, Magic, Item, or Flee" % who)
@@ -280,7 +291,7 @@ func _apply_auto_battle_if_enabled() -> void:
 	if game_state == null or not game_state.has_method("get_settings_snapshot"):
 		return
 	var settings_data: Dictionary = game_state.get_settings_snapshot()
-	if not bool(settings_data.get("auto_battle_enabled", false)):
+	if not VariantCasts.to_bool(settings_data.get("auto_battle_enabled", false)):
 		return
 	var safety: int = 0
 	while machine.can_accept_input() and safety < 16:
@@ -320,16 +331,45 @@ func _refresh_header() -> void:
 	if battle_info_label == null:
 		return
 	var state: Dictionary = machine.get_state_summary()
+	var biome_label: String = String(battle_data.get("biome_name", "Unknown"))
+	var context_label: String = _encounter_context_label()
+	if not context_label.is_empty():
+		biome_label += " [%s]" % context_label
 	battle_info_label.text = "Battle (%d,%d) %s | Turn %d | Party HP %d/%d | Enemy HP %d/%d" % [
 		int(battle_data.get("world_x", 0)),
 		int(battle_data.get("world_y", 0)),
-		String(battle_data.get("biome_name", "Unknown")),
+		biome_label,
 		int(state.get("turn_index", 1)),
 		int(state.get("party_hp", 0)),
 		int(state.get("party_hp_max", 0)),
 		int(state.get("enemy_hp", 0)),
 		int(state.get("enemy_hp_max", 0)),
 	]
+
+func _encounter_context_label() -> String:
+	var season: String = String(battle_data.get("season_name", ""))
+	var tod: String = String(battle_data.get("time_bucket", ""))
+	if season.is_empty() and game_state != null and game_state.get("world_time") != null:
+		var wt: Object = game_state.world_time
+		if "season_name" in wt:
+			season = String(wt.season_name())
+	if tod.is_empty():
+		tod = _time_bucket_name_from_tod01(_time_of_day01())
+	if season.is_empty():
+		return tod
+	if tod.is_empty():
+		return season
+	return "%s %s" % [season, tod]
+
+func _time_bucket_name_from_tod01(t: float) -> String:
+	var m: int = int(clamp(t, 0.0, 0.999999) * 24.0 * 60.0)
+	if m < 5 * 60 or m >= 21 * 60:
+		return "Night"
+	if m < 8 * 60:
+		return "Dawn"
+	if m < 18 * 60:
+		return "Day"
+	return "Dusk"
 
 func _append_log(text_line: String) -> void:
 	if battle_log == null:
@@ -351,7 +391,7 @@ func _apply_command(command_id: String) -> void:
 		game_state.consume_inventory_items(consumes)
 	_refresh_header()
 	_refresh_panels()
-	if bool(out.get("resolved", false)):
+	if VariantCasts.to_bool(out.get("resolved", false)):
 		_show_result_panel(machine.result)
 
 func _on_attack_pressed() -> void:
@@ -422,13 +462,13 @@ func _show_result_panel(result_data: Dictionary) -> void:
 	if result_label == null:
 		return
 	_apply_outcome_if_needed(result_data)
-	if bool(result_data.get("victory", false)):
+	if VariantCasts.to_bool(result_data.get("victory", false)):
 		if _reward_logs.is_empty():
 			var rewards: Dictionary = result_data.get("rewards", {})
 			result_label.text = "Victory!\nEXP +%d\nGold +%d" % [int(rewards.get("exp", 0)), int(rewards.get("gold", 0))]
 		else:
 			result_label.text = "Victory!\n\n%s" % "\n".join(_reward_logs)
-	elif bool(result_data.get("escaped", false)):
+	elif VariantCasts.to_bool(result_data.get("escaped", false)):
 		result_label.text = "Escaped safely."
 	else:
 		result_label.text = "Defeat.\nGame Over."
@@ -737,7 +777,7 @@ func _refresh_panels() -> void:
 func _on_continue_pressed() -> void:
 	var outcome: Dictionary = machine.result.duplicate(true)
 	_apply_outcome_if_needed(outcome)
-	if bool(outcome.get("defeat", false)):
+	if VariantCasts.to_bool(outcome.get("defeat", false)):
 		if scene_router != null and scene_router.has_method("goto_game_over"):
 			scene_router.goto_game_over()
 		else:
@@ -753,7 +793,7 @@ func _on_continue_pressed() -> void:
 	if game_state != null and game_state.has_method("set_location"):
 		game_state.set_location(return_scene, world_x, world_y, local_x, local_y, biome_id, biome_name)
 		if game_state.has_method("advance_world_time"):
-			game_state.advance_world_time(20 if bool(outcome.get("victory", false)) else 8, "battle")
+			game_state.advance_world_time(20 if VariantCasts.to_bool(outcome.get("victory", false)) else 8, "battle")
 	if startup_state != null and startup_state.has_method("set_selected_world_tile"):
 		startup_state.set_selected_world_tile(world_x, world_y, biome_id, biome_name, local_x, local_y)
 	if return_scene == SceneContracts.STATE_LOCAL:

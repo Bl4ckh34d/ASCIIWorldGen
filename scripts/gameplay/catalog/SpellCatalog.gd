@@ -9,6 +9,7 @@ static func all_spells() -> Dictionary:
 			"mp_cost": 4,
 			"target": "enemy",
 			"power": 9,
+			"damage_type": "fire",
 		},
 		"Cure": {
 			"kind": "heal_hp",
@@ -30,4 +31,3 @@ static func spells_for_member(member_id: String) -> PackedStringArray:
 	if String(member_id) == "mage":
 		return PackedStringArray(["Fire", "Cure"])
 	return PackedStringArray()
-

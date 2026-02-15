@@ -1,5 +1,6 @@
 extends RefCounted
 class_name PartyStateModel
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const PartyMemberModel = preload("res://scripts/gameplay/models/PartyMember.gd")
 const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
@@ -48,7 +49,7 @@ func add_item_auto(item_name: String, count: int = 1) -> int:
 		return count
 	ensure_bags()
 	var item: Dictionary = ItemCatalog.get_item(item_name)
-	var stackable: bool = bool(item.get("stackable", true))
+	var stackable: bool = VariantCasts.to_bool(item.get("stackable", true))
 	var remaining: int = count
 	# Fill existing stack first.
 	if stackable:

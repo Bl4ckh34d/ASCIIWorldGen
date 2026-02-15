@@ -1,0 +1,32 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/HUD.gd" id="1_xh3r3"]
+
+[node name="HUD" type="CanvasLayer"]
+layer = 70
+script = ExtResource("1_xh3r3")
+
+[node name="Root" type="MarginContainer" parent="."]
+offset_top = 56.0
+offset_right = 420.0
+offset_bottom = 276.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
+
+[node name="Panel" type="PanelContainer" parent="Root"]
+
+[node name="VBox" type="VBoxContainer" parent="Root/Panel"]
+theme_override_constants/separation = 6
+
+[node name="TitleLabel" type="Label" parent="Root/Panel/VBox"]
+unique_name_in_owner = true
+text = "HUD"
+
+[node name="MetricsLabel" type="Label" parent="Root/Panel/VBox"]
+unique_name_in_owner = true
+text = "No metrics yet."
+autowrap_mode = 3

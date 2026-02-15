@@ -32,6 +32,8 @@ layout(push_constant) uniform Params {
     float drift_cells_per_day;
     float seed_phase;
     float sea_level;
+    float max_boundary_delta_per_day;
+    float divergence_response;
 } PC;
 
 uint idx(int x, int y) { return uint(x + y * PC.width); }
@@ -179,7 +181,7 @@ void main() {
         }
     } else if (approach < div_thresh) {
         divergent = true;
-        float div = (-approach) - (-div_thresh);
+        float div = max(0.0, ((-approach) - (-div_thresh)) * PC.divergence_response);
         float continental_guard = 1.0 - marine_context;
         // Keep divergent deformation narrow so rifts do not widen into giant basins.
         boundary_w = mix(pow(belt_w, 2.35), pow(belt_w, 1.75), marine_context);
@@ -234,6 +236,10 @@ void main() {
         delta_h += PC.transform_roughness_per_day * PC.dt_days * shear * ((n2 - 0.5) * 1.8);
     }
 
+    float max_abs_delta = max(0.0, PC.max_boundary_delta_per_day * PC.dt_days);
+    if (max_abs_delta > 0.0) {
+        delta_h = clamp(delta_h, -max_abs_delta, max_abs_delta);
+    }
     delta_h *= boundary_w * organic;
     float h_out = clamp(h_base + delta_h, -1.0, 2.0);
     if (divergent) {

@@ -1,6 +1,6 @@
 # File: res://scripts/rendering/WorldDataTextureManager.gd
-class_name WorldDataTextureManager
 extends RefCounted
+class_name WorldDataTextureManager
 
 # Manages GPU textures containing world data for ASCII rendering
 # Efficiently packs multiple data channels into textures

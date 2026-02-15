@@ -14,8 +14,6 @@ uniform vec4 u_moon0 = vec4(-1.0, -1.0, 0.0, 0.0);
 uniform vec4 u_moon1 = vec4(-1.0, -1.0, 0.0, 0.0);
 uniform vec4 u_moon2 = vec4(-1.0, -1.0, 0.0, 0.0);
 
-const float TAU = 6.28318530718;
-
 float _hash12(vec2 p) {
 	// Deterministic hash 0..1
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -199,4 +197,3 @@ void fragment() {
 
 	COLOR = vec4(col, 1.0);
 }
-

@@ -1,4 +1,5 @@
 extends Control
+const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
 
@@ -59,7 +60,7 @@ func _on_load_pressed() -> void:
 	if game_state == null or not game_state.has_method("load_from_path"):
 		_set_status("Load unavailable.")
 		return
-	var ok_load: bool = bool(game_state.load_from_path(_selected_save_path()))
+	var ok_load: bool = VariantCasts.to_bool(game_state.load_from_path(_selected_save_path()))
 	if not ok_load:
 		_set_status("Load failed (missing file/schema mismatch).")
 		return

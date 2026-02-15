@@ -74,6 +74,7 @@ const MAP_SIZE_LARGE: int = 25000
 # Chunk processing
 const ASYNC_ASCII_CHUNK_SIZE: int = 500      # Process ~22x22 chunks
 const ARRAY_PROCESSING_CHUNK_SIZE: int = 10000  # 10k elements per chunk
+const FEATURE_ASYNC_ASCII_STYLER: bool = false  # Legacy text-styling path; GPU map rendering remains canonical.
 
 # === SYSTEM CADENCES ===
 
