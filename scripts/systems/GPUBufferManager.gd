@@ -100,6 +100,8 @@ func _dispatch_clear_u32(buf_rid: RID, total_u32: int) -> bool:
 	u0.add_id(buf_rid)
 	uniforms.append(u0)
 	var u_set: RID = _rd.uniform_set_create(uniforms, _clear_shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	pc.append_array(PackedInt32Array([int(total_u32)]).to_byte_array())
 	var pad: int = (16 - (pc.size() % 16)) % 16
@@ -137,6 +139,8 @@ func _dispatch_copy_u32(src_rid: RID, dst_rid: RID, total_u32: int) -> bool:
 	u1.add_id(dst_rid)
 	uniforms.append(u1)
 	var u_set: RID = _rd.uniform_set_create(uniforms, _copy_shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	pc.append_array(PackedInt32Array([int(total_u32)]).to_byte_array())
 	var pad: int = (16 - (pc.size() % 16)) % 16

@@ -43,6 +43,16 @@ func color_for_biome(biome: int, is_beach: bool) -> Color:
 				return Color(0.35, 0.90, 0.55)
 			223: # Dungeon wall
 				return Color(0.08, 0.08, 0.10)
+			224: # Regional: tree canopy
+				return Color(0.15, 0.45, 0.18)
+			225: # Regional: shrub / bush cluster
+				return Color(0.22, 0.52, 0.24)
+			226: # Regional: boulder / rock
+				return Color(0.48, 0.50, 0.53)
+			227: # Regional: reeds
+				return Color(0.34, 0.44, 0.22)
+			228: # Regional: player under canopy
+				return Color(0.18, 0.48, 0.20)
 			254: # Unknown / fog / unvisited
 				return Color(0.0, 0.0, 0.0)
 			255: # Solid void / non-walkable rock

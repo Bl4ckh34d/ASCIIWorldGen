@@ -36,6 +36,11 @@ var _display_dimensions: Vector2 = Vector2.ZERO
 var _display_origin: Vector2 = Vector2.ZERO
 var _scroll_offset: Vector2 = Vector2.ZERO
 var _display_window_explicit: bool = false
+var _noise_world_origin: Vector2 = Vector2.ZERO
+var _cloud_overlay_enabled: bool = true
+var _cloud_shadow_strength: float = 0.14
+var _cloud_light_strength: float = 0.25
+var _cloud_shadow_offset: Vector2 = Vector2(1.5, 1.0)
 
 # Data managers
 var font_atlas_generator: Object
@@ -173,10 +178,11 @@ func _create_material() -> void:
 		quad_material.set_shader_parameter("display_dimensions", _display_dimensions)
 		quad_material.set_shader_parameter("display_origin", _display_origin)
 		quad_material.set_shader_parameter("scroll_offset", _scroll_offset)
+		quad_material.set_shader_parameter("noise_world_origin", _noise_world_origin)
 		quad_material.set_shader_parameter("sea_level", 0.0)
-		quad_material.set_shader_parameter("cloud_shadow_strength", 0.14)
-		quad_material.set_shader_parameter("cloud_light_strength", 0.25)
-		quad_material.set_shader_parameter("cloud_shadow_offset", Vector2(1.5, 1.0))
+		quad_material.set_shader_parameter("cloud_shadow_strength", _cloud_shadow_strength)
+		quad_material.set_shader_parameter("cloud_light_strength", _cloud_light_strength)
+		quad_material.set_shader_parameter("cloud_shadow_offset", _cloud_shadow_offset)
 		quad_material.set_shader_parameter("day_of_year", _solar_day_of_year)
 		quad_material.set_shader_parameter("time_of_day", _solar_time_of_day)
 		quad_material.set_shader_parameter("use_fixed_lonlat", 0)
@@ -217,7 +223,7 @@ func _create_material() -> void:
 			cloud_material.shader = cloud_shader
 			if cloud_rect:
 				cloud_rect.material = cloud_material
-				cloud_rect.visible = true
+				cloud_rect.visible = _cloud_overlay_enabled
 			# Default uniforms to safe textures
 			if cloud_material is ShaderMaterial:
 				var cloud_mat := cloud_material as ShaderMaterial
@@ -379,8 +385,12 @@ func _update_material_uniforms() -> void:
 		shader_mat.set_shader_parameter("display_dimensions", _display_dimensions)
 		shader_mat.set_shader_parameter("display_origin", _display_origin)
 		shader_mat.set_shader_parameter("scroll_offset", _scroll_offset)
+		shader_mat.set_shader_parameter("noise_world_origin", _noise_world_origin)
 		shader_mat.set_shader_parameter("cell_size", cell_size)
 		shader_mat.set_shader_parameter("bedrock_only_mode", 1 if _render_bedrock_view else 0)
+		shader_mat.set_shader_parameter("cloud_shadow_strength", _cloud_shadow_strength)
+		shader_mat.set_shader_parameter("cloud_light_strength", _cloud_light_strength)
+		shader_mat.set_shader_parameter("cloud_shadow_offset", _cloud_shadow_offset)
 		shader_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 		shader_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
 		shader_mat.set_shader_parameter("use_fixed_lonlat", 1 if _use_fixed_lonlat else 0)
@@ -425,7 +435,7 @@ func _update_cloud_uniforms() -> void:
 		cloud_mat.set_shader_parameter("light_texture", _safe_tex(light_texture_override, _fallback_black_tex))
 		cloud_mat.set_shader_parameter("use_light_texture", 1 if _is_texture_bindable(light_texture_override) else 0)
 		if cloud_rect:
-			cloud_rect.visible = (t3 != null) or _is_texture_bindable(cloud_texture_override)
+			cloud_rect.visible = _cloud_overlay_enabled and ((t3 != null) or _is_texture_bindable(cloud_texture_override))
 		cloud_mat.set_shader_parameter("map_dimensions", Vector2(map_width, map_height))
 		cloud_mat.set_shader_parameter("display_dimensions", _display_dimensions)
 		cloud_mat.set_shader_parameter("display_origin", _display_origin)
@@ -452,6 +462,7 @@ func _update_light_uniform() -> void:
 		shader_mat.set_shader_parameter("display_dimensions", _display_dimensions)
 		shader_mat.set_shader_parameter("display_origin", _display_origin)
 		shader_mat.set_shader_parameter("scroll_offset", _scroll_offset)
+		shader_mat.set_shader_parameter("noise_world_origin", _noise_world_origin)
 		shader_mat.set_shader_parameter("light_texture", _safe_tex(light_texture_override, _fallback_black_tex))
 		shader_mat.set_shader_parameter("use_light_texture", 1 if _is_texture_bindable(light_texture_override) else 0)
 		shader_mat.set_shader_parameter("river_texture", _safe_tex(river_texture_override, _fallback_black_tex))
@@ -482,6 +493,26 @@ func _update_light_uniform() -> void:
 func set_cloud_texture_override(tex: Texture2D) -> void:
 	cloud_texture_override = tex
 	_update_cloud_uniforms()
+
+func set_cloud_overlay_enabled(enabled: bool) -> void:
+	_cloud_overlay_enabled = VariantCastsUtil.to_bool(enabled)
+	_update_cloud_uniforms()
+
+func set_cloud_rendering_params(shadow_strength: float, light_strength: float, shadow_offset: Vector2) -> void:
+	_cloud_shadow_strength = clamp(shadow_strength, 0.0, 1.5)
+	_cloud_light_strength = clamp(light_strength, 0.0, 1.0)
+	_cloud_shadow_offset = shadow_offset
+	if quad_material and quad_material is ShaderMaterial:
+		var shader_mat := quad_material as ShaderMaterial
+		shader_mat.set_shader_parameter("cloud_shadow_strength", _cloud_shadow_strength)
+		shader_mat.set_shader_parameter("cloud_light_strength", _cloud_light_strength)
+		shader_mat.set_shader_parameter("cloud_shadow_offset", _cloud_shadow_offset)
+
+func set_noise_world_origin(origin_x: float, origin_y: float) -> void:
+	_noise_world_origin = Vector2(origin_x, origin_y)
+	if quad_material and quad_material is ShaderMaterial:
+		var shader_mat := quad_material as ShaderMaterial
+		shader_mat.set_shader_parameter("noise_world_origin", _noise_world_origin)
 
 func set_light_texture_override(tex: Texture2D) -> void:
 	light_texture_override = tex

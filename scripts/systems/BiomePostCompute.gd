@@ -70,6 +70,8 @@ func apply_overrides_and_lava_gpu(
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(lake_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(rock_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
 	var floats := PackedFloat32Array([temp_min_c, temp_max_c, lava_temp_threshold_c, update_lava])

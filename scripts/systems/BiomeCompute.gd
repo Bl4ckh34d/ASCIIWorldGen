@@ -130,6 +130,8 @@ func classify_to_buffer(w: int, h: int,
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 7; u.add_id(fertility_buf_use); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 8; u.add_id(biome_noise_buf_use); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
 	var freeze_norm: float = float(params.get("freeze_temp_threshold", 0.16))
@@ -223,6 +225,8 @@ func _dispatch_smooth_pass(w: int, h: int, in_buf: RID, out_buf: RID) -> bool:
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 0; u.add_id(in_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(out_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _smooth_shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
 	pc.append_array(ints.to_byte_array())
@@ -289,6 +293,8 @@ func reapply_cryosphere_to_buffer(
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 5; u.add_id(moist_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 6; u.add_id(buf_ice); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _reapply_shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
 	var floats := PackedFloat32Array([

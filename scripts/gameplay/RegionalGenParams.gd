@@ -11,9 +11,9 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 		"sand": 0.0,
 		"snow": 0.0,
 		"swamp": 0.0,
-		"trees": 0.10,
-		"shrubs": 0.22,
-		"rocks": 0.08,
+		"trees": 0.12,
+		"shrubs": 0.24,
+		"rocks": 0.10,
 		"roughness": 0.22,
 		"elev_bias": 0.0,
 		"elev_amp": 0.22,
@@ -33,8 +33,8 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 		return p
 	if biome_id == 2: # BEACH
 		p["sand"] = 1.0
-		p["trees"] = 0.05
-		p["shrubs"] = 0.12
+		p["trees"] = 0.08
+		p["shrubs"] = 0.16
 		p["rocks"] = 0.10
 		p["roughness"] = 0.12
 		p["elev_amp"] = 0.10
@@ -44,8 +44,8 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 	if biome_id == 10 or biome_id == 23: # SWAMP / FROZEN_MARSH
 		p["swamp"] = 1.0
 		p["water"] = 0.18
-		p["trees"] = 0.18
-		p["shrubs"] = 0.45
+		p["trees"] = 0.30
+		p["shrubs"] = 0.55
 		p["rocks"] = 0.04
 		p["roughness"] = 0.18
 		p["elev_amp"] = 0.14
@@ -55,10 +55,10 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 
 	# Forests
 	if _is_forest_biome(biome_id):
-		p["trees"] = 0.60
-		p["shrubs"] = 0.28
-		p["rocks"] = 0.08
-		p["roughness"] = 0.22
+		p["trees"] = 0.78
+		p["shrubs"] = 0.34
+		p["rocks"] = 0.10
+		p["roughness"] = 0.24
 		p["elev_amp"] = 0.18
 		if biome_id == 22: # FROZEN_FOREST
 			p["snow"] = 0.55
@@ -69,8 +69,8 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 
 	# Mountains / high relief
 	if _is_mountain_biome(biome_id):
-		p["trees"] = 0.08
-		p["shrubs"] = 0.10
+		p["trees"] = 0.12
+		p["shrubs"] = 0.14
 		p["rocks"] = 0.55
 		p["roughness"] = 0.85
 		p["elev_bias"] = 0.10
@@ -88,8 +88,8 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 	# Desert / wasteland
 	if _is_desert_biome(biome_id):
 		p["sand"] = 0.85
-		p["trees"] = 0.02
-		p["shrubs"] = 0.08
+		p["trees"] = 0.03
+		p["shrubs"] = 0.10
 		p["rocks"] = 0.22
 		p["roughness"] = 0.28
 		p["elev_amp"] = 0.18
@@ -103,8 +103,8 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 	# Cold band
 	if biome_id == 20: # TUNDRA
 		p["snow"] = 0.45
-		p["trees"] = 0.04
-		p["shrubs"] = 0.22
+		p["trees"] = 0.06
+		p["shrubs"] = 0.24
 		p["rocks"] = 0.12
 		p["roughness"] = 0.24
 		p["elev_amp"] = 0.18
@@ -112,8 +112,8 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 
 	# Hills
 	if biome_id == 16 or biome_id == 34 or biome_id == 41: # HILLS / FROZEN_HILLS / SCORCHED_HILLS
-		p["trees"] = 0.14
-		p["shrubs"] = 0.22
+		p["trees"] = 0.18
+		p["shrubs"] = 0.26
 		p["rocks"] = 0.22
 		p["roughness"] = 0.45
 		p["elev_amp"] = 0.30
@@ -125,9 +125,9 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 
 	# Steppe / grassland / savanna variants
 	if biome_id == 6 or biome_id == 30 or biome_id == 37: # STEPPE
-		p["trees"] = 0.05
-		p["shrubs"] = 0.18
-		p["rocks"] = 0.10
+		p["trees"] = 0.08
+		p["shrubs"] = 0.22
+		p["rocks"] = 0.12
 		p["roughness"] = 0.20
 		p["elev_amp"] = 0.18
 		if biome_id == 30:
@@ -136,9 +136,9 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 			p["sand"] = 0.10
 		return p
 	if biome_id == 7 or biome_id == 29 or biome_id == 36: # GRASSLAND
-		p["trees"] = 0.10
-		p["shrubs"] = 0.22
-		p["rocks"] = 0.08
+		p["trees"] = 0.16
+		p["shrubs"] = 0.28
+		p["rocks"] = 0.10
 		p["roughness"] = 0.18
 		p["elev_amp"] = 0.18
 		if biome_id == 29:
@@ -147,8 +147,8 @@ static func params_for_biome(biome_id: int) -> Dictionary:
 			p["sand"] = 0.12
 		return p
 	if biome_id == 21 or biome_id == 33 or biome_id == 40: # SAVANNA
-		p["trees"] = 0.18
-		p["shrubs"] = 0.18
+		p["trees"] = 0.24
+		p["shrubs"] = 0.20
 		p["rocks"] = 0.10
 		p["roughness"] = 0.18
 		p["elev_amp"] = 0.18
@@ -178,4 +178,3 @@ static func _is_mountain_biome(biome_id: int) -> bool:
 
 static func _is_desert_biome(biome_id: int) -> bool:
 	return biome_id == 3 or biome_id == 4 or biome_id == 5 or biome_id == 28
-

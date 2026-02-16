@@ -49,6 +49,7 @@ uniform vec2 atlas_uv_size; // 1/16, 1/6
 uniform vec2 display_dimensions = vec2(0.0, 0.0);
 uniform vec2 display_origin = vec2(0.0, 0.0);
 uniform vec2 scroll_offset = vec2(0.0, 0.0);
+uniform vec2 noise_world_origin = vec2(0.0, 0.0);
 
 // Hover overlay parameters (tile coordinates; negative disables)
 uniform vec2 hover_cell = vec2(-1.0, -1.0);
@@ -61,6 +62,11 @@ const float CHAR_IDX_TILDE = 94.0; // '~'
 const float CHAR_IDX_HASH = 3.0;   // '#'
 const float BIOME_OCEAN = 0.0;
 const float BIOME_ICE_SHEET = 1.0;
+const float MARKER_TREE = 224.0;
+const float MARKER_SHRUB = 225.0;
+const float MARKER_BOULDER = 226.0;
+const float MARKER_REED = 227.0;
+const float MARKER_PLAYER_UNDER_CANOPY = 228.0;
 
 const vec3 BEACH_COLOR = vec3(1.0, 0.98, 0.90);
 const vec3 ICE_COLOR = vec3(0.85, 0.90, 0.95);
@@ -214,6 +220,67 @@ vec4 _society_at(vec2 cell) {
     return (use_society_overlay != 0) ? texture(society_overlay, uv) : vec4(0.0);
 }
 
+float _biome_id_at(vec2 cell) {
+    vec2 wrapped = _wrap_cell_x(cell);
+    vec2 uv = (wrapped + vec2(0.5)) / map_dimensions;
+    float biome_norm = (use_biome_texture != 0) ? texture(biome_texture, uv).r : texture(world_data_2, uv).r;
+    return biome_norm * 255.0;
+}
+
+bool _is_tree_marker_id(float biome_id) {
+    return abs(biome_id - MARKER_TREE) < 0.5 || abs(biome_id - MARKER_PLAYER_UNDER_CANOPY) < 0.5;
+}
+
+float _tree_marker_at(vec2 cell) {
+    float id = _biome_id_at(cell);
+    return _is_tree_marker_id(id) ? 1.0 : 0.0;
+}
+
+float _soft_circle_mask(vec2 uv, vec2 center, float radius, float softness) {
+    float d = distance(uv, center);
+    return 1.0 - smoothstep(radius, radius + softness, d);
+}
+
+float _tree_crown_mask(vec2 cell, vec2 uv) {
+    float h0 = _hash12(cell * vec2(1.71, 0.93) + vec2(13.0, -7.0));
+    float h1 = _hash12(cell * vec2(0.77, 1.37) + vec2(-19.0, 5.0));
+    vec2 center = vec2(0.5) + (vec2(h0, h1) - 0.5) * 0.16;
+    vec2 d = uv - center;
+    float angle = atan(d.y, d.x);
+    float lobe = sin(angle * 3.0 + h0 * TAU) * 0.08 + sin(angle * 5.0 - h1 * TAU) * 0.05;
+    float radius = 0.39 + (h0 - 0.5) * 0.09 + lobe;
+    return clamp(1.0 - smoothstep(radius, radius + 0.12, length(d)), 0.0, 1.0);
+}
+
+float _shrub_mask(vec2 cell, vec2 uv) {
+    float h = _hash12(cell * vec2(1.13, 2.11) + vec2(2.7, -9.1));
+    vec2 c0 = vec2(0.42, 0.46) + (vec2(fract(h * 13.0), fract(h * 29.0)) - 0.5) * 0.10;
+    vec2 c1 = vec2(0.58, 0.55) + (vec2(fract(h * 17.0), fract(h * 31.0)) - 0.5) * 0.10;
+    float m0 = _soft_circle_mask(uv, c0, 0.18, 0.08);
+    float m1 = _soft_circle_mask(uv, c1, 0.16, 0.07);
+    return clamp(max(m0, m1), 0.0, 1.0);
+}
+
+float _boulder_mask(vec2 cell, vec2 uv) {
+    float h = _hash12(cell * vec2(0.89, 1.57) + vec2(-12.3, 4.5));
+    vec2 center = vec2(0.5) + (vec2(fract(h * 19.0), fract(h * 37.0)) - 0.5) * 0.12;
+    float rx = 0.30 + (h - 0.5) * 0.07;
+    float ry = 0.24 + (0.5 - h) * 0.05;
+    vec2 d = abs(uv - center);
+    float k = sqrt(pow(d.x / max(rx, 0.001), 2.2) + pow(d.y / max(ry, 0.001), 2.2));
+    return clamp(1.0 - smoothstep(1.0, 1.18, k), 0.0, 1.0);
+}
+
+vec2 _foliage_sway(vec2 cell, float amplitude, float speed, vec2 wind_dir) {
+    float h0 = _hash12(cell * vec2(0.73, 1.29) + vec2(11.7, -5.3));
+    float h1 = _hash12(cell * vec2(1.31, 0.79) + vec2(-3.2, 8.4));
+    float t = TIME * speed + h0 * TAU;
+    vec2 dir = normalize(wind_dir + vec2(0.0001, -0.0001));
+    float lateral = sin(t) * (0.65 + h1 * 0.35);
+    float bob = cos(t * 1.27 + h1 * TAU) * 0.45;
+    return vec2(dir.x * lateral - dir.y * bob, dir.y * lateral + dir.x * bob) * amplitude;
+}
+
 void fragment() {
     if (debug_mode == 1) {
         // Debug gradient to verify shader execution (use SCREEN_UV to avoid UV=0 issues)
@@ -227,6 +294,7 @@ void fragment() {
     vec2 world_pos = UV * disp + display_origin + scroll_offset;
     vec2 world_cell = floor(world_pos);
     world_cell = clamp(world_cell, vec2(0.0), map_dimensions - vec2(1.0));
+    vec2 noise_cell = world_cell + noise_world_origin;
     
     // Calculate UV for sampling world data
     vec2 world_uv = (world_cell + vec2(0.5)) / map_dimensions;
@@ -267,6 +335,11 @@ void fragment() {
     // Convert normalized values back to indices
     float biome_id = biome_id_norm * 255.0;
     float char_index = char_index_norm * 255.0;
+    bool is_tree_marker = _is_tree_marker_id(biome_id);
+    bool is_shrub_marker = abs(biome_id - MARKER_SHRUB) < 0.5;
+    bool is_boulder_marker = abs(biome_id - MARKER_BOULDER) < 0.5;
+    bool is_reed_marker = abs(biome_id - MARKER_REED) < 0.5;
+    bool is_player_under_canopy = abs(biome_id - MARKER_PLAYER_UNDER_CANOPY) < 0.5;
     // Treat fog + solid-void markers as hard-black.
     bool is_unknown_marker = biome_id >= 253.5;
     
@@ -362,6 +435,65 @@ void fragment() {
     vec3 n = _dir_from_lon_lat(lon, phi);
     vec3 sun_dir = _dir_from_lon_lat(sun_lon, decl);
     float sun_dot = dot(n, sun_dir);
+    vec3 east = vec3(-sin(lon), cos(lon), 0.0);
+    vec3 north = vec3(-sin(phi) * cos(lon), -sin(phi) * sin(lon), cos(phi));
+    vec2 sun_tan = vec2(dot(sun_dir, east), dot(sun_dir, north));
+    vec2 sun_dir_map = vec2(sun_tan.x, -sun_tan.y);
+    float sun_dir_len = length(sun_dir_map);
+    if (sun_dir_len < 0.0001) {
+        sun_dir_map = normalize(vec2(0.83, -0.56));
+    } else {
+        sun_dir_map /= sun_dir_len;
+    }
+    float shadow_geom_blend = smoothstep(-0.08, 0.28, sun_dot);
+    float low_sun = 1.0 - smoothstep(0.10, 0.75, max(0.0, sun_dot));
+    vec2 shadow_dir = vec2(-sun_tan.x, sun_tan.y); // map coords: +x east, +y south
+    float shadow_dir_len = length(shadow_dir);
+    if (shadow_dir_len < 0.001) {
+        shadow_dir = normalize(cloud_shadow_offset + vec2(0.0001, 0.0001));
+    } else {
+        shadow_dir /= shadow_dir_len;
+    }
+    float base_shadow_len = max(0.75, length(cloud_shadow_offset));
+    float shadow_len = clamp(base_shadow_len * mix(0.7, 4.5, low_sun), 0.5, 10.0);
+    vec2 dynamic_offset = shadow_dir * shadow_len;
+    vec2 offset_cells = mix(cloud_shadow_offset, dynamic_offset, shadow_geom_blend);
+
+    if (!bedrock_mode && !is_unknown_marker) {
+        if (is_tree_marker) {
+            vec2 tree_uv = clamp(char_uv + _foliage_sway(noise_cell, 0.055, 1.05, shadow_dir), vec2(0.0), vec2(1.0));
+            float crown_mask = _tree_crown_mask(noise_cell, tree_uv);
+            float crown_side = clamp(0.5 + dot(tree_uv - vec2(0.5), sun_dir_map) * 1.6, 0.0, 1.0);
+            vec3 crown_dark = base_color * vec3(0.52, 0.60, 0.52);
+            vec3 crown_lit = base_color * vec3(1.12, 1.16, 1.02);
+            vec3 crown_color = mix(crown_dark, crown_lit, crown_side);
+            base_color = mix(base_color * 0.74, crown_color, crown_mask);
+            float trunk_mask = _soft_circle_mask(tree_uv, vec2(0.50, 0.52), 0.08, 0.05) * crown_mask;
+            base_color = mix(base_color, vec3(0.24, 0.16, 0.08), trunk_mask * 0.52);
+            if (is_player_under_canopy) {
+                float player_dot = _soft_circle_mask(tree_uv, vec2(0.57, 0.60), 0.05, 0.03);
+                base_color = mix(base_color, vec3(0.98, 0.90, 0.30), player_dot);
+            }
+        } else if (is_shrub_marker || is_reed_marker) {
+            vec2 shrub_uv = clamp(char_uv + _foliage_sway(noise_cell + vec2(7.0, -3.0), 0.032, 1.35, shadow_dir), vec2(0.0), vec2(1.0));
+            float shrub_mask = _shrub_mask(noise_cell, shrub_uv);
+            if (is_reed_marker) {
+                float reed_cols = (1.0 - smoothstep(0.08, 0.16, abs(shrub_uv.x - 0.40))) * smoothstep(0.16, 0.96, shrub_uv.y);
+                reed_cols = max(reed_cols, (1.0 - smoothstep(0.08, 0.16, abs(shrub_uv.x - 0.62))) * smoothstep(0.10, 0.94, shrub_uv.y));
+                shrub_mask = max(shrub_mask, reed_cols * 0.90);
+            }
+            float shrub_side = clamp(0.5 + dot(shrub_uv - vec2(0.5), sun_dir_map) * 1.2, 0.0, 1.0);
+            vec3 shrub_dark = base_color * vec3(0.62, 0.70, 0.60);
+            vec3 shrub_lit = base_color * vec3(1.08, 1.12, 0.95);
+            base_color = mix(base_color * 0.88, mix(shrub_dark, shrub_lit, shrub_side), shrub_mask);
+        } else if (is_boulder_marker) {
+            float rock_mask = _boulder_mask(noise_cell, char_uv);
+            float rock_side = clamp(0.5 + dot(char_uv - vec2(0.46, 0.46), sun_dir_map) * 1.9, 0.0, 1.0);
+            vec3 rock_dark = base_color * vec3(0.52, 0.52, 0.56);
+            vec3 rock_lit = base_color * vec3(1.12, 1.10, 1.08);
+            base_color = mix(base_color * 0.82, mix(rock_dark, rock_lit, rock_side), rock_mask);
+        }
+    }
 
     // Cloud shadows: sun-angle aware projection.
     // Near low sun angles (sunrise/sunset), shadows lengthen.
@@ -370,34 +502,38 @@ void fragment() {
         // Keep cloud shadows visible across twilight and avoid washing out
         // near the bright edge of the terminator.
         float shadow_vis = smoothstep(-0.30, 0.04, sun_dot);
-        float shadow_geom_blend = smoothstep(-0.08, 0.28, sun_dot);
-
-        vec3 east = vec3(-sin(lon), cos(lon), 0.0);
-        vec3 north = vec3(-sin(phi) * cos(lon), -sin(phi) * sin(lon), cos(phi));
-        vec2 sun_tan = vec2(dot(sun_dir, east), dot(sun_dir, north));
-        vec2 shadow_dir = vec2(-sun_tan.x, sun_tan.y); // map coords: +x east, +y south
-        float dir_len = length(shadow_dir);
-        if (dir_len < 0.001) {
-            shadow_dir = normalize(cloud_shadow_offset + vec2(0.0001, 0.0001));
-        } else {
-            shadow_dir /= dir_len;
-        }
-        float low_sun = 1.0 - smoothstep(0.10, 0.75, max(0.0, sun_dot));
-        float base_len = max(0.75, length(cloud_shadow_offset));
-        float shadow_len = clamp(base_len * mix(0.7, 4.5, low_sun), 0.5, 10.0);
-        vec2 dynamic_offset = shadow_dir * shadow_len;
-        vec2 offset_cells = mix(cloud_shadow_offset, dynamic_offset, shadow_geom_blend);
         // Sample cloud from the up-sun side of this ground cell so cast shadows
         // project away from the sun (toward the day/night boundary at low sun).
         vec2 shadow_cell = _wrap_cell_x(world_cell - offset_cells);
         vec2 shadow_uv = (shadow_cell + vec2(0.5)) / map_dimensions;
-        float cloud_shadow = (use_cloud_texture != 0) ? texture(cloud_texture, shadow_uv).r : texture(world_data_3, shadow_uv).b;
+        vec2 shadow_uv_w = (_wrap_cell_x(shadow_cell + vec2(-1.0, 0.0)) + vec2(0.5)) / map_dimensions;
+        vec2 shadow_uv_e = (_wrap_cell_x(shadow_cell + vec2(1.0, 0.0)) + vec2(0.5)) / map_dimensions;
+        vec2 shadow_uv_n = (_wrap_cell_x(shadow_cell + vec2(0.0, -1.0)) + vec2(0.5)) / map_dimensions;
+        vec2 shadow_uv_s = (_wrap_cell_x(shadow_cell + vec2(0.0, 1.0)) + vec2(0.5)) / map_dimensions;
+        float cloud_shadow_c = (use_cloud_texture != 0) ? texture(cloud_texture, shadow_uv).r : texture(world_data_3, shadow_uv).b;
+        float cloud_shadow_w = (use_cloud_texture != 0) ? texture(cloud_texture, shadow_uv_w).r : texture(world_data_3, shadow_uv_w).b;
+        float cloud_shadow_e = (use_cloud_texture != 0) ? texture(cloud_texture, shadow_uv_e).r : texture(world_data_3, shadow_uv_e).b;
+        float cloud_shadow_n = (use_cloud_texture != 0) ? texture(cloud_texture, shadow_uv_n).r : texture(world_data_3, shadow_uv_n).b;
+        float cloud_shadow_s = (use_cloud_texture != 0) ? texture(cloud_texture, shadow_uv_s).r : texture(world_data_3, shadow_uv_s).b;
+        float cloud_shadow = cloud_shadow_c * 0.55 + (cloud_shadow_w + cloud_shadow_e + cloud_shadow_n + cloud_shadow_s) * 0.1125;
         float cloud_shadow_effect = cloud_shadow * cloud_shadow_strength * shadow_vis;
         // Add cloud shadow in darkness space and clamp at night-floor darkness.
         float dark_base = clamp(1.0 - light_mod, 0.0, 1.0);
         float dark_cap = 1.0 - NIGHT_BRIGHTNESS_FLOOR;
         float dark_out = min(dark_cap, dark_base + cloud_shadow_effect);
         light_mod = 1.0 - dark_out;
+    }
+    if (!bedrock_mode && is_land_tile && !is_unknown_marker && !is_tree_marker) {
+        vec2 canopy_probe_a = _wrap_cell_x(world_cell - offset_cells * 0.55);
+        vec2 canopy_probe_b = _wrap_cell_x(world_cell - offset_cells * 0.95);
+        float canopy_occ = max(_tree_marker_at(canopy_probe_a), _tree_marker_at(canopy_probe_b) * 0.82);
+        if (canopy_occ > 0.0) {
+            float canopy_vis = smoothstep(-0.24, 0.22, sun_dot);
+            float canopy_dark = canopy_occ * mix(0.10, 0.24, low_sun) * canopy_vis;
+            float dark_base_canopy = clamp(1.0 - light_mod, 0.0, 1.0);
+            float dark_cap_canopy = 1.0 - NIGHT_BRIGHTNESS_FLOOR;
+            light_mod = 1.0 - min(dark_cap_canopy, dark_base_canopy + canopy_dark);
+        }
     }
 
     // Water glint around subsolar region with sparkle breakup.
@@ -421,12 +557,12 @@ void fragment() {
         float core = pow(sun_vis, mix(220.0, 304.0, polar_tighten));
         float halo = pow(sun_vis, mix(30.0, 50.0, polar_tighten));
         float outer = pow(sun_vis, mix(14.0, 24.0, polar_tighten));
-        float sparkle_noise = _hash12(world_cell * vec2(1.73, 1.19) + vec2(time_of_day * 920.0, day_of_year * 410.0));
+        float sparkle_noise = _hash12(noise_cell * vec2(1.73, 1.19) + vec2(time_of_day * 920.0, day_of_year * 410.0));
         float sparkle_density = mix(0.885, 0.935, polar_tighten);
         float sparkle = smoothstep(sparkle_density, 0.998, sparkle_noise) * halo;
-        float micro_noise = _hash12(world_cell * vec2(2.41, 0.93) + vec2(time_of_day * 1280.0 + 13.0, day_of_year * 560.0 - 5.0));
+        float micro_noise = _hash12(noise_cell * vec2(2.41, 0.93) + vec2(time_of_day * 1280.0 + 13.0, day_of_year * 560.0 - 5.0));
         float micro_spark = smoothstep(mix(0.978, 0.989, polar_tighten), 1.0, micro_noise) * core;
-        float far_noise = _hash12(world_cell * vec2(0.89, 2.17) + vec2(time_of_day * 740.0 - 11.0, day_of_year * 300.0 + 9.0));
+        float far_noise = _hash12(noise_cell * vec2(0.89, 2.17) + vec2(time_of_day * 740.0 - 11.0, day_of_year * 300.0 + 9.0));
         float far_spark = smoothstep(mix(0.955, 0.978, polar_tighten), 1.0, far_noise) * outer;
         float day_gate = smoothstep(0.05, 0.34, sun_vis);
         float glint = core * 0.90 + halo * 0.005 + sparkle * 0.24 + micro_spark * 0.16 + far_spark * 0.18;
@@ -449,6 +585,10 @@ void fragment() {
     }
 
     vec3 lit_color = base_color * light_mod;
+    if (is_land_tile && !is_unknown_marker && biome_id < 200.0) {
+        float tone_noise = _hash12(noise_cell * vec2(0.93, 1.71) + vec2(13.0, -7.0)) - 0.5;
+        lit_color *= (1.0 + tone_noise * 0.08);
+    }
     if (glint_add > 0.0) {
         lit_color += vec3(1.0, 0.98, 0.90) * glint_add;
         lit_color = clamp(lit_color, vec3(0.0), vec3(1.0));

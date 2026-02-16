@@ -1021,6 +1021,12 @@ func generate() -> PackedByteArray:
 	if not post_ok0:
 		push_error("Generate: biome GPU post pipeline failed (CPU fallback removed).")
 		return PackedByteArray()
+	# Seed transition history from the freshly classified biome field so first
+	# runtime biome transitions never blend against an all-zero buffer.
+	var biome_prev_buf0: RID = get_persistent_buffer("biome_prev")
+	if biome_prev_buf0.is_valid() and biome_buf0.is_valid():
+		if not dispatch_copy_u32(biome_buf0, biome_prev_buf0, size):
+			push_warning("Generate: failed to seed biome_prev from biome_id.")
 	# Volcanism step (GPU): generation starts with hotspot-only volcanism.
 	# Boundary-driven volcanism is applied by runtime Plate/Volcanism systems once
 	# current-world plate boundaries are available.
@@ -1722,6 +1728,10 @@ func quick_update_biomes() -> void:
 	):
 		push_error("quick_update_biomes: GPU postprocess failed (CPU fallback disabled).")
 		return
+	var biome_prev_buf: RID = get_persistent_buffer("biome_prev")
+	if biome_prev_buf.is_valid():
+		if not dispatch_copy_u32(biome_buf, biome_prev_buf, size):
+			push_warning("quick_update_biomes: failed to seed biome_prev from biome_id.")
 
 	# Refresh GPU texture overrides directly from buffers.
 	var biome_tex_compute: Object = load("res://scripts/systems/BiomeTextureCompute.gd").new()
@@ -2130,6 +2140,9 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 		h_val = last_height[i]
 	if ci >= 0 and ci < _debug_cache_land.size():
 		land = _debug_cache_land[ci] != 0
+	elif _gpu_buffer_manager != null:
+		var land_fallback: int = 1 if (i >= 0 and i < last_is_land.size() and last_is_land[i] != 0) else 0
+		land = _read_single_i32("is_land", i, land_fallback) != 0
 	elif i >= 0 and i < last_is_land.size():
 		land = last_is_land[i] != 0
 	var beach: bool = false
@@ -2157,9 +2170,12 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 		is_lake = last_lake[i] != 0
 	var biome_id: int = -1
 	var biome_name: String = "Ocean"
-	var bid: int = last_biomes[i] if i >= 0 and i < last_biomes.size() else -1
+	var bid_fallback: int = last_biomes[i] if i >= 0 and i < last_biomes.size() else -1
+	var bid: int = bid_fallback
 	if ci >= 0 and ci < _debug_cache_biome.size():
 		bid = _debug_cache_biome[ci]
+	elif _gpu_buffer_manager != null:
+		bid = _read_single_i32("biome_id", i, bid_fallback)
 	if bid >= 0:
 		if land:
 			# Promote lava field as its own biome name
@@ -2521,15 +2537,22 @@ func ensure_river_freeze_compute() -> Object:
 func dispatch_copy_u32(src: RID, dst: RID, count: int) -> bool:
 	if not src.is_valid() or not dst.is_valid() or count <= 0:
 		return false
+	# Prefer the shared GPUBufferManager copy path; fall back to FlowCompute copy.
+	if _gpu_buffer_manager != null and ("_dispatch_copy_u32" in _gpu_buffer_manager):
+		var mgr_copy_v: Variant = _gpu_buffer_manager._dispatch_copy_u32(src, dst, count)
+		if typeof(mgr_copy_v) == TYPE_BOOL and bool(mgr_copy_v):
+			return true
 	var flow_obj: Object = ensure_flow_compute()
 	if flow_obj == null:
 		return false
 	if "_ensure" in flow_obj:
-		flow_obj._ensure()
+		var ensured_v: Variant = flow_obj._ensure()
+		if typeof(ensured_v) == TYPE_BOOL and not bool(ensured_v):
+			return false
 	if not ("_dispatch_copy_u32" in flow_obj):
 		return false
-	flow_obj._dispatch_copy_u32(src, dst, count)
-	return true
+	var flow_copy_v: Variant = flow_obj._dispatch_copy_u32(src, dst, count)
+	return typeof(flow_copy_v) == TYPE_BOOL and bool(flow_copy_v)
 
 func publish_plate_runtime_state(
 		cell_plate_id: PackedInt32Array,
@@ -2620,10 +2643,22 @@ func _read_window_i32(buffer_name: String, x0: int, y0: int, rw: int, rh: int, w
 		out.append_array(row)
 	return out.to_int32_array()
 
+func _read_single_i32(buffer_name: String, index: int, fallback: int = 0) -> int:
+	if _gpu_buffer_manager == null or index < 0:
+		return fallback
+	var bytes: PackedByteArray = read_persistent_buffer_region(buffer_name, index * 4, 4)
+	if bytes.size() != 4:
+		return fallback
+	var vals: PackedInt32Array = bytes.to_int32_array()
+	if vals.size() != 1:
+		return fallback
+	return int(vals[0])
+
 func sync_debug_cpu_snapshot(x: int, y: int, radius_tiles: int = 3, prefetch_margin_tiles: int = 2, max_cells: int = 250000) -> void:
 	"""Refresh hover/debug cache from a small GPU window (default 7x7) around the cursor."""
 	if _gpu_buffer_manager == null:
 		return
+	ensure_persistent_buffers(false)
 	var size: int = config.width * config.height
 	if size <= 0 or size > max_cells:
 		return

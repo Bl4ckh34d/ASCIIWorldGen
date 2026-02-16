@@ -23,6 +23,7 @@ var world_temperature: PackedFloat32Array = PackedFloat32Array()
 var world_moisture: PackedFloat32Array = PackedFloat32Array()
 var world_land_mask: PackedByteArray = PackedByteArray()
 var world_beach_mask: PackedByteArray = PackedByteArray()
+var world_river_mask: PackedByteArray = PackedByteArray()
 var world_cloud_cover: PackedFloat32Array = PackedFloat32Array()
 var world_wind_u: PackedFloat32Array = PackedFloat32Array()
 var world_wind_v: PackedFloat32Array = PackedFloat32Array()
@@ -53,6 +54,7 @@ func reset() -> void:
 	world_moisture = PackedFloat32Array()
 	world_land_mask = PackedByteArray()
 	world_beach_mask = PackedByteArray()
+	world_river_mask = PackedByteArray()
 	world_cloud_cover = PackedFloat32Array()
 	world_wind_u = PackedFloat32Array()
 	world_wind_v = PackedFloat32Array()
@@ -115,7 +117,8 @@ func set_world_snapshot(
 	beach_mask: PackedByteArray = PackedByteArray(),
 	cloud_cover: PackedFloat32Array = PackedFloat32Array(),
 	wind_u: PackedFloat32Array = PackedFloat32Array(),
-	wind_v: PackedFloat32Array = PackedFloat32Array()
+	wind_v: PackedFloat32Array = PackedFloat32Array(),
+	river_mask: PackedByteArray = PackedByteArray()
 ) -> void:
 	world_width = max(1, width)
 	world_height = max(1, height)
@@ -127,6 +130,7 @@ func set_world_snapshot(
 	world_moisture = moisture.duplicate() if moisture.size() == size else PackedFloat32Array()
 	world_land_mask = land_mask.duplicate() if land_mask.size() == size else PackedByteArray()
 	world_beach_mask = beach_mask.duplicate() if beach_mask.size() == size else PackedByteArray()
+	world_river_mask = river_mask.duplicate() if river_mask.size() == size else PackedByteArray()
 	world_cloud_cover = cloud_cover.duplicate() if cloud_cover.size() == size else PackedFloat32Array()
 	world_wind_u = wind_u.duplicate() if wind_u.size() == size else PackedFloat32Array()
 	world_wind_v = wind_v.duplicate() if wind_v.size() == size else PackedFloat32Array()

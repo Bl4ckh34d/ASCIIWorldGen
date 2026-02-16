@@ -32,6 +32,9 @@ var _snapshot_temp: PackedFloat32Array = PackedFloat32Array()
 var _snapshot_moist: PackedFloat32Array = PackedFloat32Array()
 var _snapshot_land_mask: PackedByteArray = PackedByteArray()
 var _snapshot_beach_mask: PackedByteArray = PackedByteArray()
+var _snapshot_cloud_cover: PackedFloat32Array = PackedFloat32Array()
+var _snapshot_wind_u: PackedFloat32Array = PackedFloat32Array()
+var _snapshot_wind_v: PackedFloat32Array = PackedFloat32Array()
 
 const MARKER_PLAYER: int = 220
 const MARKER_UNKNOWN: int = 254
@@ -246,6 +249,9 @@ func _ensure_gpu_ready() -> bool:
 					font_size = hs
 			gpu_map.initialize_gpu_rendering(font, font_size, w, h)
 			_renderer_was_reinitialized = true
+		if gpu_map.has_method("set_cloud_rendering_params"):
+			# Keep cloud shadows visible on the in-game world map.
+			gpu_map.set_cloud_rendering_params(0.28, 0.0, Vector2(1.9, 1.25))
 	# Create per-view GPU packing helper.
 	if _gpu_view == null:
 		_gpu_view = GpuMapView.new()
@@ -359,6 +365,9 @@ func _resolve_world_snapshot() -> bool:
 		_snapshot_moist = _state_f32_snapshot(startup_state, "world_moisture", startup_w * startup_h)
 		_snapshot_land_mask = _state_u8_snapshot(startup_state, "world_land_mask", startup_w * startup_h)
 		_snapshot_beach_mask = _state_u8_snapshot(startup_state, "world_beach_mask", startup_w * startup_h)
+		_snapshot_cloud_cover = _state_f32_snapshot(startup_state, "world_cloud_cover", startup_w * startup_h)
+		_snapshot_wind_u = _state_f32_snapshot(startup_state, "world_wind_u", startup_w * startup_h)
+		_snapshot_wind_v = _state_f32_snapshot(startup_state, "world_wind_v", startup_w * startup_h)
 	else:
 		_snapshot_w = game_w
 		_snapshot_h = game_h
@@ -369,6 +378,9 @@ func _resolve_world_snapshot() -> bool:
 		_snapshot_moist = _state_f32_snapshot(game_state, "world_moisture", game_w * game_h)
 		_snapshot_land_mask = _state_u8_snapshot(game_state, "world_land_mask", game_w * game_h)
 		_snapshot_beach_mask = _state_u8_snapshot(game_state, "world_beach_mask", game_w * game_h)
+		_snapshot_cloud_cover = _state_f32_snapshot(game_state, "world_cloud_cover", game_w * game_h)
+		_snapshot_wind_u = _state_f32_snapshot(game_state, "world_wind_u", game_w * game_h)
+		_snapshot_wind_v = _state_f32_snapshot(game_state, "world_wind_v", game_w * game_h)
 	var snapshot_cell_count: int = _snapshot_w * _snapshot_h
 	var peer_state: Node = game_state if use_startup else startup_state
 	if _snapshot_height_raw.size() != snapshot_cell_count:
@@ -381,6 +393,12 @@ func _resolve_world_snapshot() -> bool:
 		_snapshot_land_mask = _state_u8_snapshot(peer_state, "world_land_mask", snapshot_cell_count)
 	if _snapshot_beach_mask.size() != snapshot_cell_count:
 		_snapshot_beach_mask = _state_u8_snapshot(peer_state, "world_beach_mask", snapshot_cell_count)
+	if _snapshot_cloud_cover.size() != snapshot_cell_count:
+		_snapshot_cloud_cover = _state_f32_snapshot(peer_state, "world_cloud_cover", snapshot_cell_count)
+	if _snapshot_wind_u.size() != snapshot_cell_count:
+		_snapshot_wind_u = _state_f32_snapshot(peer_state, "world_wind_u", snapshot_cell_count)
+	if _snapshot_wind_v.size() != snapshot_cell_count:
+		_snapshot_wind_v = _state_f32_snapshot(peer_state, "world_wind_v", snapshot_cell_count)
 	if _snapshot_seed_hash == 0:
 		_snapshot_seed_hash = 1
 	return true
@@ -538,13 +556,25 @@ func _draw_world_map_gpu(force_rebuild: bool) -> void:
 		"world_period_x": w,
 		"world_height": h,
 		"seed_xor": 0x1337,
-		"sim_days": sim_days,
 		"scale": 0.045,
 		"wind_x": 0.12,
 		"wind_y": 0.05,
 		"coverage": 0.55,
 		"contrast": 1.35,
 	}
+	var cell_count: int = w * h
+	if _snapshot_cloud_cover.size() == cell_count:
+		# Use the same cloud field as the world-map snapshot for visual continuity.
+		clouds["field"] = _snapshot_cloud_cover
+	if _snapshot_wind_u.size() == cell_count and _snapshot_wind_v.size() == cell_count and cell_count > 0:
+		var wind_u_sum: float = 0.0
+		var wind_v_sum: float = 0.0
+		for i in range(cell_count):
+			wind_u_sum += _snapshot_wind_u[i]
+			wind_v_sum += _snapshot_wind_v[i]
+		var inv_count: float = 1.0 / float(cell_count)
+		clouds["wind_x"] = wind_u_sum * inv_count
+		clouds["wind_y"] = wind_v_sum * inv_count
 
 	if _gpu_view != null and _gpu_view.has_method("update_and_draw"):
 		_gpu_view.update_and_draw(gpu_map, _cached_fields, solar, clouds, 0.0, 0.0, 0.0)

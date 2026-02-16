@@ -111,6 +111,8 @@ func _dispatch_copy_u32(src: RID, dst: RID, count: int) -> bool:
 	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(src); uniforms.append(u0)
 	var u1 := RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(dst); uniforms.append(u1)
 	var u_set := _rd.uniform_set_create(uniforms, _copy_shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([count])
 	pc.append_array(ints.to_byte_array())
@@ -137,6 +139,8 @@ func _dispatch_clear_u32(buf: RID, count: int) -> bool:
 	var uniforms: Array = []
 	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(buf); uniforms.append(u0)
 	var u_set := _rd.uniform_set_create(uniforms, _clear_shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([count])
 	pc.append_array(ints.to_byte_array())
@@ -164,6 +168,8 @@ func _dispatch_u32_to_f32(src: RID, dst: RID, count: int) -> bool:
 	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(src); uniforms.append(u0)
 	var u1 := RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(dst); uniforms.append(u1)
 	var u_set := _rd.uniform_set_create(uniforms, _u32_to_f32_shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([count])
 	pc.append_array(ints.to_byte_array())
@@ -199,6 +205,8 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 1; u.add_id(land_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(out_dir_buf); uniforms.append(u)
 	var u_set := _rd.uniform_set_create(uniforms, _dir_shader, 0)
+	if not u_set.is_valid():
+		return false
 	var rx0: int = 0; var ry0: int = 0; var rx1: int = w; var ry1: int = h
 	if roi.size.x > 0 and roi.size.y > 0:
 		rx0 = clamp(roi.position.x, 0, max(0, w))
@@ -252,6 +260,8 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 2; u.add_id(total_buf); uniforms.append(u)
 	u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(front_out_buf); uniforms.append(u)
 	u_set = _rd.uniform_set_create(uniforms, _push_shader, 0)
+	if not u_set.is_valid():
+		return false
 	pc = PackedByteArray()
 	var push_consts := PackedInt32Array([size, rx0, ry0, rx1, ry1, w])
 	pc.append_array(push_consts.to_byte_array())
@@ -286,6 +296,8 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 		u = RDUniform.new(); u.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u.binding = 3; u.add_id(front_out_buf); uniforms.append(u)
 		_rd.free_rid(u_set)
 		u_set = _rd.uniform_set_create(uniforms, _push_shader, 0)
+		if not u_set.is_valid():
+			return false
 	_rd.free_rid(u_set)
 	# Convert total u32 -> float accumulation
 	return _dispatch_u32_to_f32(total_buf, out_acc_buf, size)

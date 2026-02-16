@@ -242,6 +242,21 @@ func set_cloud_texture_override(tex: Texture2D) -> void:
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_cloud_texture_override"):
 		quad_renderer.set_cloud_texture_override(tex)
 
+func set_cloud_overlay_enabled(enabled: bool) -> void:
+	"""Enable/disable the separate white cloud overlay layer."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_cloud_overlay_enabled"):
+		quad_renderer.set_cloud_overlay_enabled(enabled)
+
+func set_cloud_rendering_params(shadow_strength: float, light_strength: float, shadow_offset: Vector2) -> void:
+	"""Configure cloud shadow/light contribution in the terrain shader."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_cloud_rendering_params"):
+		quad_renderer.set_cloud_rendering_params(shadow_strength, light_strength, shadow_offset)
+
+func set_noise_world_origin(origin_x: float, origin_y: float) -> void:
+	"""Set world-space cell origin used by shader noise hashing."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_noise_world_origin"):
+		quad_renderer.set_noise_world_origin(origin_x, origin_y)
+
 func set_light_texture_override(tex: Texture2D) -> void:
 	"""Provide a GPU-updated light texture (Texture2DRD) to the renderer."""
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_light_texture_override"):

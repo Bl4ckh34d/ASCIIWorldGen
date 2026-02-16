@@ -48,6 +48,8 @@ func update_from_height(w: int, h: int, height_buf: RID, sea_level: float, land_
 	var u0 := RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(height_buf); uniforms.append(u0)
 	var u1 := RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(land_buf); uniforms.append(u1)
 	var u_set := _rd.uniform_set_create(uniforms, _shader, 0)
+	if not u_set.is_valid():
+		return false
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
 	var floats := PackedFloat32Array([sea_level])

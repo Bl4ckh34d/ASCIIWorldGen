@@ -14,6 +14,11 @@ const RENDER_H: int = VIEW_H + VIEW_PAD * 2
 const MOVE_SPEED_CELLS_PER_SEC: float = 5.0
 const MOVE_EPS: float = 0.0001
 const MARKER_PLAYER: int = 220
+const MARKER_TREE_CANOPY: int = 224
+const MARKER_SHRUB_CLUSTER: int = 225
+const MARKER_BOULDER: int = 226
+const MARKER_REEDS: int = 227
+const MARKER_PLAYER_UNDER_CANOPY: int = 228
 
 @onready var header_label: Label = %HeaderLabel
 @onready var gpu_map: Control = %GpuMap
@@ -33,6 +38,7 @@ var world_width: int = 275
 var world_height: int = 62
 var world_seed_hash: int = 0
 var world_biome_ids: PackedInt32Array = PackedInt32Array()
+var world_river_mask: PackedByteArray = PackedByteArray()
 var _location_biome_override_id: int = -1
 
 var _chunk_gen: RegionalChunkGenerator = null
@@ -117,11 +123,23 @@ func _init_regional_generation() -> void:
 		# Best-effort fallback: try to pull from GameState even if location came from StartupState.
 		if game_state != null:
 			world_biome_ids = game_state.world_biome_ids
+	if world_river_mask.is_empty():
+		if game_state != null:
+			var river_v: Variant = game_state.get("world_river_mask")
+			if river_v is PackedByteArray:
+				world_river_mask = (river_v as PackedByteArray).duplicate()
+	if world_river_mask.is_empty() and startup_state != null:
+		var startup_river_v: Variant = startup_state.get("world_river_mask")
+		if startup_river_v is PackedByteArray:
+			world_river_mask = (startup_river_v as PackedByteArray).duplicate()
 	if world_biome_ids.is_empty():
 		# Without a snapshot we can still render, but biome blending will degrade.
 		world_biome_ids = PackedInt32Array()
+	var expected_cells: int = world_width * world_height
+	if expected_cells <= 0 or world_river_mask.size() != expected_cells:
+		world_river_mask = PackedByteArray()
 	_chunk_gen = RegionalChunkGenerator.new()
-	_chunk_gen.configure(world_seed_hash, world_width, world_height, world_biome_ids, REGION_SIZE)
+	_chunk_gen.configure(world_seed_hash, world_width, world_height, world_biome_ids, REGION_SIZE, world_river_mask)
 	if _location_biome_override_id >= 0 and "set_biome_overrides" in _chunk_gen:
 		_chunk_gen.set_biome_overrides({
 			Vector2i(world_tile_x, world_tile_y): int(_location_biome_override_id),
@@ -301,6 +319,11 @@ func _init_gpu_rendering() -> void:
 		gpu_map.initialize_gpu_rendering(font, font_size, RENDER_W, RENDER_H)
 		if "set_display_window" in gpu_map:
 			gpu_map.set_display_window(VIEW_W, VIEW_H, float(VIEW_PAD), float(VIEW_PAD))
+		# Regional map uses cloud shadows only (no separate white cloud tile overlay).
+		if "set_cloud_overlay_enabled" in gpu_map:
+			gpu_map.set_cloud_overlay_enabled(false)
+		if "set_cloud_rendering_params" in gpu_map:
+			gpu_map.set_cloud_rendering_params(0.30, 0.0, Vector2(1.9, 1.25))
 	# Initialize per-view GPU field packer.
 	if _gpu_view == null:
 		_gpu_view = GpuMapView.new()
@@ -327,6 +350,9 @@ func _load_location_from_state() -> void:
 		world_seed_hash = int(game_state.world_seed_hash)
 		if game_has_snapshot:
 			world_biome_ids = game_state.world_biome_ids
+			var river_v: Variant = game_state.get("world_river_mask")
+			if river_v is PackedByteArray:
+				world_river_mask = (river_v as PackedByteArray).duplicate()
 	if not game_has_snapshot and startup_state != null:
 		world_tile_x = int(startup_state.selected_world_tile.x)
 		world_tile_y = int(startup_state.selected_world_tile.y)
@@ -337,6 +363,9 @@ func _load_location_from_state() -> void:
 		world_height = max(1, int(startup_state.world_height)) if int(startup_state.world_height) > 0 else world_height
 		world_seed_hash = int(startup_state.world_seed_hash)
 		world_biome_ids = startup_state.world_biome_ids
+		var startup_river_v: Variant = startup_state.get("world_river_mask")
+		if startup_river_v is PackedByteArray:
+			world_river_mask = (startup_river_v as PackedByteArray).duplicate()
 	if world_seed_hash == 0:
 		world_seed_hash = 1
 	world_tile_x = posmod(world_tile_x, world_width)
@@ -508,8 +537,8 @@ func _update_dynamic_layers() -> void:
 	# Keep solar basis anchored to the currently centered world cell so relief/cloud
 	# shading remains world-space stable while smooth camera scroll offsets change.
 	var lon_phi: Vector2 = _get_fixed_lon_phi(_center_gx, _center_gy)
-	var half_w: int = VIEW_W / 2
-	var half_h: int = VIEW_H / 2
+	var half_w: int = int(floor(float(VIEW_W) * 0.5))
+	var half_h: int = int(floor(float(VIEW_H) * 0.5))
 	var origin_x: int = _center_gx - half_w - VIEW_PAD
 	var origin_y: int = _center_gy - half_h - VIEW_PAD
 	var clouds: Dictionary = _build_cloud_params(origin_x, origin_y)
@@ -788,8 +817,8 @@ func _sync_location_from_player_pos() -> void:
 	var gy_int: int = _clamp_global_y(int(floor(_player_gy)))
 	_center_gx = gx_int
 	_center_gy = gy_int
-	var new_world_x: int = int(gx_int / REGION_SIZE)
-	var new_world_y: int = int(gy_int / REGION_SIZE)
+	var new_world_x: int = gx_int // REGION_SIZE
+	var new_world_y: int = gy_int // REGION_SIZE
 	world_tile_x = posmod(new_world_x, world_width)
 	world_tile_y = clamp(new_world_y, 0, world_height - 1)
 	local_x = gx_int - new_world_x * REGION_SIZE
@@ -818,8 +847,8 @@ func _update_fixed_lonlat_uniform() -> void:
 func _world_tile_from_global(gx: int, gy: int) -> Vector2i:
 	var gxw: int = _wrap_global_x(gx)
 	var gyc: int = _clamp_global_y(gy)
-	var wx: int = int(gxw / REGION_SIZE)
-	var wy: int = int(gyc / REGION_SIZE)
+	var wx: int = gxw // REGION_SIZE
+	var wy: int = gyc // REGION_SIZE
 	return Vector2i(posmod(wx, world_width), clamp(wy, 0, world_height - 1))
 
 func _crosses_world_tile_boundary(gx_from: int, gy_from: int, gx_to: int, gy_to: int) -> bool:
@@ -1178,6 +1207,7 @@ func _write_field_cell(
 	var ground: int = int(cell.get("ground", RegionalChunkGenerator.Ground.GRASS))
 	var h: float = float(cell.get("height_raw", 0.0))
 	var b: int = int(cell.get("biome", _get_world_biome_id(int(gx / REGION_SIZE), int(gy / REGION_SIZE))))
+	var climate_biome: int = b
 
 	var is_water: bool = (ground == RegionalChunkGenerator.Ground.WATER_DEEP) or (ground == RegionalChunkGenerator.Ground.WATER_SHALLOW)
 	var is_land_cell: int = 0 if is_water else 1
@@ -1196,6 +1226,20 @@ func _write_field_cell(
 			b = 202 if cleared else 201
 			is_land_cell = 1
 			is_beach_cell = 0
+	# Render deterministic terrain clutter markers so regional landscapes read less flat.
+	var obj_id: int = int(cell.get("obj", RegionalChunkGenerator.Obj.NONE))
+	if b < 200 and is_land_cell == 1:
+		match obj_id:
+			RegionalChunkGenerator.Obj.TREE:
+				b = MARKER_TREE_CANOPY
+				is_beach_cell = 0
+			RegionalChunkGenerator.Obj.SHRUB:
+				b = MARKER_SHRUB_CLUSTER
+			RegionalChunkGenerator.Obj.BOULDER:
+				b = MARKER_BOULDER
+				is_beach_cell = 0
+			RegionalChunkGenerator.Obj.REED:
+				b = MARKER_REEDS
 
 	var is_marker_cell: bool = b >= 200
 	var patch_x_a: int = int(floor(float(gx) / 7.0))
@@ -1211,13 +1255,19 @@ func _write_field_cell(
 	var visual_h: float = h
 	if is_land_cell == 1 and not is_marker_cell:
 		visual_h = h + n_patch_a * 0.018 + n_patch_b * 0.010 + n_micro_h * 0.006
+	elif b == MARKER_TREE_CANOPY or b == MARKER_PLAYER_UNDER_CANOPY:
+		visual_h = max(h + n_patch_a * 0.010 + n_micro_h * 0.004, 0.10)
+	elif b == MARKER_SHRUB_CLUSTER or b == MARKER_REEDS:
+		visual_h = max(h + n_patch_a * 0.008 + n_micro_h * 0.003, 0.06)
+	elif b == MARKER_BOULDER:
+		visual_h = max(h + n_patch_a * 0.006 + n_micro_h * 0.003, 0.08)
 	out_height_raw[idx] = visual_h
 	out_biome[idx] = b
 	out_land[idx] = is_land_cell
 	out_beach[idx] = is_beach_cell
 
-	var base_t: float = _visual_temp_for_biome(b)
-	var base_m: float = _visual_moist_for_biome(b)
+	var base_t: float = _visual_temp_for_biome(climate_biome)
+	var base_m: float = _visual_moist_for_biome(climate_biome)
 	var elev_bias: float = clamp(h * 0.35, -0.20, 0.20)
 	var jt: float = n_patch_a * 0.16 + n_patch_b * 0.10 + n_micro_t * 0.08 + elev_bias * 0.30
 	var jm: float = -n_patch_a * 0.10 + n_patch_b * 0.16 + n_micro_m * 0.08 - elev_bias * 0.18
@@ -1488,6 +1538,8 @@ func _present_field_buffers(
 	var lon_phi: Vector2 = _get_fixed_lon_phi(_center_gx, _center_gy)
 	var clouds: Dictionary = _build_cloud_params(origin_x, origin_y)
 	if _gpu_view != null and gpu_map != null:
+		if "set_noise_world_origin" in gpu_map:
+			gpu_map.set_noise_world_origin(float(origin_x), float(origin_y))
 		var render_biome: PackedInt32Array = _field_biome.duplicate()
 		var render_land: PackedInt32Array = _field_land.duplicate()
 		var render_beach: PackedInt32Array = _field_beach.duplicate()
@@ -1495,7 +1547,10 @@ func _present_field_buffers(
 		var center_y: int = (VIEW_H >> 1) + VIEW_PAD
 		var center_idx: int = center_x + center_y * RENDER_W
 		if center_idx >= 0 and center_idx < render_biome.size():
-			render_biome[center_idx] = MARKER_PLAYER
+			var player_marker: int = MARKER_PLAYER
+			if int(render_biome[center_idx]) == MARKER_TREE_CANOPY:
+				player_marker = MARKER_PLAYER_UNDER_CANOPY
+			render_biome[center_idx] = player_marker
 		if center_idx >= 0 and center_idx < render_land.size():
 			# Render-only override: keep player marker visible while wading on shallow water.
 			render_land[center_idx] = 1
@@ -1770,10 +1825,11 @@ func _build_cloud_params(origin_x: int, origin_y: int) -> Dictionary:
 		var wind_speed: float = clamp(0.06 + wind_vec.length() * 0.03, 0.06, 0.26)
 		wind_x = wind_dir.x * wind_speed
 		wind_y = wind_dir.y * wind_speed
-	var coverage_threshold: float = clamp(1.0 - cloud_cover, 0.02, 0.98)
-	var overcast_floor: float = _smoothstep01((cloud_cover - 0.62) / 0.30) * 0.94
-	var contrast: float = lerp(1.75, 0.82, cloud_cover)
-	var cloud_scale: float = lerp(0.016, 0.024, clamp(0.35 + cloud_cover * 0.55, 0.0, 1.0))
+	var coverage_threshold: float = clamp(1.05 - cloud_cover * 1.08, 0.03, 0.96)
+	var overcast_floor: float = _smoothstep01((cloud_cover - 0.56) / 0.34) * 0.97
+	var contrast: float = lerp(1.22, 0.74, cloud_cover)
+	var cloud_scale: float = lerp(0.014, 0.028, clamp(0.25 + cloud_cover * 0.75, 0.0, 1.0))
+	var morph_strength: float = lerp(0.26, 0.52, cloud_cover)
 	return {
 		"enabled": true,
 		"origin_x": origin_x,
@@ -1786,7 +1842,8 @@ func _build_cloud_params(origin_x: int, origin_y: int) -> Dictionary:
 		"coverage": coverage_threshold,
 		"contrast": contrast,
 		"overcast_floor": clamp(overcast_floor, 0.0, 0.94),
-		"morph_strength": 0.30,
+		"morph_strength": morph_strength,
+		"sim_days_scale": 512.0,
 	}
 
 func _publish_regional_cache_stats(prefetch_generated: int = -1) -> void:

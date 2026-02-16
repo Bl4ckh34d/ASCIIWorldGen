@@ -36,6 +36,7 @@ var world_temperature: PackedFloat32Array = PackedFloat32Array()
 var world_moisture: PackedFloat32Array = PackedFloat32Array()
 var world_land_mask: PackedByteArray = PackedByteArray()
 var world_beach_mask: PackedByteArray = PackedByteArray()
+var world_river_mask: PackedByteArray = PackedByteArray()
 var world_cloud_cover: PackedFloat32Array = PackedFloat32Array()
 var world_wind_u: PackedFloat32Array = PackedFloat32Array()
 var world_wind_v: PackedFloat32Array = PackedFloat32Array()
@@ -152,6 +153,7 @@ func reset_run() -> void:
 	world_moisture = PackedFloat32Array()
 	world_land_mask = PackedByteArray()
 	world_beach_mask = PackedByteArray()
+	world_river_mask = PackedByteArray()
 	world_cloud_cover = PackedFloat32Array()
 	world_wind_u = PackedFloat32Array()
 	world_wind_v = PackedFloat32Array()
@@ -193,7 +195,8 @@ func initialize_world_snapshot(
 	beach_mask: PackedByteArray = PackedByteArray(),
 	cloud_cover: PackedFloat32Array = PackedFloat32Array(),
 	wind_u: PackedFloat32Array = PackedFloat32Array(),
-	wind_v: PackedFloat32Array = PackedFloat32Array()
+	wind_v: PackedFloat32Array = PackedFloat32Array(),
+	river_mask: PackedByteArray = PackedByteArray()
 ) -> void:
 	world_width = max(1, width)
 	world_height = max(1, height)
@@ -205,6 +208,7 @@ func initialize_world_snapshot(
 	world_moisture = moisture.duplicate() if moisture.size() == size else PackedFloat32Array()
 	world_land_mask = land_mask.duplicate() if land_mask.size() == size else PackedByteArray()
 	world_beach_mask = beach_mask.duplicate() if beach_mask.size() == size else PackedByteArray()
+	world_river_mask = river_mask.duplicate() if river_mask.size() == size else PackedByteArray()
 	world_cloud_cover = cloud_cover.duplicate() if cloud_cover.size() == size else PackedFloat32Array()
 	world_wind_u = wind_u.duplicate() if wind_u.size() == size else PackedFloat32Array()
 	world_wind_v = wind_v.duplicate() if wind_v.size() == size else PackedFloat32Array()
@@ -273,6 +277,7 @@ func ensure_world_snapshot_integrity() -> void:
 	var moist: PackedFloat32Array = startup_state.get("world_moisture") if startup_state.get("world_moisture") is PackedFloat32Array else PackedFloat32Array()
 	var land_mask: PackedByteArray = startup_state.get("world_land_mask") if startup_state.get("world_land_mask") is PackedByteArray else PackedByteArray()
 	var beach_mask: PackedByteArray = startup_state.get("world_beach_mask") if startup_state.get("world_beach_mask") is PackedByteArray else PackedByteArray()
+	var river_mask: PackedByteArray = startup_state.get("world_river_mask") if startup_state.get("world_river_mask") is PackedByteArray else PackedByteArray()
 	var cloud_cover: PackedFloat32Array = startup_state.get("world_cloud_cover") if startup_state.get("world_cloud_cover") is PackedFloat32Array else PackedFloat32Array()
 	var wind_u: PackedFloat32Array = startup_state.get("world_wind_u") if startup_state.get("world_wind_u") is PackedFloat32Array else PackedFloat32Array()
 	var wind_v: PackedFloat32Array = startup_state.get("world_wind_v") if startup_state.get("world_wind_v") is PackedFloat32Array else PackedFloat32Array()
@@ -288,7 +293,8 @@ func ensure_world_snapshot_integrity() -> void:
 		beach_mask,
 		cloud_cover,
 		wind_u,
-		wind_v
+		wind_v,
+		river_mask
 	)
 
 func set_location(scene_name: String, world_x: int, world_y: int, local_x: int, local_y: int, biome_id: int = -1, biome_name: String = "") -> void:
@@ -1429,6 +1435,7 @@ func _to_save_payload() -> Dictionary:
 		"world_moisture": _packed_float32_to_array(world_moisture),
 		"world_land_mask": _packed_byte_to_array(world_land_mask),
 		"world_beach_mask": _packed_byte_to_array(world_beach_mask),
+		"world_river_mask": _packed_byte_to_array(world_river_mask),
 		"world_cloud_cover": _packed_float32_to_array(world_cloud_cover),
 		"world_wind_u": _packed_float32_to_array(world_wind_u),
 		"world_wind_v": _packed_float32_to_array(world_wind_v),
@@ -1462,6 +1469,7 @@ func _from_save_payload(data: Dictionary, version: int = SAVE_SCHEMA_VERSION) ->
 	world_moisture = _variant_to_packed_float32(data.get("world_moisture", []), size)
 	world_land_mask = _variant_to_packed_byte(data.get("world_land_mask", []), size)
 	world_beach_mask = _variant_to_packed_byte(data.get("world_beach_mask", []), size)
+	world_river_mask = _variant_to_packed_byte(data.get("world_river_mask", []), size)
 	world_cloud_cover = _variant_to_packed_float32(data.get("world_cloud_cover", []), size)
 	world_wind_u = _variant_to_packed_float32(data.get("world_wind_u", []), size)
 	world_wind_v = _variant_to_packed_float32(data.get("world_wind_v", []), size)

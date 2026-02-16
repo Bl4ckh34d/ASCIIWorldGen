@@ -88,7 +88,7 @@ static func generate_house_layout(
 			var border: bool = (x == bx0 or x == bx1 or y == by0 or y == by1)
 			_set_tile_s(tiles, w, h, x, y, LocalAreaTiles.Tile.WALL if border else LocalAreaTiles.Tile.FLOOR)
 
-	var door_side: int = DeterministicRng.randi_range(seed_value, key_root + "|door_side", 0, 3)
+	var door_side: int = _pick_house_door_side(seed_value, key_root, service_type, bx0, by0, bw, bh)
 	if service_type == _SERVICE_TOWN_HALL:
 		var hall_roll: float = DeterministicRng.randf01(seed_value, key_root + "|hall_door")
 		if hall_roll < 0.55:
@@ -286,6 +286,23 @@ static func _normalize_house_service_type(service_type: String, is_shop: bool) -
 	if out != _SERVICE_HOME and out != _SERVICE_SHOP and out != _SERVICE_INN and out != _SERVICE_TEMPLE and out != _SERVICE_FACTION_HALL and out != _SERVICE_TOWN_HALL:
 		out = _SERVICE_HOME
 	return out
+
+static func _pick_house_door_side(
+	seed_value: int,
+	key_root: String,
+	service_type: String,
+	bx0: int,
+	by0: int,
+	bw: int,
+	bh: int
+) -> int:
+	# Avoid tiny-modulo bias from direct hash % 4 by deriving side from mixed floats.
+	var key_base: String = "%s|door_side|%s|%d|%d|%d|%d" % [key_root, service_type, bx0, by0, bw, bh]
+	var r0: float = DeterministicRng.randf01(seed_value, key_base + "|a")
+	var r1: float = DeterministicRng.randf01(seed_value, key_base + "|b")
+	var mix: float = fposmod(r0 + r1 * 0.61803398875, 1.0)
+	var side: int = int(floor(mix * 4.0))
+	return clamp(side, _DOOR_EAST, _DOOR_SOUTH)
 
 static func _entry_side_candidates(anchor_x: int, anchor_y: int, door_side: int) -> Array[Vector2i]:
 	match door_side:

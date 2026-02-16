@@ -214,6 +214,48 @@ func _update_base_fields_partial(field_data: Dictionary, dx: int, dy: int) -> bo
 		_upload_col_i32("beach", beach, edge_x, edge_y)
 	return true
 
+func _build_cloud_texture(clouds: Dictionary, sim_days: float) -> Texture2D:
+	var size: int = width * height
+	var cloud_tex: Texture2D = null
+	var enable_clouds: bool = VariantCasts.to_bool(clouds.get("enabled", true))
+	if not enable_clouds:
+		return null
+	var cloud_field_v: Variant = clouds.get("field", PackedFloat32Array())
+	if cloud_field_v is PackedFloat32Array:
+		var cloud_field: PackedFloat32Array = cloud_field_v
+		if cloud_field.size() == size:
+			_update_buffer("cloud", cloud_field.to_byte_array())
+			if _cloud_pack != null and _cloud_pack.has_method("update_from_buffer"):
+				cloud_tex = _cloud_pack.update_from_buffer(width, height, _rid("cloud"))
+			return cloud_tex
+	if _cloud_compute == null or not _cloud_compute.has_method("generate_clouds_gpu"):
+		return null
+	var sim_days_scale: float = max(0.0, float(clouds.get("sim_days_scale", 1.0)))
+	var cloud_sim_days: float = sim_days * sim_days_scale + float(clouds.get("sim_days_offset", 0.0))
+	var ok_clouds: bool = VariantCasts.to_bool(_cloud_compute.generate_clouds_gpu(
+		width,
+		height,
+		{
+			"origin_x": int(clouds.get("origin_x", 0)),
+			"origin_y": int(clouds.get("origin_y", 0)),
+			"world_period_x": int(clouds.get("world_period_x", width)),
+			"world_height": int(clouds.get("world_height", height)),
+			"seed": seed_hash ^ int(clouds.get("seed_xor", 0)),
+			"sim_days": cloud_sim_days,
+			"scale": float(clouds.get("scale", 0.020)),
+			"wind_x": float(clouds.get("wind_x", 0.15)),
+			"wind_y": float(clouds.get("wind_y", 0.05)),
+			"coverage": float(clouds.get("coverage", 0.55)),
+			"contrast": float(clouds.get("contrast", 1.35)),
+			"overcast_floor": float(clouds.get("overcast_floor", 0.0)),
+			"morph_strength": float(clouds.get("morph_strength", 0.22)),
+		},
+		_rid("cloud")
+	))
+	if ok_clouds and _cloud_pack != null and _cloud_pack.has_method("update_from_buffer"):
+		cloud_tex = _cloud_pack.update_from_buffer(width, height, _rid("cloud"))
+	return cloud_tex
+
 func _draw_with_current_buffers(
 	renderer: Node,
 	solar: Dictionary,
@@ -261,31 +303,7 @@ func _draw_with_current_buffers(
 	if include_data2 and _data2_pack != null and _data2_pack.has_method("update_from_buffers"):
 		data2_tex = _data2_pack.update_from_buffers(width, height, _rid("biome"), _rid("land"), _rid("beach"))
 
-	var cloud_tex: Texture2D = null
-	var enable_clouds: bool = VariantCasts.to_bool(clouds.get("enabled", true))
-	if enable_clouds and _cloud_compute != null and _cloud_compute.has_method("generate_clouds_gpu"):
-		var ok_clouds: bool = VariantCasts.to_bool(_cloud_compute.generate_clouds_gpu(
-			width,
-			height,
-			{
-				"origin_x": int(clouds.get("origin_x", 0)),
-				"origin_y": int(clouds.get("origin_y", 0)),
-				"world_period_x": int(clouds.get("world_period_x", width)),
-				"world_height": int(clouds.get("world_height", height)),
-				"seed": seed_hash ^ int(clouds.get("seed_xor", 0)),
-				"sim_days": sim_days,
-				"scale": float(clouds.get("scale", 0.020)),
-				"wind_x": float(clouds.get("wind_x", 0.15)),
-				"wind_y": float(clouds.get("wind_y", 0.05)),
-				"coverage": float(clouds.get("coverage", 0.55)),
-				"contrast": float(clouds.get("contrast", 1.35)),
-				"overcast_floor": float(clouds.get("overcast_floor", 0.0)),
-				"morph_strength": float(clouds.get("morph_strength", 0.22)),
-			},
-			_rid("cloud")
-		))
-		if ok_clouds and _cloud_pack != null and _cloud_pack.has_method("update_from_buffer"):
-			cloud_tex = _cloud_pack.update_from_buffer(width, height, _rid("cloud"))
+	var cloud_tex: Texture2D = _build_cloud_texture(clouds, sim_days)
 
 	if renderer.has_method("set_world_data_1_override") and data1_tex:
 		renderer.set_world_data_1_override(data1_tex)
@@ -416,31 +434,7 @@ func update_dynamic_layers(
 		data1_tex = _data1_pack.update_from_buffers(width, height, _rid("height"), _rid("temp"), _rid("moist"), _rid("light"))
 
 	# Clouds: GPU compute -> buffer -> texture.
-	var cloud_tex: Texture2D = null
-	var enable_clouds: bool = VariantCasts.to_bool(clouds.get("enabled", true))
-	if enable_clouds and _cloud_compute != null and _cloud_compute.has_method("generate_clouds_gpu"):
-		var ok_clouds: bool = VariantCasts.to_bool(_cloud_compute.generate_clouds_gpu(
-			width,
-			height,
-			{
-				"origin_x": int(clouds.get("origin_x", 0)),
-				"origin_y": int(clouds.get("origin_y", 0)),
-				"world_period_x": int(clouds.get("world_period_x", width)),
-				"world_height": int(clouds.get("world_height", height)),
-				"seed": seed_hash ^ int(clouds.get("seed_xor", 0)),
-				"sim_days": sim_days,
-				"scale": float(clouds.get("scale", 0.020)),
-				"wind_x": float(clouds.get("wind_x", 0.15)),
-				"wind_y": float(clouds.get("wind_y", 0.05)),
-				"coverage": float(clouds.get("coverage", 0.55)),
-				"contrast": float(clouds.get("contrast", 1.35)),
-				"overcast_floor": float(clouds.get("overcast_floor", 0.0)),
-				"morph_strength": float(clouds.get("morph_strength", 0.22)),
-			},
-			_rid("cloud")
-		))
-		if ok_clouds and _cloud_pack != null and _cloud_pack.has_method("update_from_buffer"):
-			cloud_tex = _cloud_pack.update_from_buffer(width, height, _rid("cloud"))
+	var cloud_tex: Texture2D = _build_cloud_texture(clouds, sim_days)
 
 	# Push textures + uniforms into the renderer.
 	if renderer.has_method("set_world_data_1_override") and data1_tex:

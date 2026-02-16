@@ -180,8 +180,8 @@ func prefetch_for_view(
 
 	var center_gx: int = _normalize_global_coords(origin_x + int(floor(float(width_cells) * 0.5)), origin_y).x
 	var center_gy: int = clamp(origin_y + int(floor(float(height_cells) * 0.5)), 0, max_world_y)
-	var center_cx: int = int(center_gx / cs)
-	var center_cy: int = int(center_gy / cs)
+	var center_cx: int = center_gx // cs
+	var center_cy: int = center_gy // cs
 	_sort_chunk_keys_by_proximity(chunk_keys, center_cx, center_cy)
 
 	var gen_budget: int = max_generate_chunks if max_generate_chunks >= 0 else int(prefetch_generate_budget_chunks)
@@ -221,8 +221,8 @@ func get_cell(gx: int, gy: int) -> Dictionary:
 	gy = p.y
 	_tick += 1
 	var cs: int = chunk_size
-	var cx: int = int(gx / cs)
-	var cy: int = int(gy / cs)
+	var cx: int = gx // cs
+	var cy: int = gy // cs
 	var key := Vector2i(cx, cy)
 	var had_chunk: bool = _chunks.has(key)
 	_ensure_chunk(cx, cy)
@@ -323,14 +323,14 @@ func set_prefetch_budget(max_generate_chunks: int, budget_time_us: int) -> void:
 
 func _collect_prefetch_chunk_keys(min_x: int, max_x: int, min_y: int, max_y: int, cs: int) -> Array:
 	var out: Array = []
-	var cy0: int = int(min_y / cs)
-	var cy1: int = int(max_y / cs)
+	var cy0: int = min_y // cs
+	var cy1: int = max_y // cs
 	var x_ranges: Array = _wrapped_x_ranges(min_x, max_x)
 	var seen: Dictionary = {}
 	for xr in x_ranges:
 		var rr: Vector2i = xr
-		var cx0: int = int(rr.x / cs)
-		var cx1: int = int(rr.y / cs)
+		var cx0: int = rr.x // cs
+		var cx1: int = rr.y // cs
 		for cy in range(cy0, cy1 + 1):
 			for cx in range(cx0, cx1 + 1):
 				var key := Vector2i(cx, cy)

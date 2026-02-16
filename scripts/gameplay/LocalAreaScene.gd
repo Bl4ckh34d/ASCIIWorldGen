@@ -772,6 +772,11 @@ func _init_gpu_rendering() -> void:
 		gpu_map.initialize_gpu_rendering(font, font_size, _render_w, _render_h)
 		if "set_display_window" in gpu_map:
 			gpu_map.set_display_window(_view_w, _view_h, float(VIEW_PAD), float(VIEW_PAD))
+		# Local/interior maps use cloud shadows only (no separate white cloud tile overlay).
+		if "set_cloud_overlay_enabled" in gpu_map:
+			gpu_map.set_cloud_overlay_enabled(false)
+		if "set_cloud_rendering_params" in gpu_map:
+			gpu_map.set_cloud_rendering_params(0.32, 0.0, Vector2(1.9, 1.25))
 	# Initialize per-view GPU field packer.
 	if _gpu_view == null:
 		_gpu_view = GpuMapView.new()
@@ -2425,6 +2430,7 @@ func _build_local_cloud_params() -> Dictionary:
 		"contrast": contrast,
 		"overcast_floor": clamp(overcast_floor, 0.0, 0.94),
 		"morph_strength": 0.30,
+		"sim_days_scale": 512.0,
 	}
 
 func _local_visual_temp_for_biome(biome_id: int) -> float:

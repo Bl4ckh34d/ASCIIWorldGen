@@ -2684,7 +2684,8 @@ func _on_tile_clicked(x: int, y: int, button_index: int) -> void:
 			transition_render.get("beach_mask", PackedByteArray()),
 			transition_render.get("cloud_cover", PackedFloat32Array()),
 			transition_render.get("wind_u", PackedFloat32Array()),
-			transition_render.get("wind_v", PackedFloat32Array())
+			transition_render.get("wind_v", PackedFloat32Array()),
+			transition_render.get("river_mask", PackedByteArray())
 		)
 	if game_state != null and game_state.has_method("sync_world_time_from_sim_days"):
 		if time_system != null and "simulation_time_days" in time_system:
@@ -2714,7 +2715,8 @@ func _on_tile_clicked(x: int, y: int, button_index: int) -> void:
 					transition_render.get("beach_mask", PackedByteArray()),
 					transition_render.get("cloud_cover", PackedFloat32Array()),
 					transition_render.get("wind_u", PackedFloat32Array()),
-					transition_render.get("wind_v", PackedFloat32Array())
+					transition_render.get("wind_v", PackedFloat32Array()),
+					transition_render.get("river_mask", PackedByteArray())
 				)
 		if startup_state != null and startup_state.has_method("set_selected_world_tile"):
 			startup_state.set_selected_world_tile(
@@ -2856,6 +2858,7 @@ func _capture_transition_world_render_fields(
 		"moisture": PackedFloat32Array(),
 		"land_mask": PackedByteArray(),
 		"beach_mask": PackedByteArray(),
+		"river_mask": PackedByteArray(),
 		"cloud_cover": PackedFloat32Array(),
 		"wind_u": PackedFloat32Array(),
 		"wind_v": PackedFloat32Array(),
@@ -2883,6 +2886,10 @@ func _capture_transition_world_render_fields(
 		var beach: PackedByteArray = generator.last_beach
 		if beach.size() == cell_count:
 			out["beach_mask"] = beach.duplicate()
+	if "last_river" in generator:
+		var river_mask: PackedByteArray = generator.last_river
+		if river_mask.size() == cell_count:
+			out["river_mask"] = river_mask.duplicate()
 	if "last_clouds" in generator:
 		var clouds: PackedFloat32Array = generator.last_clouds
 		if clouds.size() == cell_count:
@@ -2907,9 +2914,12 @@ func _capture_transition_world_render_fields(
 	var out_wind_v_v: Variant = out.get("wind_v", PackedFloat32Array())
 	var out_wind_u: PackedFloat32Array = out_wind_u_v if out_wind_u_v is PackedFloat32Array else PackedFloat32Array()
 	var out_wind_v: PackedFloat32Array = out_wind_v_v if out_wind_v_v is PackedFloat32Array else PackedFloat32Array()
+	var out_river_v: Variant = out.get("river_mask", PackedByteArray())
+	var out_river: PackedByteArray = out_river_v if out_river_v is PackedByteArray else PackedByteArray()
 	var need_wind_u_readback: bool = out_wind_u.size() != cell_count
 	var need_wind_v_readback: bool = out_wind_v.size() != cell_count
-	if (need_cloud_readback or need_wind_u_readback or need_wind_v_readback) and generator.has_method("read_persistent_buffer_region"):
+	var need_river_readback: bool = out_river.size() != cell_count
+	if (need_cloud_readback or need_wind_u_readback or need_wind_v_readback or need_river_readback) and generator.has_method("read_persistent_buffer_region"):
 		if "ensure_persistent_buffers" in generator:
 			generator.ensure_persistent_buffers(false)
 		if RenderingServer.has_method("force_sync"):
@@ -2932,6 +2942,16 @@ func _capture_transition_world_render_fields(
 				var wind_v_read: PackedFloat32Array = wind_v_bytes.to_float32_array()
 				if wind_v_read.size() == cell_count:
 					out["wind_v"] = wind_v_read
+		if need_river_readback:
+			var river_bytes: PackedByteArray = generator.read_persistent_buffer_region("river", 0, cell_count * 4)
+			if river_bytes.size() == cell_count * 4:
+				var river_i32: PackedInt32Array = river_bytes.to_int32_array()
+				if river_i32.size() == cell_count:
+					var river_u8 := PackedByteArray()
+					river_u8.resize(cell_count)
+					for i in range(cell_count):
+						river_u8[i] = (1 if int(river_i32[i]) != 0 else 0)
+					out["river_mask"] = river_u8
 	return out
 
 func _get_startup_world_render_fields(startup_state: Node, cell_count: int) -> Dictionary:
@@ -2941,6 +2961,7 @@ func _get_startup_world_render_fields(startup_state: Node, cell_count: int) -> D
 		"moisture": PackedFloat32Array(),
 		"land_mask": PackedByteArray(),
 		"beach_mask": PackedByteArray(),
+		"river_mask": PackedByteArray(),
 		"cloud_cover": PackedFloat32Array(),
 		"wind_u": PackedFloat32Array(),
 		"wind_v": PackedFloat32Array(),
@@ -2952,6 +2973,7 @@ func _get_startup_world_render_fields(startup_state: Node, cell_count: int) -> D
 	var moist: PackedFloat32Array = PackedFloat32Array()
 	var land: PackedByteArray = PackedByteArray()
 	var beach: PackedByteArray = PackedByteArray()
+	var river: PackedByteArray = PackedByteArray()
 	var cloud_cover: PackedFloat32Array = PackedFloat32Array()
 	var wind_u: PackedFloat32Array = PackedFloat32Array()
 	var wind_v: PackedFloat32Array = PackedFloat32Array()
@@ -2960,6 +2982,7 @@ func _get_startup_world_render_fields(startup_state: Node, cell_count: int) -> D
 	var moist_v: Variant = startup_state.get("world_moisture")
 	var land_v: Variant = startup_state.get("world_land_mask")
 	var beach_v: Variant = startup_state.get("world_beach_mask")
+	var river_v: Variant = startup_state.get("world_river_mask")
 	var cloud_cover_v: Variant = startup_state.get("world_cloud_cover")
 	var wind_u_v: Variant = startup_state.get("world_wind_u")
 	var wind_v_v: Variant = startup_state.get("world_wind_v")
@@ -2973,6 +2996,8 @@ func _get_startup_world_render_fields(startup_state: Node, cell_count: int) -> D
 		land = land_v
 	if beach_v is PackedByteArray:
 		beach = beach_v
+	if river_v is PackedByteArray:
+		river = river_v
 	if cloud_cover_v is PackedFloat32Array:
 		cloud_cover = cloud_cover_v
 	if wind_u_v is PackedFloat32Array:
@@ -2989,6 +3014,8 @@ func _get_startup_world_render_fields(startup_state: Node, cell_count: int) -> D
 		out["land_mask"] = land.duplicate()
 	if beach.size() == cell_count:
 		out["beach_mask"] = beach.duplicate()
+	if river.size() == cell_count:
+		out["river_mask"] = river.duplicate()
 	if cloud_cover.size() == cell_count:
 		out["cloud_cover"] = cloud_cover.duplicate()
 	if wind_u.size() == cell_count:
