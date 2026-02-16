@@ -26,6 +26,7 @@ var _cached_fields: Dictionary = {}
 var _snapshot_w: int = 0
 var _snapshot_h: int = 0
 var _snapshot_seed_hash: int = 1
+var _snapshot_sea_level: float = 0.0
 var _snapshot_biomes: PackedInt32Array = PackedInt32Array()
 var _snapshot_height_raw: PackedFloat32Array = PackedFloat32Array()
 var _snapshot_temp: PackedFloat32Array = PackedFloat32Array()
@@ -157,7 +158,7 @@ func _move_cursor(dx: int, dy: int) -> void:
 func _set_cursor_from_screen_pos(screen_pos: Vector2) -> bool:
 	if gpu_map == null or _snapshot_w <= 0 or _snapshot_h <= 0:
 		return false
-	var rect: Rect2 = gpu_map.get_global_rect()
+	var rect: Rect2 = _get_gpu_map_content_rect_global()
 	if not rect.has_point(screen_pos):
 		return false
 	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
@@ -175,6 +176,20 @@ func _set_cursor_from_screen_pos(screen_pos: Vector2) -> bool:
 	_cursor_y = y
 	_refresh(true)
 	return true
+
+func _get_gpu_map_content_rect_global() -> Rect2:
+	if gpu_map == null:
+		return Rect2()
+	var outer_rect: Rect2 = gpu_map.get_global_rect()
+	if outer_rect.size.x <= 0.0 or outer_rect.size.y <= 0.0:
+		return outer_rect
+	if gpu_map.has_method("get_content_rect_local"):
+		var local_rect_v: Variant = gpu_map.call("get_content_rect_local")
+		if local_rect_v is Rect2:
+			var local_rect: Rect2 = local_rect_v
+			if local_rect.size.x > 0.0 and local_rect.size.y > 0.0:
+				return Rect2(outer_rect.position + local_rect.position, local_rect.size)
+	return outer_rect
 
 func _try_fast_travel() -> void:
 	if scene_router == null:
@@ -255,6 +270,9 @@ func _ensure_gpu_ready() -> bool:
 		if gpu_map.has_method("set_water_rendering_params"):
 			# World map view: keep solar reflection, disable animated wave wobble.
 			gpu_map.set_water_rendering_params(0.0)
+		if gpu_map.has_method("set_preserve_map_aspect"):
+			# Keep in-game worldmap projection consistent with worldgen worldmap.
+			gpu_map.set_preserve_map_aspect(true)
 	# Create per-view GPU packing helper.
 	if _gpu_view == null:
 		_gpu_view = GpuMapView.new()
@@ -362,6 +380,7 @@ func _resolve_world_snapshot() -> bool:
 		_snapshot_w = startup_w
 		_snapshot_h = startup_h
 		_snapshot_seed_hash = startup_seed
+		_snapshot_sea_level = float(startup_state.get("world_sea_level")) if startup_state != null else 0.0
 		_snapshot_biomes = startup_biomes.duplicate()
 		_snapshot_height_raw = _state_f32_snapshot(startup_state, "world_height_raw", startup_w * startup_h)
 		_snapshot_temp = _state_f32_snapshot(startup_state, "world_temperature", startup_w * startup_h)
@@ -375,6 +394,7 @@ func _resolve_world_snapshot() -> bool:
 		_snapshot_w = game_w
 		_snapshot_h = game_h
 		_snapshot_seed_hash = game_seed
+		_snapshot_sea_level = float(game_state.get("world_sea_level")) if game_state != null else 0.0
 		_snapshot_biomes = game_biomes.duplicate()
 		_snapshot_height_raw = _state_f32_snapshot(game_state, "world_height_raw", game_w * game_h)
 		_snapshot_temp = _state_f32_snapshot(game_state, "world_temperature", game_w * game_h)
@@ -385,7 +405,7 @@ func _resolve_world_snapshot() -> bool:
 		_snapshot_wind_u = _state_f32_snapshot(game_state, "world_wind_u", game_w * game_h)
 		_snapshot_wind_v = _state_f32_snapshot(game_state, "world_wind_v", game_w * game_h)
 	var snapshot_cell_count: int = _snapshot_w * _snapshot_h
-	var peer_state: Node = game_state if use_startup else startup_state
+	var peer_state: Node = startup_state if use_startup else game_state
 	if _snapshot_height_raw.size() != snapshot_cell_count:
 		_snapshot_height_raw = _state_f32_snapshot(peer_state, "world_height_raw", snapshot_cell_count)
 	if _snapshot_temp.size() != snapshot_cell_count:
@@ -404,6 +424,10 @@ func _resolve_world_snapshot() -> bool:
 		_snapshot_wind_v = _state_f32_snapshot(peer_state, "world_wind_v", snapshot_cell_count)
 	if _snapshot_seed_hash == 0:
 		_snapshot_seed_hash = 1
+	if is_zero_approx(_snapshot_sea_level):
+		var sea_peer: Node = startup_state if use_startup else game_state
+		if sea_peer != null:
+			_snapshot_sea_level = float(sea_peer.get("world_sea_level"))
 	return true
 
 func _state_f32_snapshot(state: Node, prop_name: String, expected_size: int) -> PackedFloat32Array:
@@ -580,7 +604,7 @@ func _draw_world_map_gpu(force_rebuild: bool) -> void:
 		clouds["wind_y"] = wind_v_sum * inv_count
 
 	if _gpu_view != null and _gpu_view.has_method("update_and_draw"):
-		_gpu_view.update_and_draw(gpu_map, _cached_fields, solar, clouds, 0.0, 0.0, 0.0)
+		_gpu_view.update_and_draw(gpu_map, _cached_fields, solar, clouds, 0.0, 0.0, _snapshot_sea_level)
 	# World map uses spherical lon/lat (no fixed override).
 	if gpu_map.has_method("set_fixed_lonlat"):
 		gpu_map.set_fixed_lonlat(false, 0.0, 0.0)

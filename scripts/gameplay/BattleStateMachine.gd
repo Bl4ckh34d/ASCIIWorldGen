@@ -502,14 +502,14 @@ func _apply_party_action(party_idx: int, cmd: String, arg: String = "", target_i
 			var picked: int = _find_party_index_by_id(target_id)
 			if picked >= 0 and picked < party.size() and int(party[picked].get("hp", 0)) > 0:
 				tgt_idx = picked
-		var tgt: Dictionary = party[tgt_idx]
-		var tgt_name: String = String(tgt.get("name", "Member"))
+		var party_target: Dictionary = party[tgt_idx]
+		var tgt_name: String = String(party_target.get("name", "Member"))
 		if effect_type == "heal_hp":
 			var amount: int = max(1, int(effect.get("amount", 10)))
-			var hp_before: int = int(tgt.get("hp", 0))
-			var hp_after: int = clamp(hp_before + amount, 0, int(tgt.get("hp_max", 1)))
-			tgt["hp"] = hp_after
-			party[tgt_idx] = tgt
+			var hp_before: int = int(party_target.get("hp", 0))
+			var hp_after: int = clamp(hp_before + amount, 0, int(party_target.get("hp_max", 1)))
+			party_target["hp"] = hp_after
+			party[tgt_idx] = party_target
 			_consume_item(item_name, 1)
 			if hp_after == hp_before:
 				logs.append("%s uses %s on %s, but nothing happened." % [actor_name, item_name, tgt_name])
@@ -590,15 +590,15 @@ func _apply_party_action(party_idx: int, cmd: String, arg: String = "", target_i
 	if target_idx < 0:
 		return logs
 	var dmg: int = _calc_party_damage(actor, cmd)
-	var tgt: Dictionary = enemies[target_idx]
-	var dmg_info: Dictionary = _apply_enemy_resistance_to_damage(tgt, dmg, "physical")
+	var enemy_target: Dictionary = enemies[target_idx]
+	var dmg_info: Dictionary = _apply_enemy_resistance_to_damage(enemy_target, dmg, "physical")
 	var dmg_final: int = int(dmg_info.get("damage", dmg))
 	var dmg_mult: float = float(dmg_info.get("mult", 1.0))
-	tgt["hp"] = max(0, int(tgt.get("hp", 0)) - dmg_final)
-	enemies[target_idx] = tgt
+	enemy_target["hp"] = max(0, int(enemy_target.get("hp", 0)) - dmg_final)
+	enemies[target_idx] = enemy_target
 	logs.append("%s uses %s for %d damage%s." % [actor_name, cmd.capitalize(), dmg_final, _resistance_suffix(dmg_mult)])
-	if int(tgt.get("hp", 0)) <= 0:
-		logs.append("%s was defeated." % String(tgt.get("name", "Enemy")))
+	if int(enemy_target.get("hp", 0)) <= 0:
+		logs.append("%s was defeated." % String(enemy_target.get("name", "Enemy")))
 	return logs
 
 func _apply_enemy_action(enemy_idx: int) -> PackedStringArray:

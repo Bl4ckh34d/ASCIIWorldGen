@@ -17,6 +17,7 @@ var _intro_world_prepared: bool = false
 var world_seed_hash: int = 0
 var world_width: int = 0
 var world_height: int = 0
+var world_sea_level: float = 0.0
 var world_biome_ids: PackedInt32Array = PackedInt32Array()
 var world_height_raw: PackedFloat32Array = PackedFloat32Array()
 var world_temperature: PackedFloat32Array = PackedFloat32Array()
@@ -51,6 +52,7 @@ func clear_runtime_gameplay_state() -> void:
 	world_seed_hash = 0
 	world_width = 0
 	world_height = 0
+	world_sea_level = 0.0
 	world_biome_ids = PackedInt32Array()
 	world_height_raw = PackedFloat32Array()
 	world_temperature = PackedFloat32Array()
@@ -121,11 +123,13 @@ func set_world_snapshot(
 	cloud_cover: PackedFloat32Array = PackedFloat32Array(),
 	wind_u: PackedFloat32Array = PackedFloat32Array(),
 	wind_v: PackedFloat32Array = PackedFloat32Array(),
-	river_mask: PackedByteArray = PackedByteArray()
+	river_mask: PackedByteArray = PackedByteArray(),
+	sea_level: float = 0.0
 ) -> void:
 	world_width = max(1, width)
 	world_height = max(1, height)
 	world_seed_hash = seed_hash
+	world_sea_level = float(sea_level)
 	world_biome_ids = biome_ids.duplicate()
 	var size: int = world_width * world_height
 	world_height_raw = height_raw.duplicate() if height_raw.size() == size else PackedFloat32Array()

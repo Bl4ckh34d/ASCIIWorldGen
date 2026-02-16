@@ -10,6 +10,8 @@ const Log = preload("res://scripts/systems/Logger.gd")
 # Rendering components
 var quad_renderer: Control
 var is_gpu_rendering_enabled: bool = true
+var _preserve_map_aspect: bool = false
+var _content_rect_local: Rect2 = Rect2(Vector2.ZERO, Vector2.ZERO)
 
 # Performance monitoring
 var last_render_time_ms: float = 0.0
@@ -47,6 +49,7 @@ func initialize_gpu_rendering(font: Font, font_size: int, width: int, height: in
 	if _create_gpu_renderer(font, font_size, width, height):
 		Log.event_kv(Log.LogLevel.INFO, "render", "gpu_ascii_init", "ok", -1, -1.0, {"w": width, "h": height, "font_size": font_size})
 		is_gpu_rendering_enabled = true
+		_apply_quad_layout()
 		return true
 	else:
 		Log.event_kv(Log.LogLevel.ERROR, "render", "gpu_ascii_init", "create_failed", -1, -1.0, {"w": width, "h": height, "font_size": font_size})
@@ -81,6 +84,7 @@ func _create_gpu_renderer(font: Font, font_size: int, width: int, height: int) -
 	
 	# Set up viewport to fill this control and ensure it's behind overlays
 	quad_renderer.z_index = 0
+	_apply_quad_layout()
 	
 	return true
 
@@ -153,6 +157,7 @@ func resize_display(new_width: int, new_height: int) -> void:
 	
 	if is_gpu_rendering_enabled and quad_renderer:
 		quad_renderer.resize_map(new_width, new_height)
+		_apply_quad_layout()
 
 func get_render_texture() -> Texture2D:
 	"""Get the rendered texture (for GPU rendering)"""
@@ -226,14 +231,29 @@ func get_map_dimensions() -> Vector2i:
 		return Vector2i(quad_renderer.map_width, quad_renderer.map_height)
 	return Vector2i.ZERO
 
+func set_preserve_map_aspect(enabled: bool) -> void:
+	"""Letterbox/pillarbox map content to preserve map-width/map-height aspect."""
+	_preserve_map_aspect = VariantCastsUtil.to_bool(enabled)
+	_apply_quad_layout()
+
+func get_content_rect_local() -> Rect2:
+	"""Visible map rect in local coordinates (after optional aspect fit)."""
+	if _content_rect_local.size.x <= 0.0 or _content_rect_local.size.y <= 0.0:
+		return Rect2(Vector2.ZERO, size)
+	return _content_rect_local
+
 func get_cell_size_screen() -> Vector2:
 	"""Return the on-screen cell size (in pixels), accounting for any scaling.
 	This uses this control's current size divided by the map tile dimensions.
 	"""
 	if quad_renderer and quad_renderer.map_width > 0 and quad_renderer.map_height > 0:
+		var content_rect: Rect2 = get_content_rect_local()
+		var draw_size: Vector2 = content_rect.size
+		if draw_size.x <= 0.0 or draw_size.y <= 0.0:
+			return Vector2.ZERO
 		return Vector2(
-			float(size.x) / float(quad_renderer.map_width),
-			float(size.y) / float(quad_renderer.map_height)
+			draw_size.x / float(quad_renderer.map_width),
+			draw_size.y / float(quad_renderer.map_height)
 		)
 	return Vector2.ZERO
 
@@ -335,16 +355,45 @@ func save_debug_data(prefix: String) -> void:
 		if quad_renderer.texture_manager:
 			quad_renderer.texture_manager.save_debug_textures(prefix)
 
+func _apply_quad_layout() -> void:
+	if quad_renderer == null or not is_instance_valid(quad_renderer):
+		_content_rect_local = Rect2(Vector2.ZERO, size)
+		return
+	var host_size: Vector2 = size
+	if host_size.x <= 0.0 or host_size.y <= 0.0:
+		_content_rect_local = Rect2(Vector2.ZERO, Vector2.ZERO)
+		return
+	var map_dims: Vector2i = get_map_dimensions()
+	var target_aspect: float = 0.0
+	if map_dims.x > 0 and map_dims.y > 0:
+		target_aspect = float(map_dims.x) / float(map_dims.y)
+	if not _preserve_map_aspect or target_aspect <= 0.0:
+		quad_renderer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_content_rect_local = Rect2(Vector2.ZERO, host_size)
+		return
+	var host_aspect: float = host_size.x / host_size.y
+	var draw_size: Vector2 = host_size
+	if host_aspect > target_aspect:
+		draw_size.x = host_size.y * target_aspect
+	else:
+		draw_size.y = host_size.x / target_aspect
+	draw_size.x = max(1.0, floor(draw_size.x))
+	draw_size.y = max(1.0, floor(draw_size.y))
+	var draw_pos: Vector2 = (host_size - draw_size) * 0.5
+	quad_renderer.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	quad_renderer.position = draw_pos
+	quad_renderer.size = draw_size
+	_content_rect_local = Rect2(draw_pos, draw_size)
+
 func _on_resized() -> void:
 	"""Handle control resize"""
 	
-	if quad_renderer and size.x > 0.0 and size.y > 0.0:
-		# Full-rect anchors already drive sizing; forcing size here causes anchor warnings.
-		quad_renderer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_apply_quad_layout()
 
 func _ready() -> void:
 	# Connect resize signal
 	resized.connect(_on_resized)
+	_apply_quad_layout()
 
 # Mouse interaction support (for future features)
 
@@ -361,8 +410,17 @@ func _gui_input(event: InputEvent) -> void:
 func _screen_to_world(screen_pos: Vector2) -> Vector2:
 	"""Convert screen coordinates to world coordinates"""
 	
-	if is_gpu_rendering_enabled and quad_renderer:
-		return quad_renderer.screen_to_world(screen_pos)
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.map_width > 0 and quad_renderer.map_height > 0:
+		var content_rect: Rect2 = get_content_rect_local()
+		if content_rect.size.x <= 0.0 or content_rect.size.y <= 0.0:
+			return Vector2.ZERO
+		var local: Vector2 = screen_pos - content_rect.position
+		local.x = clamp(local.x, 0.0, max(0.0, content_rect.size.x - 0.0001))
+		local.y = clamp(local.y, 0.0, max(0.0, content_rect.size.y - 0.0001))
+		return Vector2(
+			(local.x / content_rect.size.x) * float(quad_renderer.map_width),
+			(local.y / content_rect.size.y) * float(quad_renderer.map_height)
+		)
 	
 	# Fallback calculation
 	return Vector2.ZERO

@@ -30,6 +30,7 @@ var civilization_state: CivilizationStateModel = CivilizationStateModel.new()
 var world_seed_hash: int = 0
 var world_width: int = 0
 var world_height: int = 0
+var world_sea_level: float = 0.0
 var world_biome_ids: PackedInt32Array = PackedInt32Array()
 var world_height_raw: PackedFloat32Array = PackedFloat32Array()
 var world_temperature: PackedFloat32Array = PackedFloat32Array()
@@ -147,6 +148,7 @@ func reset_run() -> void:
 	world_seed_hash = 0
 	world_width = 0
 	world_height = 0
+	world_sea_level = 0.0
 	world_biome_ids = PackedInt32Array()
 	world_height_raw = PackedFloat32Array()
 	world_temperature = PackedFloat32Array()
@@ -202,11 +204,13 @@ func initialize_world_snapshot(
 	cloud_cover: PackedFloat32Array = PackedFloat32Array(),
 	wind_u: PackedFloat32Array = PackedFloat32Array(),
 	wind_v: PackedFloat32Array = PackedFloat32Array(),
-	river_mask: PackedByteArray = PackedByteArray()
+	river_mask: PackedByteArray = PackedByteArray(),
+	sea_level: float = 0.0
 ) -> void:
 	world_width = max(1, width)
 	world_height = max(1, height)
 	world_seed_hash = seed_hash
+	world_sea_level = float(sea_level)
 	world_biome_ids = biome_ids.duplicate()
 	var size: int = world_width * world_height
 	world_height_raw = height_raw.duplicate() if height_raw.size() == size else PackedFloat32Array()
@@ -287,6 +291,7 @@ func ensure_world_snapshot_integrity() -> void:
 	var cloud_cover: PackedFloat32Array = startup_state.get("world_cloud_cover") if startup_state.get("world_cloud_cover") is PackedFloat32Array else PackedFloat32Array()
 	var wind_u: PackedFloat32Array = startup_state.get("world_wind_u") if startup_state.get("world_wind_u") is PackedFloat32Array else PackedFloat32Array()
 	var wind_v: PackedFloat32Array = startup_state.get("world_wind_v") if startup_state.get("world_wind_v") is PackedFloat32Array else PackedFloat32Array()
+	var startup_sea_level: float = float(startup_state.get("world_sea_level"))
 	initialize_world_snapshot(
 		startup_w,
 		startup_h,
@@ -300,7 +305,8 @@ func ensure_world_snapshot_integrity() -> void:
 		cloud_cover,
 		wind_u,
 		wind_v,
-		river_mask
+		river_mask,
+		startup_sea_level
 	)
 
 func set_location(scene_name: String, world_x: int, world_y: int, local_x: int, local_y: int, biome_id: int = -1, biome_name: String = "") -> void:
@@ -1470,6 +1476,7 @@ func _to_save_payload() -> Dictionary:
 		"world_seed_hash": world_seed_hash,
 		"world_width": world_width,
 		"world_height": world_height,
+		"world_sea_level": world_sea_level,
 		"world_biome_ids": _packed_int32_to_array(world_biome_ids),
 		"world_height_raw": _packed_float32_to_array(world_height_raw),
 		"world_temperature": _packed_float32_to_array(world_temperature),
@@ -1503,6 +1510,7 @@ func _from_save_payload(data: Dictionary, version: int = SAVE_SCHEMA_VERSION) ->
 	world_seed_hash = int(data.get("world_seed_hash", 0))
 	world_width = max(0, int(data.get("world_width", 0)))
 	world_height = max(0, int(data.get("world_height", 0)))
+	world_sea_level = float(data.get("world_sea_level", 0.0))
 	var size: int = max(0, world_width * world_height)
 	world_biome_ids = _variant_to_packed_int32(data.get("world_biome_ids", []), size)
 	world_height_raw = _variant_to_packed_float32(data.get("world_height_raw", []), size)

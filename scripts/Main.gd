@@ -2685,7 +2685,8 @@ func _on_tile_clicked(x: int, y: int, button_index: int) -> void:
 			transition_render.get("cloud_cover", PackedFloat32Array()),
 			transition_render.get("wind_u", PackedFloat32Array()),
 			transition_render.get("wind_v", PackedFloat32Array()),
-			transition_render.get("river_mask", PackedByteArray())
+			transition_render.get("river_mask", PackedByteArray()),
+			float(generator.config.sea_level)
 		)
 	if game_state != null and game_state.has_method("sync_world_time_from_sim_days"):
 		if time_system != null and "simulation_time_days" in time_system:
@@ -2716,7 +2717,8 @@ func _on_tile_clicked(x: int, y: int, button_index: int) -> void:
 					transition_render.get("cloud_cover", PackedFloat32Array()),
 					transition_render.get("wind_u", PackedFloat32Array()),
 					transition_render.get("wind_v", PackedFloat32Array()),
-					transition_render.get("river_mask", PackedByteArray())
+					transition_render.get("river_mask", PackedByteArray()),
+					float(generator.config.sea_level)
 				)
 		if startup_state != null and startup_state.has_method("set_selected_world_tile"):
 			startup_state.set_selected_world_tile(
