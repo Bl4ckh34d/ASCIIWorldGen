@@ -1,12 +1,6 @@
 extends RefCounted
 class_name NpcSeederFromSettlements
 
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
-const EconomyStateModel = preload("res://scripts/gameplay/models/EconomyState.gd")
-const PoliticsStateModel = preload("res://scripts/gameplay/models/PoliticsState.gd")
-const NpcWorldStateModel = preload("res://scripts/gameplay/models/NpcWorldState.gd")
-const EpochSystem = preload("res://scripts/gameplay/sim/EpochSystem.gd")
-
 # Scaffolding: ensure "important NPCs" exist for newly created settlements/states.
 # Runs only at coarse cadence (worldgen settlement extraction) and on-demand.
 

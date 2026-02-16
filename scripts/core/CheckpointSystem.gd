@@ -1,6 +1,6 @@
 # File: res://scripts/core/CheckpointSystem.gd
 extends Node
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 # Periodic snapshot system for deterministic rewind/scrub.
 # Minimal MVP: in-memory ring buffer; save/load core fields & config.
@@ -160,7 +160,7 @@ func scrub_to(target_days: float, time_system: Node, simulation: Node, world: Ob
 	# Pause time while scrubbing
 	var was_running: bool = false
 	if "running" in time_system:
-		was_running = VariantCasts.to_bool(time_system.running)
+		was_running = VariantCastsUtil.to_bool(time_system.running)
 	if "pause" in time_system:
 		time_system.pause()
 	# Load nearest checkpoint <= target
@@ -180,7 +180,7 @@ func scrub_to(target_days: float, time_system: Node, simulation: Node, world: Ob
 	var prev_max_ms: float = 6.0
 	var prev_max_count: int = 3
 	if "budget_mode_time_ms" in simulation:
-		prev_budget_time_mode = VariantCasts.to_bool(simulation.budget_mode_time_ms)
+		prev_budget_time_mode = VariantCastsUtil.to_bool(simulation.budget_mode_time_ms)
 	if "max_tick_time_ms" in simulation:
 		prev_max_ms = float(simulation.max_tick_time_ms)
 	if "max_systems_per_tick" in simulation:
@@ -358,9 +358,9 @@ func _capture_config() -> Dictionary:
 	d["season_amp_pole"] = float(c.season_amp_pole)
 	d["season_ocean_damp"] = float(c.season_ocean_damp)
 	# Toggles
-	d["rivers_enabled"] = VariantCasts.to_bool(c.rivers_enabled)
-	d["lakes_enabled"] = VariantCasts.to_bool(c.lakes_enabled)
-	d["realistic_pooling_enabled"] = VariantCasts.to_bool(c.realistic_pooling_enabled)
+	d["rivers_enabled"] = VariantCastsUtil.to_bool(c.rivers_enabled)
+	d["lakes_enabled"] = VariantCastsUtil.to_bool(c.lakes_enabled)
+	d["realistic_pooling_enabled"] = VariantCastsUtil.to_bool(c.realistic_pooling_enabled)
 	# Hydro outflow
 	d["max_forced_outflows"] = c.max_forced_outflows
 	d["prob_outflow_0"] = float(c.prob_outflow_0)

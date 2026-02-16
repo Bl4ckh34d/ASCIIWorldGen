@@ -23,8 +23,8 @@ layout(push_constant) uniform Params {
     float wind_y;
     float coverage;
     float contrast;
-    float _pad1;
-    float _pad2;
+    float overcast_floor;
+    float morph_strength;
 } PC;
 
 float clamp01(float v) { return clamp(v, 0.0, 1.0); }
@@ -92,11 +92,18 @@ void main() {
     vec2 p = (vec2(float(gx), float(gy)) * max(0.0001, PC.scale)) + seed_off + wind;
 
     float n = fbm(p);
+    float morph = clamp01(PC.morph_strength);
+    if (morph > 0.0) {
+        vec2 morph_shift = vec2(0.37, -0.29) * (PC.sim_days * (0.25 + 0.55 * morph));
+        float n2 = fbm(p * (1.35 + 0.25 * morph) + morph_shift + vec2(23.7, -41.9));
+        float phase = 0.5 + 0.5 * sin(PC.sim_days * (0.85 + 0.35 * morph) + float(gx + gy) * 0.0025 + float(PC.seed) * 0.00013);
+        n = mix(n, n2, morph * mix(0.20, 0.45, phase));
+    }
     n = clamp01(n);
     // Shape into cloud cover: coverage is a threshold, contrast sharpens edges.
     float c = smoothstep(clamp01(PC.coverage), 1.0, n);
     float k = max(0.001, PC.contrast);
     c = pow(clamp01(c), k);
+    c = max(c, clamp01(PC.overcast_floor));
     Cloud.cloud[i] = clamp01(c);
 }
-

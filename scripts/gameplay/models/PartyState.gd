@@ -1,9 +1,5 @@
 extends RefCounted
 class_name PartyStateModel
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
-
-const PartyMemberModel = preload("res://scripts/gameplay/models/PartyMember.gd")
-const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
 
 var members: Array[PartyMemberModel] = []
 
@@ -344,8 +340,8 @@ func _fmt_stat(base: int, bonus: int) -> String:
 	if bonus == 0:
 		return str(base)
 	var total: int = base + bonus
-	var sign: String = "+" if bonus > 0 else ""
-	return "%d(%s%d)" % [total, sign, bonus]
+	var sign_prefix: String = "+" if bonus > 0 else ""
+	return "%d(%s%d)" % [total, sign_prefix, bonus]
 
 func _sum_equipment_bonuses(member: PartyMemberModel) -> Dictionary:
 	var bonus: Dictionary = {

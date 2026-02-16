@@ -1,11 +1,6 @@
 extends RefCounted
 class_name BattleStateMachine
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
-const EnemyCatalog = preload("res://scripts/gameplay/catalog/EnemyCatalog.gd")
-const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
-const SpellCatalog = preload("res://scripts/gameplay/catalog/SpellCatalog.gd")
 
 enum Phase {
 	INIT,

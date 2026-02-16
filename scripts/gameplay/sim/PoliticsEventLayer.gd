@@ -1,10 +1,5 @@
 extends RefCounted
 class_name PoliticsEventLayer
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
-
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
-const PoliticsStateModel = preload("res://scripts/gameplay/models/PoliticsState.gd")
-const EpochSystem = preload("res://scripts/gameplay/sim/EpochSystem.gd")
 
 const EVENT_INTERVAL_DAYS: int = 7
 const MAX_EVENT_LOG: int = 256
@@ -428,7 +423,7 @@ static func _build_rebel_state_id(pol: PoliticsStateModel, province_id: String, 
 		sid = "%s|%d" % [base_id, serial]
 	return sid
 
-static func _spawn_rebel_state_for_province(world_seed_hash: int, day: int, pol: PoliticsStateModel, province_id: String, owner_state_id: String) -> String:
+static func _spawn_rebel_state_for_province(_world_seed_hash: int, day: int, pol: PoliticsStateModel, province_id: String, owner_state_id: String) -> String:
 	if pol == null:
 		return ""
 	province_id = String(province_id)

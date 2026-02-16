@@ -1,8 +1,6 @@
 extends RefCounted
 class_name EnemyCatalog
 
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
-
 const _SEASON_UNKNOWN: int = -1
 const _SEASON_SPRING: int = 0
 const _SEASON_SUMMER: int = 1

@@ -1,6 +1,6 @@
 # File: res://scripts/systems/RainErosionSystem.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 const RainErosionCompute = preload("res://scripts/systems/RainErosionCompute.gd")
@@ -112,7 +112,7 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 
 	# Commit height_tmp -> height (bitwise copy as u32 words).
 	if "dispatch_copy_u32" in generator:
-		if not VariantCasts.to_bool(generator.dispatch_copy_u32(height_tmp, height_buf, size)):
+		if not VariantCastsUtil.to_bool(generator.dispatch_copy_u32(height_tmp, height_buf, size)):
 			return {}
 	else:
 		return {}

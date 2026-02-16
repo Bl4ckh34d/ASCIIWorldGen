@@ -1,12 +1,6 @@
 extends RefCounted
 class_name EconomyFromSettlements
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
-const CommodityCatalog = preload("res://scripts/gameplay/catalog/CommodityCatalog.gd")
-const EconomyStateModel = preload("res://scripts/gameplay/models/EconomyState.gd")
-const SettlementStateModel = preload("res://scripts/gameplay/models/SettlementState.gd")
-const PoliticsStateModel = preload("res://scripts/gameplay/models/PoliticsState.gd")
 
 # Coarse economy bootstrapping derived from settlements + inferred world fields.
 # Runs only at explicit coarse cadence (worldgen extraction), never per-frame.

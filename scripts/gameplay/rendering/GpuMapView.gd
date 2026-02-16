@@ -1,6 +1,5 @@
 extends RefCounted
 class_name GpuMapView
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 const WorldData1TextureCompute = preload("res://scripts/systems/WorldData1TextureCompute.gd")
@@ -280,6 +279,8 @@ func _draw_with_current_buffers(
 				"wind_y": float(clouds.get("wind_y", 0.05)),
 				"coverage": float(clouds.get("coverage", 0.55)),
 				"contrast": float(clouds.get("contrast", 1.35)),
+				"overcast_floor": float(clouds.get("overcast_floor", 0.0)),
+				"morph_strength": float(clouds.get("morph_strength", 0.22)),
 			},
 			_rid("cloud")
 		))
@@ -433,6 +434,8 @@ func update_dynamic_layers(
 				"wind_y": float(clouds.get("wind_y", 0.05)),
 				"coverage": float(clouds.get("coverage", 0.55)),
 				"contrast": float(clouds.get("contrast", 1.35)),
+				"overcast_floor": float(clouds.get("overcast_floor", 0.0)),
+				"morph_strength": float(clouds.get("morph_strength", 0.22)),
 			},
 			_rid("cloud")
 		))

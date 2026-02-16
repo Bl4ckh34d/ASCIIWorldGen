@@ -1,12 +1,12 @@
 # File: res://scripts/systems/PlateUpdateCompute.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 ## GPU Plate boundary update: uplift/ridge/transform on boundary cells.
 ## Inputs: height (f32), cell_plate_id (i32), boundary_mask (i32), plate_vel_u/v (f32 per-plate)
 ## Output: updated height (f32)
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 
 const PLATE_SHADER_PATH: String = "res://shaders/plate_update.glsl"
@@ -26,7 +26,7 @@ func _init() -> void:
 	_buf_mgr = GPUBufferManager.new()
 
 func _ensure() -> bool:
-	var state_update: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state_update: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_shader,
 		_pipeline,
@@ -36,10 +36,10 @@ func _ensure() -> bool:
 	_rd = state_update.get("rd", null)
 	_shader = state_update.get("shader", RID())
 	_pipeline = state_update.get("pipeline", RID())
-	if not VariantCasts.to_bool(state_update.get("ok", false)):
+	if not VariantCastsUtil.to_bool(state_update.get("ok", false)):
 		return false
 
-	var state_label: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state_label: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_label_shader,
 		_label_pipeline,
@@ -48,10 +48,10 @@ func _ensure() -> bool:
 	)
 	_label_shader = state_label.get("shader", RID())
 	_label_pipeline = state_label.get("pipeline", RID())
-	if not VariantCasts.to_bool(state_label.get("ok", false)):
+	if not VariantCastsUtil.to_bool(state_label.get("ok", false)):
 		return false
 
-	var state_boundary: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state_boundary: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_bnd_shader,
 		_bnd_pipeline,
@@ -60,7 +60,7 @@ func _ensure() -> bool:
 	)
 	_bnd_shader = state_boundary.get("shader", RID())
 	_bnd_pipeline = state_boundary.get("pipeline", RID())
-	return VariantCasts.to_bool(state_boundary.get("ok", false))
+	return VariantCastsUtil.to_bool(state_boundary.get("ok", false))
 
 func build_voronoi_and_boundary_gpu_buffers(
 		w: int,
@@ -118,7 +118,7 @@ func build_voronoi_and_boundary_gpu_buffers(
 	if pad1 > 0:
 		var zeros1 := PackedByteArray(); zeros1.resize(pad1)
 		pc1.append_array(zeros1)
-	if not ComputeShaderBase.validate_push_constant_size(pc1, 32, "PlateUpdateCompute.label"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc1, 32, "PlateUpdateCompute.label"):
 		_rd.free_rid(u_set1)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0))
@@ -139,7 +139,7 @@ func build_voronoi_and_boundary_gpu_buffers(
 	if pad2 > 0:
 		var zeros2 := PackedByteArray(); zeros2.resize(pad2)
 		pc2.append_array(zeros2)
-	if not ComputeShaderBase.validate_push_constant_size(pc2, 16, "PlateUpdateCompute.boundary"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc2, 16, "PlateUpdateCompute.boundary"):
 		_rd.free_rid(u_set1)
 		_rd.free_rid(u_set2)
 		return false
@@ -216,7 +216,7 @@ func apply_gpu_buffers(w: int, h: int, height_in_buf: RID, plate_id_buf: RID, bo
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 64, "PlateUpdateCompute.apply"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 64, "PlateUpdateCompute.apply"):
 		_rd.free_rid(u_set)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0))
@@ -233,7 +233,7 @@ func apply_gpu_buffers(w: int, h: int, height_in_buf: RID, plate_id_buf: RID, bo
 func cleanup() -> void:
 	if _buf_mgr != null:
 		_buf_mgr.cleanup()
-	ComputeShaderBase.free_rids(_rd, [
+	ComputeShaderBaseUtil.free_rids(_rd, [
 		_pipeline, _shader,
 		_label_pipeline, _label_shader,
 		_bnd_pipeline, _bnd_shader,

@@ -1,10 +1,8 @@
 extends RefCounted
 class_name EpochSystem
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # Coarse civilization epoch scaffold.
 # This remains symbolic in v0 and is driven by civilization tech/devastation proxies.
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
 
 const _EPOCH_IDS: Array = [
 	"prehistoric",

@@ -1,7 +1,7 @@
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 
 const PROPAGATE_SHADER_PATH: String = "res://shaders/lake_label_propagate_flag.glsl"
@@ -39,7 +39,7 @@ func _init() -> void:
 	_buf_mgr = GPUBufferManager.new()
 
 func _ensure() -> bool:
-	var prop_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var prop_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_prop_shader,
 		_prop_pipeline,
@@ -49,10 +49,10 @@ func _ensure() -> bool:
 	_rd = prop_state.get("rd", null)
 	_prop_shader = prop_state.get("shader", RID())
 	_prop_pipeline = prop_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(prop_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(prop_state.get("ok", false)):
 		return false
 
-	var mark_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var mark_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_mark_shader,
 		_mark_pipeline,
@@ -61,10 +61,10 @@ func _ensure() -> bool:
 	)
 	_mark_shader = mark_state.get("shader", RID())
 	_mark_pipeline = mark_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(mark_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(mark_state.get("ok", false)):
 		return false
 
-	var seed_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var seed_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_seed_shader,
 		_seed_pipeline,
@@ -73,10 +73,10 @@ func _ensure() -> bool:
 	)
 	_seed_shader = seed_state.get("shader", RID())
 	_seed_pipeline = seed_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(seed_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(seed_state.get("ok", false)):
 		return false
 
-	var apply_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var apply_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_apply_shader,
 		_apply_pipeline,
@@ -85,10 +85,10 @@ func _ensure() -> bool:
 	)
 	_apply_shader = apply_state.get("shader", RID())
 	_apply_pipeline = apply_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(apply_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(apply_state.get("ok", false)):
 		return false
 
-	var clear_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var clear_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_clear_shader,
 		_clear_pipeline,
@@ -97,7 +97,7 @@ func _ensure() -> bool:
 	)
 	_clear_shader = clear_state.get("shader", RID())
 	_clear_pipeline = clear_state.get("pipeline", RID())
-	return VariantCasts.to_bool(clear_state.get("ok", false))
+	return VariantCastsUtil.to_bool(clear_state.get("ok", false))
 
 func _ensure_work_buffers(size_cells: int) -> bool:
 	if size_cells <= 0:
@@ -124,7 +124,7 @@ func _clear_u32_buffer(buf: RID, total_u32: int) -> bool:
 	var clear_set: RID = _rd.uniform_set_create(clear_uniforms, _clear_shader, 0)
 	var clear_pc := PackedByteArray()
 	clear_pc.append_array(PackedInt32Array([total_u32, 0, 0, 0]).to_byte_array())
-	if not ComputeShaderBase.validate_push_constant_size(clear_pc, 16, "LakeLabelCompute.clear_u32"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(clear_pc, 16, "LakeLabelCompute.clear_u32"):
 		_rd.free_rid(clear_set)
 		return false
 	var g1d: int = int(ceil(float(total_u32) / 256.0))
@@ -145,7 +145,7 @@ func _dispatch_seed(w: int, h: int, land_buf: RID) -> bool:
 	var seed_set: RID = _rd.uniform_set_create(seed_uniforms, _seed_shader, 0)
 	var seed_pc := PackedByteArray()
 	seed_pc.append_array(PackedInt32Array([w, h, 0, 0]).to_byte_array())
-	if not ComputeShaderBase.validate_push_constant_size(seed_pc, 16, "LakeLabelCompute.seed"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(seed_pc, 16, "LakeLabelCompute.seed"):
 		_rd.free_rid(seed_set)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0))
@@ -168,7 +168,7 @@ func _dispatch_propagate(w: int, h: int, land_buf: RID, wrap_x: bool) -> bool:
 	var prop_set: RID = _rd.uniform_set_create(prop_uniforms, _prop_shader, 0)
 	var prop_pc := PackedByteArray()
 	prop_pc.append_array(PackedInt32Array([w, h, (1 if wrap_x else 0), 0]).to_byte_array())
-	if not ComputeShaderBase.validate_push_constant_size(prop_pc, 16, "LakeLabelCompute.propagate"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(prop_pc, 16, "LakeLabelCompute.propagate"):
 		_rd.free_rid(prop_set)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0))
@@ -204,7 +204,7 @@ func _dispatch_mark_boundary(w: int, h: int) -> bool:
 	var mark_set: RID = _rd.uniform_set_create(mark_uniforms, _mark_shader, 0)
 	var mark_pc := PackedByteArray()
 	mark_pc.append_array(PackedInt32Array([w, h, 0, 0]).to_byte_array())
-	if not ComputeShaderBase.validate_push_constant_size(mark_pc, 16, "LakeLabelCompute.mark_boundary"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(mark_pc, 16, "LakeLabelCompute.mark_boundary"):
 		_rd.free_rid(mark_set)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0))
@@ -228,7 +228,7 @@ func _dispatch_apply(size: int, out_lake_buf: RID, out_lake_id_buf: RID) -> bool
 	var apply_set: RID = _rd.uniform_set_create(apply_uniforms, _apply_shader, 0)
 	var apply_pc := PackedByteArray()
 	apply_pc.append_array(PackedInt32Array([size, 0, 0, 0]).to_byte_array())
-	if not ComputeShaderBase.validate_push_constant_size(apply_pc, 16, "LakeLabelCompute.apply_boundary"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(apply_pc, 16, "LakeLabelCompute.apply_boundary"):
 		_rd.free_rid(apply_set)
 		return false
 	var g1d: int = int(ceil(float(size) / 256.0))
@@ -296,7 +296,7 @@ func label_lakes_gpu_buffers(
 func cleanup() -> void:
 	if _buf_mgr != null:
 		_buf_mgr.cleanup()
-	ComputeShaderBase.free_rids(_rd, [
+	ComputeShaderBaseUtil.free_rids(_rd, [
 		_prop_pipeline,
 		_prop_shader,
 		_mark_pipeline,

@@ -1,6 +1,5 @@
 extends RefCounted
 class_name HoverInfoController
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 static func update_label(
 	info_label: Label,

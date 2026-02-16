@@ -1,6 +1,6 @@
 # File: res://scripts/systems/PlateSystem.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 # Prototype plate tectonics: Voronoi plates with wrap-X, per-plate velocities, and
 # small boundary uplift/subsidence. Updates the height field incrementally.
@@ -162,7 +162,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			)
 		if gpu_ok:
 			# Copy height_tmp -> height (reuse FlowCompute copy)
-			if not ("dispatch_copy_u32" in generator and VariantCasts.to_bool(generator.dispatch_copy_u32(height_tmp, height_buf, w * h))):
+			if not ("dispatch_copy_u32" in generator and VariantCastsUtil.to_bool(generator.dispatch_copy_u32(height_tmp, height_buf, w * h))):
 				gpu_ok = false
 			if gpu_ok and terrain_relax_enabled:
 				if _terrain_relax_compute == null:
@@ -191,7 +191,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 					in_buf = out_buf
 					out_buf = tbuf
 				if gpu_ok and in_buf != height_buf:
-					if not ("dispatch_copy_u32" in generator and VariantCasts.to_bool(generator.dispatch_copy_u32(in_buf, height_buf, w * h))):
+					if not ("dispatch_copy_u32" in generator and VariantCastsUtil.to_bool(generator.dispatch_copy_u32(in_buf, height_buf, w * h))):
 						gpu_ok = false
 			# Update land mask buffer from height
 			if gpu_ok and _land_mask_compute:
@@ -219,7 +219,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 						int(generator.config.rng_seed) ^ sim_days_seed
 					)
 				if gpu_ok and "apply_ocean_connectivity_gate_runtime" in generator:
-					if not VariantCasts.to_bool(generator.apply_ocean_connectivity_gate_runtime()):
+					if not VariantCastsUtil.to_bool(generator.apply_ocean_connectivity_gate_runtime()):
 						gpu_ok = false
 		# Advect plate-bound categorical fields so biomes/lithology move with plate drift.
 		if gpu_ok and field_tmp_buf.is_valid():
@@ -236,7 +236,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				drift_cells_per_day,
 				field_tmp_buf
 			):
-				if not ("dispatch_copy_u32" in generator and VariantCasts.to_bool(generator.dispatch_copy_u32(field_tmp_buf, biome_buf, w * h))):
+				if not ("dispatch_copy_u32" in generator and VariantCastsUtil.to_bool(generator.dispatch_copy_u32(field_tmp_buf, biome_buf, w * h))):
 					gpu_ok = false
 			if rock_buf.is_valid() and _field_advection_compute.advect_i32_gpu_buffers(
 				w,
@@ -249,7 +249,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				drift_cells_per_day,
 				field_tmp_buf
 			):
-				if not ("dispatch_copy_u32" in generator and VariantCasts.to_bool(generator.dispatch_copy_u32(field_tmp_buf, rock_buf, w * h))):
+				if not ("dispatch_copy_u32" in generator and VariantCastsUtil.to_bool(generator.dispatch_copy_u32(field_tmp_buf, rock_buf, w * h))):
 					gpu_ok = false
 	if gpu_ok and boundary_buf.is_valid():
 		_boundary_readback_accum_days += max(0.0, dt_days)

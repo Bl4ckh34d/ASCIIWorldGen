@@ -145,7 +145,16 @@ Locked decisions (2026-02-09):
     - Walkable local map with return path to regional map.
     - Player + NPC markers now render via biome marker IDs (`220`, `218/219/221/222`) in the GPU field path (no local ColorRect marker overlays).
     - Local/interior map now enables cloud/shadow dynamic layers through the same GPU pipeline as world/regional maps.
+    - Houses now generate deterministic multi-room layouts (partition walls + room-purpose furniture) instead of a single rectangle.
+    - House interiors now include non-walkable outside terrain rendered with the hosting biome color and live day/night lighting.
+    - Regional map now stamps deterministic house footprints that match interior house geometry/door anchor.
+    - Dungeon fog + non-walkable void/rock render as hard black markers (GPU path; no text fallback).
+    - Dungeon walls now use a dedicated dark wall marker (not full black fog/void).
     - Dungeon boss battle trigger and persistent POI instance state (boss defeated + main chest opened).
+    - Adjacent NPC hiring interaction (`H`) now routes through `GameState.try_hire_npc` (successful hires join party + despawn locally).
+    - Hiring gates expanded: POI houses now include service variants (`home/shop/inn/temple/faction_hall`), local NPC hire requests carry source/faction metadata, and `GameState.try_hire_npc` now enforces source-specific trust + faction-rank gates.
+    - Regional continuity/perf tuning pass v1: generator hot-path caching (blend/elevation/noise-x reuse), cache seam anomaly diagnostics, and expanded cache/prefetch/chunk-generation metrics visible in F3 dev HUD.
+    - Inventory/equipment progression pass v1: broader tiered item catalog (consumables/weapons/armor/accessories), progression-aware shop stock, progression-aware dungeon chest rewards, and encounter item drops scaled by encounter context/tier.
   - Map overlay + fast travel scaffold:
     - `M` opens a world-map overlay from gameplay scenes.
     - Fast travel is allowed only to previously visited world tiles and advances time during travel.
@@ -155,7 +164,7 @@ Locked decisions (2026-02-09):
     - `SceneRouter` autoload for centralized scene transitions.
     - Data models for party members/party state/time state.
     - Additional persistent models for settings, quests, and world flags/progress.
-    - New persistent scaffolding models: economy, politics, NPC world state (background daily tick).
+    - New persistent scaffolding models: economy, politics, NPC world state (background day ticks now advance on world-day progression).
     - Civilization epoch scaffolding: delayed epoch shifts (years/decades with rare month-fast jumps) and epoch multipliers wired into economy/politics/NPC symbolic ticks.
     - Epoch gameplay hook (first slice): encounter rate/difficulty/reward scaling and local shop buy/sell multipliers now consume epoch + local scarcity/war pressure.
     - Epoch NPC behavior hook (next slice): local interior NPC density/move cadence/disposition and dialogue stubs now consume epoch + local scarcity/war pressure.
@@ -168,9 +177,11 @@ Locked decisions (2026-02-09):
       - Characters tab: per-member slot inventory (Valheim-like), HP/MP bars, right-click Use/Equip/Drop, drag & drop between slots.
 - Pending/Next:
   - Continue render-layer polish (palette tuning/material variety); optional sprite/tile art pass later without regressing GPU-first pipeline.
-  - Continue regional continuity/perf tuning (generation seams are scaffolded; tuning remains).
-  - Expand civilization epoch effects from metadata into gameplay consequences (economy/politics/NPC behavior modifiers).
-  - Deepen time/day-night effects (baseline hooks exist; expand tables and balancing).
+  - Continue regional continuity/perf tuning (post-v1 seam thresholds + chunk budget tuning + benchmark baselines).
+  - Rebalance hiring gates/costs across inn/temple/faction sources and add clearer in-UI gate previews.
+  - Continue inventory/equipment progression balancing (economy pacing, drop rates, tier spread).
+  - Continue balancing/expanding epoch consequences across economy/politics/NPC behavior (current pass is deterministic v0).
+  - Continue balancing day/night + seasonal gameplay modifiers (encounters/shops/NPC activity/rest costs).
 
 ## Working Agreement
 - Keep this file updated with decisions, scope, and next steps so other agents can continue without re-discovery.

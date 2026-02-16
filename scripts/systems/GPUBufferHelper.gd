@@ -1,6 +1,5 @@
 # File: res://scripts/systems/GPUBufferHelper.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # GPU Buffer Helper - Eliminates code duplication across compute shaders
 # Provides standardized buffer creation and management utilities

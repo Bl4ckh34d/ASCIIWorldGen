@@ -1,7 +1,7 @@
 # File: res://scripts/rendering/GPUAsciiRenderer.gd
 extends Control
 class_name GPUAsciiRenderer
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 # Integration layer for GPU-based ASCII rendering
 # Replaces RichTextLabel-based rendering with high-performance GPU system
@@ -74,7 +74,7 @@ func _create_gpu_renderer(font: Font, font_size: int, width: int, height: int) -
 		quad_renderer = null
 		return false
 	quad_renderer.call("initialize_rendering", font, font_size, width, height)
-	if "is_initialized" in quad_renderer and not VariantCasts.to_bool(quad_renderer.is_initialized):
+	if "is_initialized" in quad_renderer and not VariantCastsUtil.to_bool(quad_renderer.is_initialized):
 		quad_renderer.queue_free()
 		quad_renderer = null
 		return false

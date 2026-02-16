@@ -1,12 +1,12 @@
 # File: res://scripts/systems/GPUBufferManager.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 # Manages persistent GPU buffers to reduce allocation/deallocation overhead
 # Implements the persistent SSBO strategy from the performance refactor plan
 
 const Log = preload("res://scripts/systems/Logger.gd")
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const _MIN_STORAGE_BUFFER_BYTES: int = 4
 
 var _rd: RenderingDevice
@@ -31,9 +31,9 @@ func _init():
 	_rd = RenderingServer.get_rendering_device()
 
 func set_async_update_config(enabled: bool, threshold_bytes: int = 262144, flush_on_readback: bool = true) -> void:
-	async_large_updates_enabled = VariantCasts.to_bool(enabled)
+	async_large_updates_enabled = VariantCastsUtil.to_bool(enabled)
 	async_large_update_threshold_bytes = max(1024, int(threshold_bytes))
-	async_flush_on_readback = VariantCasts.to_bool(flush_on_readback)
+	async_flush_on_readback = VariantCastsUtil.to_bool(flush_on_readback)
 	if not async_large_updates_enabled:
 		flush_pending_updates()
 
@@ -63,7 +63,7 @@ func _prune_pending_updates_for(name: String) -> void:
 	_pending_update_bytes = max(0, _pending_update_bytes - dropped_bytes)
 
 func _ensure_clear_pipeline() -> bool:
-	var state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_clear_shader,
 		_clear_pipeline,
@@ -73,10 +73,10 @@ func _ensure_clear_pipeline() -> bool:
 	_rd = state.get("rd", _rd)
 	_clear_shader = state.get("shader", RID())
 	_clear_pipeline = state.get("pipeline", RID())
-	return VariantCasts.to_bool(state.get("ok", false))
+	return VariantCastsUtil.to_bool(state.get("ok", false))
 
 func _ensure_copy_pipeline() -> bool:
-	var state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_copy_shader,
 		_copy_pipeline,
@@ -86,7 +86,7 @@ func _ensure_copy_pipeline() -> bool:
 	_rd = state.get("rd", _rd)
 	_copy_shader = state.get("shader", RID())
 	_copy_pipeline = state.get("pipeline", RID())
-	return VariantCasts.to_bool(state.get("ok", false))
+	return VariantCastsUtil.to_bool(state.get("ok", false))
 
 func _dispatch_clear_u32(buf_rid: RID, total_u32: int) -> bool:
 	if _rd == null or not buf_rid.is_valid() or total_u32 <= 0:
@@ -107,7 +107,7 @@ func _dispatch_clear_u32(buf_rid: RID, total_u32: int) -> bool:
 		var zeros := PackedByteArray()
 		zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "GPUBufferManager.clear_u32"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 16, "GPUBufferManager.clear_u32"):
 		_rd.free_rid(u_set)
 		return false
 	var g1d: int = int(ceil(float(total_u32) / 256.0))
@@ -144,7 +144,7 @@ func _dispatch_copy_u32(src_rid: RID, dst_rid: RID, total_u32: int) -> bool:
 		var zeros := PackedByteArray()
 		zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "GPUBufferManager.copy_u32"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 16, "GPUBufferManager.copy_u32"):
 		_rd.free_rid(u_set)
 		return false
 	var g1d: int = int(ceil(float(total_u32) / 256.0))
@@ -306,7 +306,8 @@ func read_buffer(name: String, staging_name: String = "") -> PackedByteArray:
 			_staging_buffers[staging_key] = {"rid": staging_rid, "size": buf_size}
 		var staging_rid_use: RID = (_staging_buffers.get(staging_key, {}) as Dictionary).get("rid", RID())
 		if staging_rid_use.is_valid() and (buf_size % 4 == 0):
-			var copied: bool = _dispatch_copy_u32(buf.rid, staging_rid_use, int(buf_size / 4))
+			var word_count: int = buf_size >> 2
+			var copied: bool = _dispatch_copy_u32(buf.rid, staging_rid_use, word_count)
 			if copied:
 				return _rd.buffer_get_data(staging_rid_use)
 	return _rd.buffer_get_data(buf.rid)
@@ -341,7 +342,8 @@ func clear_buffer(name: String, clear_value: int = 0) -> bool:
 		return false
 	var buf_size: int = int(buf.get("size", 0))
 	if clear_value == 0 and buf_size > 0 and (buf_size % 4 == 0):
-		if _dispatch_clear_u32(buf.rid, int(buf_size / 4)):
+		var word_count: int = buf_size >> 2
+		if _dispatch_clear_u32(buf.rid, word_count):
 			return true
 	# Fallback for non-u32-aligned sizes or non-zero clears.
 	var clear_data := PackedByteArray()
@@ -383,7 +385,7 @@ func cleanup() -> void:
 		if buf.has("rid") and buf.rid.is_valid():
 			_rd.free_rid(buf.rid)
 	_staging_buffers.clear()
-	ComputeShaderBase.free_rids(_rd, [_clear_pipeline, _clear_shader, _copy_pipeline, _copy_shader])
+	ComputeShaderBaseUtil.free_rids(_rd, [_clear_pipeline, _clear_shader, _copy_pipeline, _copy_shader])
 	_clear_pipeline = RID()
 	_clear_shader = RID()
 	_copy_pipeline = RID()

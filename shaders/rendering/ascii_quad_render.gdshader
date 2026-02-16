@@ -59,6 +59,7 @@ const float CHARS_PER_COL = 6.0;
 const float TOTAL_CHARS = 95.0;
 const float CHAR_IDX_TILDE = 94.0; // '~'
 const float CHAR_IDX_HASH = 3.0;   // '#'
+const float BIOME_OCEAN = 0.0;
 const float BIOME_ICE_SHEET = 1.0;
 
 const vec3 BEACH_COLOR = vec3(1.0, 0.98, 0.90);
@@ -104,6 +105,15 @@ vec3 water_color_from_height(float height_raw, float sea_level_val, float turq_s
         c = mix(c, vec3(0.10, 0.85, 0.95), overlay);
     }
     return c;
+}
+
+float water_wave_signal(vec2 world_cell, vec2 char_uv) {
+    vec2 p = world_cell + char_uv;
+    float t = TIME * 0.85;
+    float w0 = sin((p.x * 0.067 + p.y * 0.123 + t * 0.95) * TAU);
+    float w1 = sin((p.x * -0.109 + p.y * 0.081 - t * 1.21) * TAU);
+    float w2 = sin((p.x * 0.043 + p.y * 0.157 + t * 0.63) * TAU);
+    return clamp(w0 * 0.50 + w1 * 0.32 + w2 * 0.18, -1.0, 1.0);
 }
 
 vec2 _wrap_cell_x(vec2 cell) {
@@ -257,11 +267,19 @@ void fragment() {
     // Convert normalized values back to indices
     float biome_id = biome_id_norm * 255.0;
     float char_index = char_index_norm * 255.0;
-    bool is_unknown_marker = abs(biome_id - 254.0) < 0.5;
+    // Treat fog + solid-void markers as hard-black.
+    bool is_unknown_marker = biome_id >= 253.5;
     
     // Robustness: in GPU-only mode, if packed land-mask texture is missing/stale,
     // infer land from relief so terrain does not disappear into full-ocean rendering.
-    bool is_land_tile = (is_land >= 0.5) || (height_raw > sea_level);
+    bool relief_water = (height_raw <= sea_level - 0.015);
+    bool relief_land = (height_raw > sea_level + 0.02);
+    bool is_ocean_biome = (abs(biome_id - BIOME_OCEAN) < 0.5) || (abs(biome_id - BIOME_ICE_SHEET) < 0.5);
+    bool is_land_tile = ((is_land >= 0.5) && !relief_water) || relief_land;
+    bool submerged_surface = (!is_unknown_marker) && (biome_id < 200.0) && relief_water;
+    if (submerged_surface || (!is_unknown_marker && is_ocean_biome && relief_water)) {
+        is_land_tile = false;
+    }
     bool bedrock_mode = (bedrock_only_mode != 0);
     bool hide_ocean_in_bedrock = (bedrock_mode && !is_land_tile);
     bool lake_here = (lake_flag > 0.5);
@@ -384,6 +402,16 @@ void fragment() {
 
     // Water glint around subsolar region with sparkle breakup.
     bool water_surface = (!hide_ocean_in_bedrock) && (!is_land_tile || lake_here);
+    float wave_crest = 0.0;
+    if (water_surface) {
+        float depth = max(0.0, sea_level - height_raw);
+        float shallowness = clamp(1.0 - depth / 0.30, 0.0, 1.0);
+        float wave = water_wave_signal(world_cell, char_uv);
+        float ripple_amp = mix(0.016, 0.052, shallowness);
+        base_color = clamp(base_color * (1.0 + wave * ripple_amp), vec3(0.0), vec3(1.0));
+        wave_crest = smoothstep(0.46, 0.98, wave) * (0.12 + shallowness * 0.88);
+        base_color = mix(base_color, vec3(0.84, 0.93, 0.99), wave_crest * 0.24);
+    }
     float glint_add = 0.0;
     if (water_surface) {
         float sun_vis = max(0.0, sun_dot);
@@ -402,6 +430,7 @@ void fragment() {
         float far_spark = smoothstep(mix(0.955, 0.978, polar_tighten), 1.0, far_noise) * outer;
         float day_gate = smoothstep(0.05, 0.34, sun_vis);
         float glint = core * 0.90 + halo * 0.005 + sparkle * 0.24 + micro_spark * 0.16 + far_spark * 0.18;
+        glint += wave_crest * 0.08;
         glint *= day_gate;
         glint *= smoothstep(0.07, 0.95, light_mod);
         glint *= (1.0 - cloud_cov * 0.62);

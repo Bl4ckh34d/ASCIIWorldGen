@@ -1966,7 +1966,7 @@ func register_tectonic_tick_metrics(dt_days: float) -> Dictionary:
 	_tectonic_bias_prev_mean_valid = true
 	return metrics
 
-func _estimate_reservoirs_from_gpu(max_cells: int = CLIMATE_CPU_MIRROR_MAX_CELLS) -> Dictionary:
+func _estimate_reservoirs_from_gpu(_max_cells: int = CLIMATE_CPU_MIRROR_MAX_CELLS) -> Dictionary:
 	var out := {
 		"ok": false,
 		"ocean_cells": 0.0,

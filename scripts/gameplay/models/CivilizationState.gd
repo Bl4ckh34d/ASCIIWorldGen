@@ -1,6 +1,5 @@
 extends RefCounted
 class_name CivilizationStateModel
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # Civilization state is the "civilization layer" (humans and later other species).
 # v0 scaffolding: per-world-tile human population + a tiny meta vector.
@@ -143,24 +142,24 @@ static func from_dict(data: Dictionary) -> CivilizationStateModel:
 			out.human_pop[i] = max(0.0, float(a[i]))
 	return out
 
-static func _legacy_epoch_id_for_tech(tech_level: float) -> String:
-	tech_level = clamp(float(tech_level), 0.0, 1.0)
-	if tech_level >= 0.95:
+static func _legacy_epoch_id_for_tech(tech_level_value: float) -> String:
+	tech_level_value = clamp(float(tech_level_value), 0.0, 1.0)
+	if tech_level_value >= 0.95:
 		return "singularity"
-	if tech_level >= 0.82:
+	if tech_level_value >= 0.82:
 		return "space_age"
-	if tech_level >= 0.65:
+	if tech_level_value >= 0.65:
 		return "modern"
-	if tech_level >= 0.45:
+	if tech_level_value >= 0.45:
 		return "industrial"
-	if tech_level >= 0.25:
+	if tech_level_value >= 0.25:
 		return "medieval"
-	if tech_level >= 0.10:
+	if tech_level_value >= 0.10:
 		return "ancient"
 	return "prehistoric"
 
-static func _legacy_epoch_index_for_id(epoch_id: String) -> int:
-	match String(epoch_id):
+static func _legacy_epoch_index_for_id(epoch_id_value: String) -> int:
+	match String(epoch_id_value):
 		"prehistoric":
 			return 0
 		"ancient":

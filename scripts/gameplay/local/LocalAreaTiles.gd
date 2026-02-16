@@ -9,6 +9,7 @@ enum Tile {
 	WALL = 0,
 	FLOOR = 1,
 	DOOR = 2,
+	OUTSIDE = 3,
 }
 
 enum Obj {
@@ -40,4 +41,6 @@ const MARKER_NPC_MAN: int = 218
 const MARKER_NPC_WOMAN: int = 219
 const MARKER_NPC_CHILD: int = 221
 const MARKER_NPC_SHOPKEEPER: int = 222
+const MARKER_DUNGEON_WALL: int = 223
 const MARKER_UNKNOWN: int = 254
+const MARKER_VOID: int = 255

@@ -1,8 +1,6 @@
 extends RefCounted
 class_name NpcSim
 
-const NpcWorldStateModel = preload("res://scripts/gameplay/models/NpcWorldState.gd")
-
 # Background daily NPC tick.
 # Scaffolding only: important NPCs can accrue simple need drift and timestamps.
 
@@ -23,4 +21,3 @@ static func tick_day(_world_seed_hash: int, npc: NpcWorldStateModel, abs_day: in
 		needs["thirst"] = clamp(float(needs.get("thirst", 0.0)) + 0.06, 0.0, 1.0)
 		n["needs"] = needs
 		npc.important_npcs[nid] = n
-

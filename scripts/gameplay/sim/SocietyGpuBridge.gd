@@ -1,5 +1,4 @@
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 const EconomyTickCompute = preload("res://scripts/systems/EconomyTickCompute.gd")
@@ -10,14 +9,7 @@ const WildlifeTickCompute = preload("res://scripts/systems/WildlifeTickCompute.g
 const CivilizationTickCompute = preload("res://scripts/systems/CivilizationTickCompute.gd")
 const PopulationMigrateCompute = preload("res://scripts/systems/PopulationMigrateCompute.gd")
 const SocietyOverlayTextureCompute = preload("res://scripts/systems/SocietyOverlayTextureCompute.gd")
-const CommodityCatalog = preload("res://scripts/gameplay/catalog/CommodityCatalog.gd")
-const EpochSystem = preload("res://scripts/gameplay/sim/EpochSystem.gd")
 
-const EconomyStateModel = preload("res://scripts/gameplay/models/EconomyState.gd")
-const PoliticsStateModel = preload("res://scripts/gameplay/models/PoliticsState.gd")
-const NpcWorldStateModel = preload("res://scripts/gameplay/models/NpcWorldState.gd")
-const WildlifeStateModel = preload("res://scripts/gameplay/models/WildlifeState.gd")
-const CivilizationStateModel = preload("res://scripts/gameplay/models/CivilizationState.gd")
 
 var _buf: GPUBufferManager = null
 var _econ: EconomyTickCompute = null

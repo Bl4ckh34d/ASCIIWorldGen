@@ -1,8 +1,8 @@
 # File: res://scripts/systems/DistanceTransformCompute.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 
 const DT_SHADER_PATH: String = "res://shaders/distance_transform.glsl"
@@ -16,7 +16,7 @@ func _init() -> void:
 	_buf_mgr = GPUBufferManager.new()
 
 func _ensure() -> bool:
-	var state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_shader,
 		_pipeline,
@@ -26,7 +26,7 @@ func _ensure() -> bool:
 	_rd = state.get("rd", null)
 	_shader = state.get("shader", RID())
 	_pipeline = state.get("pipeline", RID())
-	return VariantCasts.to_bool(state.get("ok", false))
+	return VariantCastsUtil.to_bool(state.get("ok", false))
 
 func _dispatch_mode(
 		w: int,
@@ -67,7 +67,7 @@ func _dispatch_mode(
 		var zeros := PackedByteArray()
 		zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "DistanceTransformCompute.dispatch"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 16, "DistanceTransformCompute.dispatch"):
 		_rd.free_rid(u_set)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0))
@@ -151,6 +151,6 @@ func distance_to_coast_from_land_mask(
 func cleanup() -> void:
 	if _buf_mgr != null:
 		_buf_mgr.cleanup()
-	ComputeShaderBase.free_rids(_rd, [_pipeline, _shader])
+	ComputeShaderBaseUtil.free_rids(_rd, [_pipeline, _shader])
 	_pipeline = RID()
 	_shader = RID()

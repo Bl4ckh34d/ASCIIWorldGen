@@ -23,6 +23,9 @@ var world_temperature: PackedFloat32Array = PackedFloat32Array()
 var world_moisture: PackedFloat32Array = PackedFloat32Array()
 var world_land_mask: PackedByteArray = PackedByteArray()
 var world_beach_mask: PackedByteArray = PackedByteArray()
+var world_cloud_cover: PackedFloat32Array = PackedFloat32Array()
+var world_wind_u: PackedFloat32Array = PackedFloat32Array()
+var world_wind_v: PackedFloat32Array = PackedFloat32Array()
 var selected_world_tile: Vector2i = Vector2i(-1, -1)
 var selected_world_tile_biome_id: int = -1
 var selected_world_tile_biome_name: String = ""
@@ -50,6 +53,9 @@ func reset() -> void:
 	world_moisture = PackedFloat32Array()
 	world_land_mask = PackedByteArray()
 	world_beach_mask = PackedByteArray()
+	world_cloud_cover = PackedFloat32Array()
+	world_wind_u = PackedFloat32Array()
+	world_wind_v = PackedFloat32Array()
 	selected_world_tile = Vector2i(-1, -1)
 	selected_world_tile_biome_id = -1
 	selected_world_tile_biome_name = ""
@@ -106,7 +112,10 @@ func set_world_snapshot(
 	temperature: PackedFloat32Array = PackedFloat32Array(),
 	moisture: PackedFloat32Array = PackedFloat32Array(),
 	land_mask: PackedByteArray = PackedByteArray(),
-	beach_mask: PackedByteArray = PackedByteArray()
+	beach_mask: PackedByteArray = PackedByteArray(),
+	cloud_cover: PackedFloat32Array = PackedFloat32Array(),
+	wind_u: PackedFloat32Array = PackedFloat32Array(),
+	wind_v: PackedFloat32Array = PackedFloat32Array()
 ) -> void:
 	world_width = max(1, width)
 	world_height = max(1, height)
@@ -118,6 +127,9 @@ func set_world_snapshot(
 	world_moisture = moisture.duplicate() if moisture.size() == size else PackedFloat32Array()
 	world_land_mask = land_mask.duplicate() if land_mask.size() == size else PackedByteArray()
 	world_beach_mask = beach_mask.duplicate() if beach_mask.size() == size else PackedByteArray()
+	world_cloud_cover = cloud_cover.duplicate() if cloud_cover.size() == size else PackedFloat32Array()
+	world_wind_u = wind_u.duplicate() if wind_u.size() == size else PackedFloat32Array()
+	world_wind_v = wind_v.duplicate() if wind_v.size() == size else PackedFloat32Array()
 
 func set_selected_world_tile(x: int, y: int, biome_id: int, biome_name: String, local_x: int = 48, local_y: int = 48) -> void:
 	selected_world_tile = Vector2i(x, y)

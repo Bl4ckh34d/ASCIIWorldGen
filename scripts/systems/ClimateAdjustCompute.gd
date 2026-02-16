@@ -1,10 +1,10 @@
 # File: res://scripts/systems/ClimateAdjustCompute.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 ## GPU ClimateAdjust using Godot 4 RenderingDevice and compute shaders.
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 
 const CLIMATE_SHADER_PATH: String = "res://shaders/climate_adjust.glsl"
@@ -46,7 +46,7 @@ func _compute_stage_bytecode_size(spirv: RDShaderSPIRV) -> int:
 	return -1
 
 func _ensure_device_and_pipeline() -> void:
-	var state_climate: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state_climate: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_shader,
 		_pipeline,
@@ -56,10 +56,10 @@ func _ensure_device_and_pipeline() -> void:
 	_rd = state_climate.get("rd", null)
 	_shader = state_climate.get("shader", RID())
 	_pipeline = state_climate.get("pipeline", RID())
-	if not VariantCasts.to_bool(state_climate.get("ok", false)):
+	if not VariantCastsUtil.to_bool(state_climate.get("ok", false)):
 		return
 
-	var state_cycle: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state_cycle: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_cycle_shader,
 		_cycle_pipeline,
@@ -69,7 +69,7 @@ func _ensure_device_and_pipeline() -> void:
 	_cycle_shader = state_cycle.get("shader", RID())
 	_cycle_pipeline = state_cycle.get("pipeline", RID())
 
-	var state_light: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state_light: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_light_shader,
 		_light_pipeline,
@@ -245,7 +245,7 @@ func evaluate_to_buffers_gpu(
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 80, "ClimateAdjustCompute.evaluate"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 80, "ClimateAdjustCompute.evaluate"):
 		return false
 	var groups_x: int = int(ceil(float(w) / 16.0))
 	var groups_y: int = int(ceil(float(h) / 16.0))
@@ -294,7 +294,7 @@ func apply_cycles_only_gpu(w: int, h: int, temp_buf: RID, land_buf: RID, dist_bu
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 64, "ClimateAdjustCompute.cycle"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 64, "ClimateAdjustCompute.cycle"):
 		return false
 	var groups_x: int = int(ceil(float(w) / 16.0))
 	var groups_y: int = int(ceil(float(h) / 16.0))
@@ -347,7 +347,7 @@ func evaluate_light_field_gpu(w: int, h: int, params: Dictionary, height_buf: RI
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 48, "ClimateAdjustCompute.light"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 48, "ClimateAdjustCompute.light"):
 		return false
 	var groups_x: int = int(ceil(float(w) / 16.0))
 	var groups_y: int = int(ceil(float(h) / 16.0))
@@ -363,7 +363,7 @@ func evaluate_light_field_gpu(w: int, h: int, params: Dictionary, height_buf: RI
 func cleanup() -> void:
 	if _buf_mgr != null:
 		_buf_mgr.cleanup()
-	ComputeShaderBase.free_rids(_rd, [
+	ComputeShaderBaseUtil.free_rids(_rd, [
 		_pipeline,
 		_shader,
 		_cycle_pipeline,

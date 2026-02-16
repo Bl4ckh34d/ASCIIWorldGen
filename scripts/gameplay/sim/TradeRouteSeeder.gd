@@ -1,10 +1,6 @@
 extends RefCounted
 class_name TradeRouteSeeder
 
-const EconomyStateModel = preload("res://scripts/gameplay/models/EconomyState.gd")
-const PoliticsStateModel = preload("res://scripts/gameplay/models/PoliticsState.gd")
-const EpochSystem = preload("res://scripts/gameplay/sim/EpochSystem.gd")
-
 # v0 route scaffolding:
 # Build a stable, coarse graph over settlements so later economy systems can push trade flows.
 # This does not affect the current compute tick yet; it is persistence + determinism plumbing.

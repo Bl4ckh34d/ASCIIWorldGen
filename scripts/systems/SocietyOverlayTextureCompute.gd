@@ -1,9 +1,7 @@
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # Packs society sim buffers (wildlife + human pop) into an RGBA32F Texture2DRD for rendering overlays.
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
 
 var _rd: RenderingDevice = null
 var _shader: RID = RID()

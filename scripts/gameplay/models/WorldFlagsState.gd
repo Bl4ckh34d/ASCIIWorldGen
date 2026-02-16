@@ -1,6 +1,5 @@
 extends RefCounted
 class_name WorldFlagsStateModel
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 var discovered_pois: Dictionary = {}
 var cleared_pois: Dictionary = {}

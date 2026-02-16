@@ -1,11 +1,6 @@
 extends RefCounted
 class_name EncounterRegistry
 
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
-const EnemyCatalog = preload("res://scripts/gameplay/catalog/EnemyCatalog.gd")
-const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
-
 const _SEASON_UNKNOWN: int = -1
 const _SEASON_SPRING: int = 0
 const _SEASON_SUMMER: int = 1
@@ -202,14 +197,7 @@ static func _build_encounter_from_key(
 	var enemy_base_hp: int = max(16, int(enemy_data.get("base_hp", 28)))
 	var exp_reward: int = 14 + enemy_power * 2
 	var gold_reward: int = 8 + DeterministicRng.randi_range(world_seed_hash, key_root + "|gold", 0, 12)
-	var item_roll: float = DeterministicRng.randf01(world_seed_hash, key_root + "|item")
-	var items: Array = []
-	if item_roll <= 0.28:
-		if ItemCatalog.has_item("Herb"):
-			items.append({"name": "Herb", "count": 1})
-	elif item_roll <= 0.38:
-		if ItemCatalog.has_item("Potion"):
-			items.append({"name": "Potion", "count": 1})
+	var items: Array = _roll_item_rewards(world_seed_hash, key_root, enemy_power, tod_bucket, season_bucket)
 	var flee_chance: float = 0.55
 	if _is_forest_biome(biome_id):
 		flee_chance = 0.48
@@ -443,6 +431,61 @@ static func _flee_context_multiplier(biome_id: int, tod_bucket: int, season_buck
 	if season_bucket == _SEASON_SUMMER and _is_desert_biome(biome_id):
 		mult *= 0.90
 	return clamp(mult, 0.55, 1.15)
+
+static func _drop_tier_for_encounter(enemy_power: int, tod_bucket: int, season_bucket: int) -> int:
+	var tier: int = 1 + int(floor(max(0.0, float(enemy_power - 6)) / 5.0))
+	if tod_bucket == _TOD_NIGHT:
+		tier += 1
+	elif tod_bucket == _TOD_DUSK:
+		tier += 1
+	if season_bucket == _SEASON_WINTER:
+		tier += 1
+	return clamp(tier, 1, 4)
+
+static func _roll_item_rewards(world_seed_hash: int, key_root: String, enemy_power: int, tod_bucket: int, season_bucket: int) -> Array:
+	var items: Array = []
+	var item_roll: float = DeterministicRng.randf01(world_seed_hash, key_root + "|item")
+	var drop_tier: int = _drop_tier_for_encounter(enemy_power, tod_bucket, season_bucket)
+	var consumables: Array[String] = ItemCatalog.items_up_to_tier(drop_tier, ["consumable"])
+	var stronger_consumables: Array[String] = ItemCatalog.items_up_to_tier(min(4, drop_tier + 1), ["consumable"])
+	var equipment: Array[String] = ItemCatalog.items_up_to_tier(max(1, drop_tier - 1), ["weapon", "armor", "accessory"])
+	if item_roll <= 0.32:
+		var c_name: String = _pick_item_from_pool(world_seed_hash, key_root + "|item_cons", consumables, "Potion")
+		if ItemCatalog.has_item(c_name):
+			var ci: Dictionary = ItemCatalog.get_item(c_name)
+			var c_count: int = 1
+			if VariantCasts.to_bool(ci.get("stackable", true)):
+				var extra_max: int = max(0, 2 - int(int(ci.get("tier", 1)) / 2.0))
+				c_count = 1 + DeterministicRng.randi_range(world_seed_hash, key_root + "|item_cons_count", 0, extra_max)
+			items.append({"name": c_name, "count": max(1, c_count)})
+	elif item_roll <= 0.42:
+		var c2_name: String = _pick_item_from_pool(world_seed_hash, key_root + "|item_cons_rare", stronger_consumables, "Hi-Potion")
+		if ItemCatalog.has_item(c2_name):
+			items.append({"name": c2_name, "count": 1})
+	elif item_roll <= 0.48 and enemy_power >= 10:
+		var e_name: String = _pick_item_from_pool(world_seed_hash, key_root + "|item_equip", equipment, "")
+		if not e_name.is_empty() and ItemCatalog.has_item(e_name):
+			items.append({"name": e_name, "count": 1})
+	return items
+
+static func _pick_item_from_pool(world_seed_hash: int, key: String, pool: Array[String], fallback: String) -> String:
+	if pool.is_empty():
+		return fallback
+	var sorted: Array[String] = pool.duplicate()
+	sorted.sort_custom(func(a: String, b: String) -> bool:
+		var ia: Dictionary = ItemCatalog.get_item(a)
+		var ib: Dictionary = ItemCatalog.get_item(b)
+		var ta: int = int(ia.get("tier", 1))
+		var tb: int = int(ib.get("tier", 1))
+		if ta == tb:
+			return a < b
+		return ta < tb
+	)
+	var idx: int = DeterministicRng.randi_range(world_seed_hash, key, 0, sorted.size() - 1)
+	var out: String = String(sorted[idx])
+	if not ItemCatalog.has_item(out):
+		return fallback
+	return out
 
 static func _tod_bucket_name(tod_bucket: int) -> String:
 	match tod_bucket:

@@ -1,13 +1,5 @@
 extends Control
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
-const PoiRegistry = preload("res://scripts/gameplay/PoiRegistry.gd")
-const EncounterRegistry = preload("res://scripts/gameplay/EncounterRegistry.gd")
-const RegionalChunkGenerator = preload("res://scripts/gameplay/RegionalChunkGenerator.gd")
-const RegionalChunkCache = preload("res://scripts/gameplay/RegionalChunkCache.gd")
-const WorldTimeStateModel = preload("res://scripts/gameplay/models/WorldTimeState.gd")
-const GpuMapView = preload("res://scripts/gameplay/rendering/GpuMapView.gd")
 
 const TAU: float = 6.28318530718
 const PI: float = 3.14159265359
@@ -56,6 +48,12 @@ const _HEADER_REFRESH_INTERVAL: float = 0.25
 const _DYNAMIC_REFRESH_INTERVAL: float = 0.50
 const _TRANSITION_PROGRESS_QUANTIZATION_STEPS: int = 200
 const _CHUNK_PREFETCH_MARGIN_CHUNKS: int = 1
+const _CHUNK_PREFETCH_BUDGET_CHUNKS: int = 4
+const _CHUNK_PREFETCH_BUDGET_US: int = 2000
+const _CHUNK_WALK_PREFETCH_INTERVAL: float = 0.08
+const _CHUNK_WALK_PREFETCH_BUDGET_CHUNKS: int = 2
+const _CHUNK_WALK_PREFETCH_BUDGET_US: int = 1200
+const _TRANSITION_INVALIDATE_PAD_CELLS: int = 12
 # Partial edge-only GPU uploads are currently incorrect for the scrolled regional view:
 # they do not shift interior texture rows/cols, which can visually pin shading around
 # the centered player. Keep CPU incremental sampling, but push full GPU uploads.
@@ -63,6 +61,8 @@ const _ENABLE_GPU_PARTIAL_UPLOAD: bool = false
 var _header_refresh_accum: float = 0.0
 var _dynamic_refresh_accum: float = 0.0
 var _transition_signature: String = ""
+var _transition_quantized_tiles: Dictionary = {} # Vector2i -> quantized transition descriptor
+var _walk_prefetch_accum: float = 0.0
 var _field_cache_valid: bool = false
 var _field_origin_x: int = 0
 var _field_origin_y: int = 0
@@ -78,6 +78,9 @@ var _field_moist_scratch: PackedFloat32Array = PackedFloat32Array()
 var _field_biome_scratch: PackedInt32Array = PackedInt32Array()
 var _field_land_scratch: PackedInt32Array = PackedInt32Array()
 var _field_beach_scratch: PackedInt32Array = PackedInt32Array()
+var _house_layout_cache: Dictionary = {} # key -> generated local house layout
+var _visible_poi_overrides: Dictionary = {} # "gx,gy" -> poi info (for rendered house footprints)
+var _visible_house_wall_blocks: Dictionary = {} # "gx,gy" -> true for rendered house wall cells
 var _last_redraw_mode: String = ""
 var _last_redraw_us: int = 0
 var _last_redraw_fresh_cells: int = 0
@@ -105,6 +108,11 @@ func _ready() -> void:
 	_apply_scroll_offset()
 
 func _init_regional_generation() -> void:
+	_house_layout_cache.clear()
+	_visible_poi_overrides.clear()
+	_visible_house_wall_blocks.clear()
+	_transition_quantized_tiles.clear()
+	_walk_prefetch_accum = 0.0
 	if world_biome_ids.is_empty():
 		# Best-effort fallback: try to pull from GameState even if location came from StartupState.
 		if game_state != null:
@@ -119,7 +127,10 @@ func _init_regional_generation() -> void:
 			Vector2i(world_tile_x, world_tile_y): int(_location_biome_override_id),
 		})
 	_chunk_cache = RegionalChunkCache.new()
-	_chunk_cache.configure(_chunk_gen, 32, 256)
+	# Slightly smaller chunks reduce worst-case single-chunk generation spikes while walking.
+	_chunk_cache.configure(_chunk_gen, 24, 320)
+	if _chunk_cache.has_method("set_prefetch_budget"):
+		_chunk_cache.set_prefetch_budget(_CHUNK_PREFETCH_BUDGET_CHUNKS, _CHUNK_PREFETCH_BUDGET_US)
 	_refresh_regional_transition_overrides(true)
 
 func _ensure_valid_spawn() -> void:
@@ -129,7 +140,7 @@ func _ensure_valid_spawn() -> void:
 	var gx0: int = _wrap_global_x(int(floor(_player_gx)))
 	var gy0: int = _clamp_global_y(int(floor(_player_gy)))
 	if _chunk_cache.has_method("prefetch_for_view"):
-		_chunk_cache.prefetch_for_view(gx0, gy0, 1, 1, 1)
+		_chunk_cache.prefetch_for_view(gx0, gy0, 1, 1, 1, 12, 4000)
 	if not _is_blocked_cell(gx0, gy0):
 		return
 	var found: bool = false
@@ -167,6 +178,7 @@ func _refresh_regional_transition_overrides(force: bool = false) -> bool:
 	if game_state != null and game_state.has_method("get_regional_biome_transition_overrides"):
 		raw = game_state.get_regional_biome_transition_overrides(world_tile_x, world_tile_y, 1)
 	var parsed: Dictionary = {}
+	var quantized: Dictionary = {}
 	for kv in raw.keys():
 		var key: String = String(kv)
 		var parts: PackedStringArray = key.split(",", false)
@@ -178,31 +190,80 @@ func _refresh_regional_transition_overrides(force: bool = false) -> bool:
 		if typeof(vv) != TYPE_DICTIONARY:
 			continue
 		var d: Dictionary = vv as Dictionary
+		var from_biome: int = int(d.get("from_biome", -1))
+		var to_biome: int = int(d.get("to_biome", -1))
+		var progress: float = clamp(float(d.get("progress", 1.0)), 0.0, 1.0)
+		var q_progress: int = int(round(progress * float(_TRANSITION_PROGRESS_QUANTIZATION_STEPS)))
+		var tile_key := Vector2i(wx, wy)
 		parsed[Vector2i(wx, wy)] = {
-			"from_biome": int(d.get("from_biome", -1)),
-			"to_biome": int(d.get("to_biome", -1)),
-			"progress": clamp(float(d.get("progress", 1.0)), 0.0, 1.0),
+			"from_biome": from_biome,
+			"to_biome": to_biome,
+			"progress": progress,
 		}
+		quantized[tile_key] = "%d>%d@%03d" % [from_biome, to_biome, q_progress]
 	var sig_parts: Array[String] = []
-	for pk in parsed.keys():
+	for pk in quantized.keys():
 		var pxy: Vector2i = pk
-		var d2: Dictionary = parsed[pk]
-		sig_parts.append("%d,%d:%d>%d@%03d" % [
+		sig_parts.append("%d,%d:%s" % [
 			pxy.x,
 			pxy.y,
-			int(d2.get("from_biome", -1)),
-			int(d2.get("to_biome", -1)),
-			int(round(clamp(float(d2.get("progress", 1.0)), 0.0, 1.0) * float(_TRANSITION_PROGRESS_QUANTIZATION_STEPS))),
+			String(quantized.get(pk, "")),
 		])
 	sig_parts.sort()
 	var sig: String = "|".join(sig_parts)
 	if not force and sig == _transition_signature:
 		return false
+	var changed_tiles: Array[Vector2i] = []
+	var changed_seen: Dictionary = {}
+	if force:
+		for qk in quantized.keys():
+			if typeof(qk) != TYPE_VECTOR2I:
+				continue
+			var tk: Vector2i = qk as Vector2i
+			if changed_seen.has(tk):
+				continue
+			changed_seen[tk] = true
+			changed_tiles.append(tk)
+	else:
+		for old_kv in _transition_quantized_tiles.keys():
+			if typeof(old_kv) != TYPE_VECTOR2I:
+				continue
+			var old_key: Vector2i = old_kv as Vector2i
+			var old_desc: String = String(_transition_quantized_tiles.get(old_key, ""))
+			var new_desc: String = String(quantized.get(old_key, ""))
+			if not quantized.has(old_key) or old_desc != new_desc:
+				if not changed_seen.has(old_key):
+					changed_seen[old_key] = true
+					changed_tiles.append(old_key)
+		for new_kv in quantized.keys():
+			if typeof(new_kv) != TYPE_VECTOR2I:
+				continue
+			var new_key: Vector2i = new_kv as Vector2i
+			var old_desc2: String = String(_transition_quantized_tiles.get(new_key, ""))
+			var new_desc2: String = String(quantized.get(new_key, ""))
+			if not _transition_quantized_tiles.has(new_key) or old_desc2 != new_desc2:
+				if not changed_seen.has(new_key):
+					changed_seen[new_key] = true
+					changed_tiles.append(new_key)
 	_transition_signature = sig
+	_transition_quantized_tiles = quantized.duplicate(true)
 	if "set_biome_transition_overrides" in _chunk_gen:
 		_chunk_gen.set_biome_transition_overrides(parsed)
-	if _chunk_cache != null and _chunk_cache.has_method("invalidate_all"):
-		_chunk_cache.invalidate_all()
+	if _chunk_cache != null:
+		if force:
+			if _chunk_cache.has_method("invalidate_all"):
+				_chunk_cache.invalidate_all()
+		elif not changed_tiles.is_empty():
+			if _chunk_cache.has_method("invalidate_for_world_tiles"):
+				_chunk_cache.invalidate_for_world_tiles(
+					changed_tiles,
+					REGION_SIZE,
+					world_width,
+					world_height,
+					_TRANSITION_INVALIDATE_PAD_CELLS
+				)
+			elif _chunk_cache.has_method("invalidate_all"):
+				_chunk_cache.invalidate_all()
 	_field_cache_valid = false
 	return true
 
@@ -282,6 +343,7 @@ func _load_location_from_state() -> void:
 	world_tile_y = clamp(world_tile_y, 0, world_height - 1)
 	local_x = clamp(local_x, 0, REGION_SIZE - 1)
 	local_y = clamp(local_y, 0, REGION_SIZE - 1)
+	_ensure_enterable_world_tile_selection()
 	var gx0: int = world_tile_x * REGION_SIZE + local_x
 	var gy0: int = world_tile_y * REGION_SIZE + local_y
 	_player_gx = float(_wrap_global_x(gx0))
@@ -289,6 +351,38 @@ func _load_location_from_state() -> void:
 	_center_gx = int(floor(_player_gx))
 	_center_gy = int(floor(_player_gy))
 	_save_position_to_state()
+
+func _ensure_enterable_world_tile_selection() -> void:
+	if world_width <= 0 or world_height <= 0:
+		return
+	if _is_world_tile_enterable(world_tile_x, world_tile_y):
+		return
+	var found: bool = false
+	var best := Vector2i(world_tile_x, world_tile_y)
+	var search_max: int = max(1, max(world_width, world_height))
+	for r in range(1, search_max + 1):
+		for dy in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if abs(dx) != r and abs(dy) != r:
+					continue
+				var wx: int = posmod(world_tile_x + dx, world_width)
+				var wy: int = clamp(world_tile_y + dy, 0, world_height - 1)
+				if not _is_world_tile_enterable(wx, wy):
+					continue
+				best = Vector2i(wx, wy)
+				found = true
+				break
+			if found:
+				break
+		if found:
+			break
+	if not found:
+		return
+	world_tile_x = best.x
+	world_tile_y = best.y
+	local_x = REGION_SIZE >> 1
+	local_y = REGION_SIZE >> 1
+	_location_biome_override_id = -1
 
 func _unhandled_input(event: InputEvent) -> void:
 	var vp: Viewport = get_viewport()
@@ -318,12 +412,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		if vp:
 			vp.set_input_as_handled()
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_E:
-			_try_enter_poi()
-			if vp:
-				vp.set_input_as_handled()
-			return
 
 func _is_menu_toggle_event(event: InputEvent) -> bool:
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -363,6 +451,7 @@ func _process(delta: float) -> void:
 	var dir: Vector2i = _read_move_dir()
 	if dir != Vector2i.ZERO:
 		_move_continuous(dir, delta)
+	_tick_walk_prefetch(delta, dir)
 	_apply_scroll_offset()
 	_update_fixed_lonlat_uniform()
 	_tick_time_visuals(delta)
@@ -381,6 +470,36 @@ func _tick_time_visuals(delta: float) -> void:
 			_render_view()
 		else:
 			_update_dynamic_layers()
+
+func _tick_walk_prefetch(delta: float, move_dir: Vector2i) -> void:
+	if delta <= 0.0 or _chunk_cache == null:
+		return
+	if not _chunk_cache.has_method("prefetch_for_view"):
+		return
+	_walk_prefetch_accum += delta
+	if _walk_prefetch_accum < _CHUNK_WALK_PREFETCH_INTERVAL:
+		return
+	_walk_prefetch_accum = fposmod(_walk_prefetch_accum, _CHUNK_WALK_PREFETCH_INTERVAL)
+	var lookahead_x: int = 0
+	var lookahead_y: int = 0
+	if move_dir != Vector2i.ZERO:
+		lookahead_x = move_dir.x * int(round(float(VIEW_W) * 0.30))
+		lookahead_y = move_dir.y * int(round(float(VIEW_H) * 0.30))
+	var prefetch_center_x: int = _center_gx + lookahead_x
+	var prefetch_center_y: int = _center_gy + lookahead_y
+	var half_w: int = int(floor(float(VIEW_W) * 0.5))
+	var half_h: int = int(floor(float(VIEW_H) * 0.5))
+	var origin_x: int = prefetch_center_x - half_w - VIEW_PAD
+	var origin_y: int = prefetch_center_y - half_h - VIEW_PAD
+	_chunk_cache.prefetch_for_view(
+		origin_x,
+		origin_y,
+		RENDER_W,
+		RENDER_H,
+		_CHUNK_PREFETCH_MARGIN_CHUNKS + 1,
+		_CHUNK_WALK_PREFETCH_BUDGET_CHUNKS,
+		_CHUNK_WALK_PREFETCH_BUDGET_US
+	)
 
 func _update_dynamic_layers() -> void:
 	if _gpu_view == null or gpu_map == null:
@@ -653,9 +772,14 @@ func _cross_boundary(gx_int: int, gy_int: int, dir: Vector2i) -> void:
 		_player_gy = float(gy_int) - MOVE_EPS
 
 func _is_blocked_cell(gx: int, gy: int) -> bool:
+	var gxw: int = _wrap_global_x(gx)
+	var gyc: int = _clamp_global_y(gy)
+	var house_key: String = _global_cell_key(gxw, gyc)
+	if _visible_house_wall_blocks.has(house_key):
+		return true
 	if _chunk_cache == null:
 		return false
-	var cell: Dictionary = _chunk_cache.get_cell(gx, gy)
+	var cell: Dictionary = _chunk_cache.get_cell(gxw, gyc)
 	var f: int = int(cell.get("flags", 0))
 	return (f & RegionalChunkGenerator.FLAG_BLOCKED) != 0
 
@@ -828,17 +952,28 @@ func _try_enter_poi() -> void:
 	if poi_info.is_empty():
 		footer_label.text = "No point of interest here. Step onto a POI marker to enter."
 		return
+	if String(poi_info.get("type", "")) == "House" and not VariantCasts.to_bool(poi_info.get("entry_marker", false)):
+		footer_label.text = "Use the house door to enter."
+		return
+	var enter_world_x: int = int(poi_info.get("origin_world_x", world_tile_x))
+	var enter_world_y: int = int(poi_info.get("origin_world_y", world_tile_y))
+	var enter_local_x: int = int(poi_info.get("origin_local_x", local_x))
+	var enter_local_y: int = int(poi_info.get("origin_local_y", local_y))
+	var enter_biome_id: int = _get_world_biome_id(enter_world_x, enter_world_y)
 	var payload: Dictionary = {
 		"type": String(poi_info.get("type", "POI")),
 		"id": String(poi_info.get("id", "")),
 		"seed_key": String(poi_info.get("seed_key", "")),
 		"is_shop": VariantCasts.to_bool(poi_info.get("is_shop", false)),
-		"world_x": world_tile_x,
-		"world_y": world_tile_y,
-		"local_x": local_x,
-		"local_y": local_y,
-		"biome_id": _get_world_biome_id(world_tile_x, world_tile_y),
-		"biome_name": _biome_name_for_id(_get_world_biome_id(world_tile_x, world_tile_y)),
+		"service_type": String(poi_info.get("service_type", "")),
+		"faction_id": String(poi_info.get("faction_id", "")),
+		"faction_rank_required": int(poi_info.get("faction_rank_required", 0)),
+		"world_x": enter_world_x,
+		"world_y": enter_world_y,
+		"local_x": enter_local_x,
+		"local_y": enter_local_y,
+		"biome_id": enter_biome_id,
+		"biome_name": _biome_name_for_id(enter_biome_id),
 	}
 	if game_state != null and game_state.has_method("register_poi_discovery"):
 		game_state.register_poi_discovery(payload)
@@ -848,7 +983,15 @@ func _try_enter_poi() -> void:
 		if game_state != null and game_state.has_method("queue_poi"):
 			game_state.queue_poi(payload)
 			if game_state.has_method("set_location"):
-				game_state.set_location("local", world_tile_x, world_tile_y, local_x, local_y, int(payload["biome_id"]), String(payload["biome_name"]))
+				game_state.set_location(
+					"local",
+					int(payload["world_x"]),
+					int(payload["world_y"]),
+					int(payload["local_x"]),
+					int(payload["local_y"]),
+					int(payload["biome_id"]),
+					String(payload["biome_name"])
+				)
 		if startup_state != null and startup_state.has_method("queue_poi"):
 			startup_state.queue_poi(payload)
 		get_tree().change_scene_to_file(SceneContracts.SCENE_LOCAL_AREA)
@@ -871,7 +1014,15 @@ func _render_view_incremental(prev_center_x: int, prev_center_y: int) -> bool:
 	var origin_y: int = _center_gy - half_h - VIEW_PAD
 	var prefetch_generated: int = -1
 	if _chunk_cache.has_method("prefetch_for_view"):
-		prefetch_generated = int(_chunk_cache.prefetch_for_view(origin_x, origin_y, RENDER_W, RENDER_H, _CHUNK_PREFETCH_MARGIN_CHUNKS))
+		prefetch_generated = int(_chunk_cache.prefetch_for_view(
+			origin_x,
+			origin_y,
+			RENDER_W,
+			RENDER_H,
+			_CHUNK_PREFETCH_MARGIN_CHUNKS,
+			_CHUNK_PREFETCH_BUDGET_CHUNKS,
+			_CHUNK_PREFETCH_BUDGET_US
+		))
 	var fresh_cells: int = 0
 
 	for sy in range(RENDER_H):
@@ -905,6 +1056,16 @@ func _render_view_incremental(prev_center_x: int, prev_center_y: int) -> bool:
 				_field_beach_scratch
 			)
 	_swap_field_buffers()
+	_overlay_house_footprints(
+		origin_x,
+		origin_y,
+		_field_height_raw,
+		_field_temp,
+		_field_moist,
+		_field_biome,
+		_field_land,
+		_field_beach
+	)
 	_field_origin_x = origin_x
 	_field_origin_y = origin_y
 	_field_cache_valid = true
@@ -933,7 +1094,15 @@ func _render_view_full() -> void:
 	var origin_y: int = gy0 - half_h - VIEW_PAD
 	var prefetch_generated: int = -1
 	if _chunk_cache != null and _chunk_cache.has_method("prefetch_for_view"):
-		prefetch_generated = int(_chunk_cache.prefetch_for_view(origin_x, origin_y, RENDER_W, RENDER_H, _CHUNK_PREFETCH_MARGIN_CHUNKS))
+		prefetch_generated = int(_chunk_cache.prefetch_for_view(
+			origin_x,
+			origin_y,
+			RENDER_W,
+			RENDER_H,
+			_CHUNK_PREFETCH_MARGIN_CHUNKS,
+			_CHUNK_PREFETCH_BUDGET_CHUNKS,
+			_CHUNK_PREFETCH_BUDGET_US
+		))
 	for sy in range(RENDER_H):
 		for sx in range(RENDER_W):
 			var gx_raw: int = origin_x + sx
@@ -955,6 +1124,16 @@ func _render_view_full() -> void:
 				_field_land,
 				_field_beach
 			)
+	_overlay_house_footprints(
+		origin_x,
+		origin_y,
+		_field_height_raw,
+		_field_temp,
+		_field_moist,
+		_field_biome,
+		_field_land,
+		_field_beach
+	)
 	_field_origin_x = origin_x
 	_field_origin_y = origin_y
 	_field_cache_valid = true
@@ -968,21 +1147,21 @@ func _render_view_full() -> void:
 	_present_field_buffers(origin_x, origin_y, prefetch_generated, false, 0, 0)
 
 func _ensure_field_buffers() -> void:
-	var size: int = RENDER_W * RENDER_H
-	if _field_height_raw.size() != size:
-		_field_height_raw.resize(size)
-		_field_temp.resize(size)
-		_field_moist.resize(size)
-		_field_biome.resize(size)
-		_field_land.resize(size)
-		_field_beach.resize(size)
-	if _field_height_raw_scratch.size() != size:
-		_field_height_raw_scratch.resize(size)
-		_field_temp_scratch.resize(size)
-		_field_moist_scratch.resize(size)
-		_field_biome_scratch.resize(size)
-		_field_land_scratch.resize(size)
-		_field_beach_scratch.resize(size)
+	var field_cell_count: int = RENDER_W * RENDER_H
+	if _field_height_raw.size() != field_cell_count:
+		_field_height_raw.resize(field_cell_count)
+		_field_temp.resize(field_cell_count)
+		_field_moist.resize(field_cell_count)
+		_field_biome.resize(field_cell_count)
+		_field_land.resize(field_cell_count)
+		_field_beach.resize(field_cell_count)
+	if _field_height_raw_scratch.size() != field_cell_count:
+		_field_height_raw_scratch.resize(field_cell_count)
+		_field_temp_scratch.resize(field_cell_count)
+		_field_moist_scratch.resize(field_cell_count)
+		_field_biome_scratch.resize(field_cell_count)
+		_field_land_scratch.resize(field_cell_count)
+		_field_beach_scratch.resize(field_cell_count)
 
 func _write_field_cell(
 	idx: int,
@@ -1018,17 +1197,264 @@ func _write_field_cell(
 			is_land_cell = 1
 			is_beach_cell = 0
 
-	out_height_raw[idx] = h
+	var is_marker_cell: bool = b >= 200
+	var patch_x_a: int = int(floor(float(gx) / 7.0))
+	var patch_y_a: int = int(floor(float(gy) / 7.0))
+	var patch_x_b: int = int(floor(float(gx) / 19.0))
+	var patch_y_b: int = int(floor(float(gy) / 19.0))
+	var n_patch_a: float = _rand01_xy(patch_x_a, patch_y_a, 151) - 0.5
+	var n_patch_b: float = _rand01_xy(patch_x_b, patch_y_b, 197) - 0.5
+	var n_micro_t: float = _rand01_xy(gx, gy, 11) - 0.5
+	var n_micro_m: float = _rand01_xy(gx, gy, 29) - 0.5
+	var n_micro_h: float = _rand01_xy(gx, gy, 233) - 0.5
+
+	var visual_h: float = h
+	if is_land_cell == 1 and not is_marker_cell:
+		visual_h = h + n_patch_a * 0.018 + n_patch_b * 0.010 + n_micro_h * 0.006
+	out_height_raw[idx] = visual_h
 	out_biome[idx] = b
 	out_land[idx] = is_land_cell
 	out_beach[idx] = is_beach_cell
 
 	var base_t: float = _visual_temp_for_biome(b)
 	var base_m: float = _visual_moist_for_biome(b)
-	var jt: float = (_rand01_xy(gx, gy, 11) - 0.5) * 0.10
-	var jm: float = (_rand01_xy(gx, gy, 29) - 0.5) * 0.10
-	out_temp[idx] = clamp(base_t + jt, 0.0, 1.0)
-	out_moist[idx] = clamp(base_m + jm, 0.0, 1.0)
+	var elev_bias: float = clamp(h * 0.35, -0.20, 0.20)
+	var jt: float = n_patch_a * 0.16 + n_patch_b * 0.10 + n_micro_t * 0.08 + elev_bias * 0.30
+	var jm: float = -n_patch_a * 0.10 + n_patch_b * 0.16 + n_micro_m * 0.08 - elev_bias * 0.18
+	var jitter_scale: float = 1.0
+	if is_land_cell == 0:
+		jitter_scale = 0.35
+	if is_marker_cell:
+		jitter_scale = 0.12
+	out_temp[idx] = clamp(base_t + jt * jitter_scale, 0.0, 1.0)
+	out_moist[idx] = clamp(base_m + jm * jitter_scale, 0.0, 1.0)
+
+func _house_layout_for_poi(poi: Dictionary) -> Dictionary:
+	if typeof(poi) != TYPE_DICTIONARY:
+		return {}
+	var poi_id: String = String(poi.get("id", ""))
+	if poi_id.is_empty():
+		return {}
+	var is_shop_i: int = 1 if VariantCasts.to_bool(poi.get("is_shop", false)) else 0
+	var service_type: String = String(poi.get("service_type", "")).to_lower().strip_edges()
+	if service_type.is_empty():
+		service_type = "shop" if is_shop_i == 1 else "home"
+	var cache_key: String = "%d|%s|%d|%s" % [world_seed_hash, poi_id, is_shop_i, service_type]
+	var cached: Variant = _house_layout_cache.get(cache_key, {})
+	if typeof(cached) == TYPE_DICTIONARY and not (cached as Dictionary).is_empty():
+		return cached as Dictionary
+	var layout: Dictionary = LocalAreaGenerator.generate_house_layout(
+		world_seed_hash,
+		poi_id,
+		LocalAreaGenerator.HOUSE_MAP_W,
+		LocalAreaGenerator.HOUSE_MAP_H,
+		is_shop_i == 1,
+		service_type
+	)
+	if not layout.is_empty():
+		_house_layout_cache[cache_key] = layout.duplicate(true)
+		if _house_layout_cache.size() > 256:
+			var first_key: Variant = _house_layout_cache.keys()[0]
+			_house_layout_cache.erase(first_key)
+	var out_v: Variant = _house_layout_cache.get(cache_key, layout)
+	if typeof(out_v) == TYPE_DICTIONARY:
+		return out_v as Dictionary
+	return layout
+
+func _global_cell_key(gx: int, gy: int) -> String:
+	return "%d,%d" % [_wrap_global_x(gx), _clamp_global_y(gy)]
+
+func _house_layout_fits_dry_terrain(
+	anchor_gx: int,
+	anchor_gy: int,
+	anchor_x: int,
+	anchor_y: int,
+	tiles: PackedByteArray,
+	hw: int,
+	hh: int,
+	max_global_y: int
+) -> bool:
+	if _chunk_cache == null:
+		return true
+	var total_cells: int = 0
+	var water_cells: int = 0
+	var blocked_cells: int = 0
+	var door_ok: bool = false
+	for hy in range(hh):
+		for hx in range(hw):
+			var idx: int = hx + hy * hw
+			var tile_id: int = int(tiles[idx])
+			if tile_id == int(LocalAreaTiles.Tile.OUTSIDE):
+				continue
+			var gx_target: int = _wrap_global_x(anchor_gx + (hx - anchor_x))
+			var gy_target: int = anchor_gy + (hy - anchor_y)
+			if gy_target < 0 or gy_target > max_global_y:
+				return false
+			var cell: Dictionary = _chunk_cache.get_cell(gx_target, gy_target)
+			var ground: int = int(cell.get("ground", RegionalChunkGenerator.Ground.GRASS))
+			var flags: int = int(cell.get("flags", 0))
+			var is_water: bool = (
+				ground == RegionalChunkGenerator.Ground.WATER_DEEP
+				or ground == RegionalChunkGenerator.Ground.WATER_SHALLOW
+			)
+			if is_water:
+				water_cells += 1
+			if (flags & RegionalChunkGenerator.FLAG_BLOCKED) != 0 and not is_water:
+				blocked_cells += 1
+			total_cells += 1
+			if tile_id == int(LocalAreaTiles.Tile.DOOR):
+				door_ok = not is_water and ((flags & RegionalChunkGenerator.FLAG_BLOCKED) == 0)
+	if total_cells <= 0:
+		return false
+	if not door_ok:
+		return false
+	var water_ratio: float = float(water_cells) / float(total_cells)
+	var blocked_ratio: float = float(blocked_cells) / float(total_cells)
+	return water_ratio <= 0.08 and blocked_ratio <= 0.18
+
+func _overlay_house_footprints(
+	origin_x: int,
+	origin_y: int,
+	out_height_raw: PackedFloat32Array,
+	_out_temp: PackedFloat32Array,
+	_out_moist: PackedFloat32Array,
+	out_biome: PackedInt32Array,
+	out_land: PackedInt32Array,
+	out_beach: PackedInt32Array
+) -> void:
+	_visible_poi_overrides.clear()
+	_visible_house_wall_blocks.clear()
+	if world_width <= 0 or world_height <= 0:
+		return
+	var period_x: int = world_width * REGION_SIZE
+	if period_x <= 0:
+		return
+	var max_global_y: int = world_height * REGION_SIZE - 1
+	var margin_x: int = 36
+	var margin_y: int = 20
+	var scan_y0: int = max(0, origin_y - margin_y)
+	var scan_y1: int = min(max_global_y, origin_y + RENDER_H - 1 + margin_y)
+	var scan_x0: int = origin_x - margin_x
+	var scan_x1: int = origin_x + RENDER_W - 1 + margin_x
+	var seen_anchor_keys: Dictionary = {}
+	var anchors: Array[Dictionary] = []
+
+	for gy_scan in range(scan_y0, scan_y1 + 1):
+		var wy_scan: int = clamp(int(floor(float(gy_scan) / float(REGION_SIZE))), 0, world_height - 1)
+		var ly_scan: int = gy_scan - wy_scan * REGION_SIZE
+		if ly_scan % 12 != 0:
+			continue
+		for gx_scan in range(scan_x0, scan_x1 + 1):
+			var gx_wrapped: int = _wrap_global_x(gx_scan)
+			var wx_scan: int = int(floor(float(gx_wrapped) / float(REGION_SIZE)))
+			var lx_scan: int = gx_wrapped - wx_scan * REGION_SIZE
+			if lx_scan % 12 != 0:
+				continue
+			var anchor_key: String = "%d,%d" % [gx_wrapped, gy_scan]
+			if seen_anchor_keys.has(anchor_key):
+				continue
+			seen_anchor_keys[anchor_key] = true
+			var biome_id: int = _get_world_biome_id(wx_scan, wy_scan)
+			var poi: Dictionary = PoiRegistry.get_poi_at(world_seed_hash, wx_scan, wy_scan, lx_scan, ly_scan, biome_id)
+			if poi.is_empty() or String(poi.get("type", "")) != "House":
+				continue
+			anchors.append({
+				"gx": gx_wrapped,
+				"gy": gy_scan,
+				"wx": wx_scan,
+				"wy": wy_scan,
+				"lx": lx_scan,
+				"ly": ly_scan,
+				"poi": poi.duplicate(true),
+			})
+
+	var origin_wrap_x: int = _wrap_global_x(origin_x)
+	for av in anchors:
+		if typeof(av) != TYPE_DICTIONARY:
+			continue
+		var a: Dictionary = av as Dictionary
+		var poi_d: Dictionary = a.get("poi", {})
+		var layout: Dictionary = _house_layout_for_poi(poi_d)
+		if layout.is_empty():
+			continue
+		var tiles_v: Variant = layout.get("tiles", PackedByteArray())
+		if not (tiles_v is PackedByteArray):
+			continue
+		var tiles: PackedByteArray = tiles_v as PackedByteArray
+		var hw: int = int(layout.get("w", LocalAreaGenerator.HOUSE_MAP_W))
+		var hh: int = int(layout.get("h", LocalAreaGenerator.HOUSE_MAP_H))
+		if hw <= 0 or hh <= 0 or tiles.size() != hw * hh:
+			continue
+		var door_v: Variant = layout.get("door_pos", Vector2i(0, 0))
+		var door_pos: Vector2i = door_v if door_v is Vector2i else Vector2i(0, 0)
+		var anchor_x: int = int(layout.get("anchor_x", max(0, door_pos.x - 1)))
+		var anchor_y: int = int(layout.get("anchor_y", door_pos.y))
+		var agx: int = int(a.get("gx", 0))
+		var agy: int = int(a.get("gy", 0))
+		var awx: int = int(a.get("wx", 0))
+		var awy: int = int(a.get("wy", 0))
+		var alx: int = int(a.get("lx", 0))
+		var aly: int = int(a.get("ly", 0))
+		if not _house_layout_fits_dry_terrain(agx, agy, anchor_x, anchor_y, tiles, hw, hh, max_global_y):
+			continue
+
+		for hy in range(hh):
+			for hx in range(hw):
+				var tidx: int = hx + hy * hw
+				var tile_id: int = int(tiles[tidx])
+				if tile_id == int(LocalAreaTiles.Tile.OUTSIDE):
+					continue
+				var is_boundary: bool = false
+				for off in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
+					var nx: int = hx + int(off.x)
+					var ny: int = hy + int(off.y)
+					if nx < 0 or ny < 0 or nx >= hw or ny >= hh:
+						is_boundary = true
+						break
+					var nidx: int = nx + ny * hw
+					if int(tiles[nidx]) == int(LocalAreaTiles.Tile.OUTSIDE):
+						is_boundary = true
+						break
+				var marker: int = LocalAreaTiles.MARKER_FLOOR
+				var height_hint: float = 0.05
+				var is_entry_marker: bool = false
+				if tile_id == int(LocalAreaTiles.Tile.DOOR):
+					marker = LocalAreaTiles.MARKER_DOOR
+					height_hint = 0.08
+					is_entry_marker = true
+				elif is_boundary:
+					marker = LocalAreaTiles.MARKER_WALL
+					height_hint = 0.13
+
+				var gx_target: int = _wrap_global_x(agx + (hx - anchor_x))
+				var gy_target: int = agy + (hy - anchor_y)
+				if gy_target < 0 or gy_target > max_global_y:
+					continue
+				if is_boundary and not is_entry_marker:
+					_visible_house_wall_blocks[_global_cell_key(gx_target, gy_target)] = true
+				var sx: int = posmod(gx_target - origin_wrap_x, period_x)
+				if sx < 0 or sx >= RENDER_W:
+					continue
+				var sy: int = gy_target - origin_y
+				if sy < 0 or sy >= RENDER_H:
+					continue
+				var ridx: int = sx + sy * RENDER_W
+				if ridx < 0 or ridx >= out_biome.size():
+					continue
+				out_biome[ridx] = marker
+				out_land[ridx] = 1
+				out_beach[ridx] = 0
+				out_height_raw[ridx] = max(out_height_raw[ridx], height_hint)
+				if is_entry_marker:
+					var gkey: String = "%d,%d" % [gx_target, gy_target]
+					if not _visible_poi_overrides.has(gkey):
+						var info: Dictionary = poi_d.duplicate(true)
+						info["origin_world_x"] = awx
+						info["origin_world_y"] = awy
+						info["origin_local_x"] = alx
+						info["origin_local_y"] = aly
+						info["entry_marker"] = true
+						_visible_poi_overrides[gkey] = info
 
 func _swap_field_buffers() -> void:
 	var tmp_h: PackedFloat32Array = _field_height_raw
@@ -1063,16 +1489,25 @@ func _present_field_buffers(
 	var clouds: Dictionary = _build_cloud_params(origin_x, origin_y)
 	if _gpu_view != null and gpu_map != null:
 		var render_biome: PackedInt32Array = _field_biome.duplicate()
-		var center_idx: int = (VIEW_W / 2 + VIEW_PAD) + (VIEW_H / 2 + VIEW_PAD) * RENDER_W
+		var render_land: PackedInt32Array = _field_land.duplicate()
+		var render_beach: PackedInt32Array = _field_beach.duplicate()
+		var center_x: int = (VIEW_W >> 1) + VIEW_PAD
+		var center_y: int = (VIEW_H >> 1) + VIEW_PAD
+		var center_idx: int = center_x + center_y * RENDER_W
 		if center_idx >= 0 and center_idx < render_biome.size():
 			render_biome[center_idx] = MARKER_PLAYER
+		if center_idx >= 0 and center_idx < render_land.size():
+			# Render-only override: keep player marker visible while wading on shallow water.
+			render_land[center_idx] = 1
+		if center_idx >= 0 and center_idx < render_beach.size():
+			render_beach[center_idx] = 0
 		var field_payload: Dictionary = {
 			"height_raw": _field_height_raw,
 			"temp": _field_temp,
 			"moist": _field_moist,
 			"biome": render_biome,
-			"land": _field_land,
-			"beach": _field_beach,
+			"land": render_land,
+			"beach": render_beach,
 		}
 		var used_partial_upload: bool = false
 		var t0_upload_us: int = Time.get_ticks_usec()
@@ -1128,16 +1563,30 @@ func _percentile_from_samples(samples: Array[float], p: float) -> float:
 	return float(sorted[idx])
 
 func _nearby_poi_hint() -> String:
-	if _chunk_cache == null:
-		return ""
 	for oy in range(-1, 2):
 		for ox in range(-1, 2):
 			var gx: int = _wrap_global_x(_center_gx + ox)
 			var gy: int = _clamp_global_y(_center_gy + oy)
-			var cell: Dictionary = _chunk_cache.get_cell(gx, gy)
-			var poi_type: String = String(cell.get("poi_type", ""))
-			if not poi_type.is_empty():
-				return "Nearby POI: %s (step onto it to enter)." % poi_type
+			var tx: int = int(floor(float(gx) / float(REGION_SIZE)))
+			var ty: int = int(floor(float(gy) / float(REGION_SIZE)))
+			var lx: int = gx - tx * REGION_SIZE
+			var ly: int = gy - ty * REGION_SIZE
+			var poi: Dictionary = _poi_info_at(tx, ty, lx, ly)
+			if not poi.is_empty():
+				var poi_name: String = String(poi.get("type", "POI"))
+				if poi_name == "House":
+					var svc: String = String(poi.get("service_type", "")).to_lower()
+					if svc == "shop":
+						poi_name = "Shop"
+					elif svc == "inn":
+						poi_name = "Inn"
+					elif svc == "temple":
+						poi_name = "Temple"
+					elif svc == "faction_hall":
+						poi_name = "Faction Hall"
+					elif svc == "town_hall":
+						poi_name = "Town Hall"
+				return "Nearby POI: %s (step onto it to enter)." % poi_name
 	return ""
 
 func _wrapped_center_delta_x(new_center_x: int, old_center_x: int) -> int:
@@ -1145,19 +1594,128 @@ func _wrapped_center_delta_x(new_center_x: int, old_center_x: int) -> int:
 	if period <= 0:
 		return new_center_x - old_center_x
 	var d: int = new_center_x - old_center_x
-	var half: int = int(period / 2)
+	var half: int = period >> 1
 	if d > half:
 		d -= period
 	elif d < -half:
 		d += period
 	return d
 
-func _sample_world_cell(offset_x: int, offset_y: int) -> Dictionary:
+func _sample_world_cell(_offset_x: int, _offset_y: int) -> Dictionary:
 	# Deprecated: replaced by `_chunk_cache` sampling in `_render_view()`.
 	return {}
 
+func _get_world_weather_field(field_name: String) -> PackedFloat32Array:
+	var world_cell_count: int = world_width * world_height
+	if world_cell_count <= 0:
+		return PackedFloat32Array()
+	if game_state != null:
+		var gv: Variant = game_state.get(field_name)
+		if gv is PackedFloat32Array:
+			var g_arr: PackedFloat32Array = gv
+			if g_arr.size() == world_cell_count:
+				return g_arr
+	if startup_state != null:
+		var sv: Variant = startup_state.get(field_name)
+		if sv is PackedFloat32Array:
+			var s_arr: PackedFloat32Array = sv
+			if s_arr.size() == world_cell_count:
+				return s_arr
+	return PackedFloat32Array()
+
+func _global_to_world_tile_f(gx: float, gy: float) -> Vector2:
+	var period_x_cells: float = float(max(1, world_width * REGION_SIZE))
+	var span_y_cells: float = float(max(1, world_height * REGION_SIZE))
+	var wrapped_x: float = fposmod(gx, period_x_cells)
+	if wrapped_x < 0.0:
+		wrapped_x += period_x_cells
+	var clamped_y: float = clamp(gy, 0.0, span_y_cells - 1.0)
+	return Vector2(
+		wrapped_x / float(max(1, REGION_SIZE)),
+		clamped_y / float(max(1, REGION_SIZE))
+	)
+
+func _sample_world_field_point(field: PackedFloat32Array, wx: int, wy: int, fallback: float) -> float:
+	var world_cell_count: int = world_width * world_height
+	if world_cell_count <= 0 or field.size() != world_cell_count:
+		return fallback
+	var sx: int = posmod(wx, max(1, world_width))
+	var sy: int = clamp(wy, 0, max(1, world_height) - 1)
+	var idx: int = sx + sy * world_width
+	if idx < 0 or idx >= field.size():
+		return fallback
+	return float(field[idx])
+
+func _sample_world_field_bilinear(field: PackedFloat32Array, tile_x: float, tile_y: float, fallback: float) -> float:
+	var world_cell_count: int = world_width * world_height
+	if world_cell_count <= 0 or field.size() != world_cell_count:
+		return fallback
+	var x0: int = int(floor(tile_x))
+	var y0: int = int(floor(tile_y))
+	var tx: float = clamp(tile_x - float(x0), 0.0, 1.0)
+	var ty: float = clamp(tile_y - float(y0), 0.0, 1.0)
+	var v00: float = _sample_world_field_point(field, x0, y0, fallback)
+	var v10: float = _sample_world_field_point(field, x0 + 1, y0, fallback)
+	var v01: float = _sample_world_field_point(field, x0, y0 + 1, fallback)
+	var v11: float = _sample_world_field_point(field, x0 + 1, y0 + 1, fallback)
+	var vx0: float = lerp(v00, v10, tx)
+	var vx1: float = lerp(v01, v11, tx)
+	return lerp(vx0, vx1, ty)
+
+func _sample_world_weather_for_region(
+	origin_x: int,
+	origin_y: int,
+	fallback_cloud_cover: float,
+	fallback_wind_x: float,
+	fallback_wind_y: float
+) -> Dictionary:
+	var clouds_field: PackedFloat32Array = _get_world_weather_field("world_cloud_cover")
+	var wind_u_field: PackedFloat32Array = _get_world_weather_field("world_wind_u")
+	var wind_v_field: PackedFloat32Array = _get_world_weather_field("world_wind_v")
+	var center_x: float = float(origin_x) + float(RENDER_W) * 0.5
+	var center_y: float = float(origin_y) + float(RENDER_H) * 0.5
+	var sx: float = float(RENDER_W) * 0.32
+	var sy: float = float(RENDER_H) * 0.32
+	var sample_offsets: Array[Vector2] = [
+		Vector2(0.0, 0.0),
+		Vector2(-sx, -sy),
+		Vector2(sx, -sy),
+		Vector2(-sx, sy),
+		Vector2(sx, sy),
+	]
+	var cloud_sum: float = 0.0
+	var wind_u_sum: float = 0.0
+	var wind_v_sum: float = 0.0
+	for off in sample_offsets:
+		var tile_pos: Vector2 = _global_to_world_tile_f(center_x + off.x, center_y + off.y)
+		cloud_sum += _sample_world_field_bilinear(clouds_field, tile_pos.x, tile_pos.y, fallback_cloud_cover)
+		wind_u_sum += _sample_world_field_bilinear(wind_u_field, tile_pos.x, tile_pos.y, fallback_wind_x)
+		wind_v_sum += _sample_world_field_bilinear(wind_v_field, tile_pos.x, tile_pos.y, fallback_wind_y)
+	var denom: float = float(max(1, sample_offsets.size()))
+	return {
+		"cloud_cover": clamp(cloud_sum / denom, 0.0, 1.0),
+		"wind_u": wind_u_sum / denom,
+		"wind_v": wind_v_sum / denom,
+	}
+
+func _smoothstep01(t: float) -> float:
+	var x: float = clamp(t, 0.0, 1.0)
+	return x * x * (3.0 - 2.0 * x)
+
 func _poi_info_at(tx: int, ty: int, lx: int, ly: int) -> Dictionary:
-	return PoiRegistry.get_poi_at(world_seed_hash, tx, ty, lx, ly, _get_world_biome_id(tx, ty))
+	var gx: int = _wrap_global_x(tx * REGION_SIZE + lx)
+	var gy: int = _clamp_global_y(ty * REGION_SIZE + ly)
+	var key: String = "%d,%d" % [gx, gy]
+	var vv: Variant = _visible_poi_overrides.get(key, {})
+	if typeof(vv) == TYPE_DICTIONARY:
+		return (vv as Dictionary).duplicate(true)
+	var direct: Dictionary = PoiRegistry.get_poi_at(world_seed_hash, tx, ty, lx, ly, _get_world_biome_id(tx, ty))
+	if direct.is_empty():
+		return {}
+	# Houses should be entered from stamped door markers only.
+	if String(direct.get("type", "")) == "House":
+		return {}
+	return direct
 
 func _is_poi_cleared(poi_id: String) -> bool:
 	if poi_id.is_empty():
@@ -1191,20 +1749,44 @@ func _build_cloud_params(origin_x: int, origin_y: int) -> Dictionary:
 			biome_id = int(c.get("biome", biome_id))
 	var moist: float = _visual_moist_for_biome(biome_id)
 	var temp: float = _visual_temp_for_biome(biome_id)
-	var wind_x: float = 0.08 + (temp - 0.5) * 0.10
-	var wind_y: float = 0.03 + (moist - 0.5) * 0.08
-	var coverage: float = clamp(0.22 + moist * 0.68, 0.10, 0.95)
+	var fallback_wind_x: float = 0.08 + (temp - 0.5) * 0.10
+	var fallback_wind_y: float = 0.03 + (moist - 0.5) * 0.08
+	var fallback_cloud_cover: float = clamp(0.18 + moist * 0.62, 0.0, 1.0)
+	var weather: Dictionary = _sample_world_weather_for_region(
+		origin_x,
+		origin_y,
+		fallback_cloud_cover,
+		fallback_wind_x,
+		fallback_wind_y
+	)
+	var cloud_cover: float = clamp(float(weather.get("cloud_cover", fallback_cloud_cover)), 0.0, 1.0)
+	var wind_u: float = float(weather.get("wind_u", fallback_wind_x))
+	var wind_v: float = float(weather.get("wind_v", fallback_wind_y))
+	var wind_vec: Vector2 = Vector2(wind_u, wind_v)
+	var wind_x: float = fallback_wind_x
+	var wind_y: float = fallback_wind_y
+	if wind_vec.length() > 0.0001:
+		var wind_dir: Vector2 = wind_vec.normalized()
+		var wind_speed: float = clamp(0.06 + wind_vec.length() * 0.03, 0.06, 0.26)
+		wind_x = wind_dir.x * wind_speed
+		wind_y = wind_dir.y * wind_speed
+	var coverage_threshold: float = clamp(1.0 - cloud_cover, 0.02, 0.98)
+	var overcast_floor: float = _smoothstep01((cloud_cover - 0.62) / 0.30) * 0.94
+	var contrast: float = lerp(1.75, 0.82, cloud_cover)
+	var cloud_scale: float = lerp(0.016, 0.024, clamp(0.35 + cloud_cover * 0.55, 0.0, 1.0))
 	return {
 		"enabled": true,
 		"origin_x": origin_x,
 		"origin_y": origin_y,
 		"world_period_x": world_width * REGION_SIZE,
 		"world_height": world_height * REGION_SIZE,
-		"scale": lerp(0.017, 0.024, moist),
+		"scale": cloud_scale,
 		"wind_x": wind_x,
 		"wind_y": wind_y,
-		"coverage": coverage,
-		"contrast": lerp(1.15, 1.40, coverage),
+		"coverage": coverage_threshold,
+		"contrast": contrast,
+		"overcast_floor": clamp(overcast_floor, 0.0, 0.94),
+		"morph_strength": 0.30,
 	}
 
 func _publish_regional_cache_stats(prefetch_generated: int = -1) -> void:

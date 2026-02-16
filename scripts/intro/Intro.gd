@@ -1,6 +1,5 @@
 # File: res://scripts/intro/Intro.gd
 extends Control
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const IntroBigBangCompute = preload("res://scripts/intro/IntroBigBangCompute.gd")
 

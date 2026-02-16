@@ -18,7 +18,7 @@ func reset_defaults() -> void:
 	month = 1
 	day = 1
 	second_of_day = 8 * 60 * 60
-	minute_of_day = second_of_day / 60
+	minute_of_day = int(second_of_day / 60.0)
 
 func advance_minutes(minutes: int) -> void:
 	advance_seconds(max(0, minutes) * 60)
@@ -36,7 +36,7 @@ func advance_seconds(seconds: int) -> void:
 			if month > MONTHS_PER_YEAR:
 				month = 1
 				year += 1
-	minute_of_day = clamp(int(second_of_day / 60), 0, MINUTES_PER_DAY - 1)
+	minute_of_day = clamp(int(second_of_day / 60.0), 0, MINUTES_PER_DAY - 1)
 
 func abs_day_index() -> int:
 	# 0-based absolute day index (Y1 M1 D1 => 0).
@@ -48,7 +48,7 @@ func abs_day_index() -> int:
 
 func set_from_abs_day(abs_day: int, second_in_day: int = -1) -> void:
 	abs_day = max(0, int(abs_day))
-	var y0: int = int(abs_day / 365)
+	var y0: int = int(abs_day / 365.0)
 	var doy: int = int(abs_day % 365)
 	year = y0 + 1
 	month = 1
@@ -64,7 +64,7 @@ func set_from_abs_day(abs_day: int, second_in_day: int = -1) -> void:
 			break
 	if second_in_day >= 0:
 		second_of_day = clamp(int(second_in_day), 0, SECONDS_PER_DAY - 1)
-	minute_of_day = clamp(int(second_of_day / 60), 0, MINUTES_PER_DAY - 1)
+	minute_of_day = clamp(int(second_of_day / 60.0), 0, MINUTES_PER_DAY - 1)
 
 func advance_days_batched(days: int) -> void:
 	# Fast path for worldgen-style batching (weeks/months).
@@ -84,8 +84,8 @@ func season_name() -> String:
 	return "Winter"
 
 func clock_string() -> String:
-	var hh: int = int(second_of_day / 3600)
-	var mm: int = int((second_of_day / 60) % 60)
+	var hh: int = int(second_of_day / 3600.0)
+	var mm: int = int(second_of_day / 60.0) % 60
 	var ss: int = int(second_of_day % 60)
 	return "%02d:%02d:%02d" % [hh, mm, ss]
 
@@ -141,7 +141,7 @@ static func from_dict(data: Dictionary) -> WorldTimeStateModel:
 	state.day = clamp(int(data.get("day", 1)), 1, days_in_month(state.month))
 	if data.has("second_of_day"):
 		state.second_of_day = clamp(int(data.get("second_of_day", 8 * 60 * 60)), 0, SECONDS_PER_DAY - 1)
-		state.minute_of_day = clamp(int(state.second_of_day / 60), 0, MINUTES_PER_DAY - 1)
+		state.minute_of_day = clamp(int(state.second_of_day / 60.0), 0, MINUTES_PER_DAY - 1)
 	else:
 		state.minute_of_day = clamp(int(data.get("minute_of_day", 8 * 60)), 0, MINUTES_PER_DAY - 1)
 		state.second_of_day = clamp(state.minute_of_day * 60, 0, SECONDS_PER_DAY - 1)

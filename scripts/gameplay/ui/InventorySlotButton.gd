@@ -30,15 +30,15 @@ func _gui_input(event: InputEvent) -> void:
 			vp.set_input_as_handled()
 
 func _update_visual() -> void:
-	var name: String = String(slot_data.get("name", ""))
+	var item_name: String = String(slot_data.get("name", ""))
 	var count: int = int(slot_data.get("count", 0))
 	var eq: String = String(slot_data.get("equipped_slot", ""))
-	if name.is_empty() or count <= 0:
+	if item_name.is_empty() or count <= 0:
 		text = ""
 		tooltip_text = ""
 		modulate = Color(1, 1, 1, 0.85)
 		return
-	var short_name: String = name
+	var short_name: String = item_name
 	if short_name.length() > 12:
 		short_name = short_name.substr(0, 11) + "."
 	var bottom: String = ""
@@ -47,16 +47,16 @@ func _update_visual() -> void:
 	elif not eq.is_empty():
 		bottom = eq.left(1).to_upper()
 	text = short_name if bottom.is_empty() else ("%s\n%s" % [short_name, bottom])
-	tooltip_text = "%s%s" % [name, (" (Equipped: %s)" % eq) if not eq.is_empty() else ""]
+	tooltip_text = "%s%s" % [item_name, (" (Equipped: %s)" % eq) if not eq.is_empty() else ""]
 	modulate = Color(1.0, 0.98, 0.85, 1.0) if not eq.is_empty() else Color(1, 1, 1, 1)
 
 func _get_drag_data(_at_position: Vector2) -> Variant:
-	var name: String = String(slot_data.get("name", ""))
+	var item_name: String = String(slot_data.get("name", ""))
 	var count: int = int(slot_data.get("count", 0))
-	if name.is_empty() or count <= 0:
+	if item_name.is_empty() or count <= 0:
 		return null
 	var preview := Label.new()
-	preview.text = name
+	preview.text = item_name
 	preview.add_theme_color_override("font_color", Color(1, 1, 1, 1))
 	set_drag_preview(preview)
 	return {

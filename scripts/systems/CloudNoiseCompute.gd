@@ -74,8 +74,8 @@ func generate_clouds_gpu(w: int, h: int, params: Dictionary, out_buf: RID) -> bo
 		float(params.get("wind_y", 0.05)),
 		float(params.get("coverage", 0.55)),
 		float(params.get("contrast", 1.35)),
-		0.0,
-		0.0,
+		float(params.get("overcast_floor", 0.0)),
+		float(params.get("morph_strength", 0.22)),
 	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())

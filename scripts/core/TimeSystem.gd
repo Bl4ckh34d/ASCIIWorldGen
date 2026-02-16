@@ -61,7 +61,6 @@ func _process(_delta: float) -> void:
 
 func start() -> void:
 	if running:
-		push_warning("TimeSystem.start() called while already running.")
 		return
 	running = true
 	if _timer:
@@ -69,7 +68,6 @@ func start() -> void:
 
 func pause() -> void:
 	if not running:
-		push_warning("TimeSystem.pause() called while already paused.")
 		return
 	running = false
 	if _timer:

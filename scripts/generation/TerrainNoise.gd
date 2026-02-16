@@ -1,6 +1,6 @@
 # File: res://scripts/generation/TerrainNoise.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 ## Generates base height and land mask using FBM + continental mask + domain warp
 
@@ -14,7 +14,7 @@ func generate(params: Dictionary) -> Dictionary:
 	var lacunarity: float = float(params.get("lacunarity", 2.0))
 	var gain: float = float(params.get("gain", 0.5))
 	var warp: float = float(params.get("warp", 24.0))
-	var wrap_x: bool = VariantCasts.to_bool(params.get("wrap_x", true))
+	var wrap_x: bool = VariantCastsUtil.to_bool(params.get("wrap_x", true))
 	var noise_x_scale: float = float(params.get("noise_x_scale", 1.0))
 	var height_gamma: float = clamp(float(params.get("height_gamma", 0.65)), 0.25, 2.5)
 	var height_contrast: float = clamp(float(params.get("height_contrast", 1.10)), 0.25, 3.0)

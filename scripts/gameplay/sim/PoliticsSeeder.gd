@@ -1,10 +1,6 @@
 extends RefCounted
 class_name PoliticsSeeder
 
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
-const PoliticsStateModel = preload("res://scripts/gameplay/models/PoliticsState.gd")
-const EpochSystem = preload("res://scripts/gameplay/sim/EpochSystem.gd")
-
 static func seed_full_map_if_needed(world_seed_hash: int, world_w: int, world_h: int, pol: PoliticsStateModel, epoch_id: String = "prehistoric", epoch_variant: String = "stable") -> void:
 	if pol == null:
 		return

@@ -4,7 +4,6 @@ extends RefCounted
 # from entrance to boss. The generator is purely CPU-side but produces GPU-renderable
 # marker grids (tiles/objects) that the LocalAreaScene packs for the GPU renderer.
 
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
 
 const TILE_WALL: int = 0
 const TILE_FLOOR: int = 1
@@ -27,7 +26,7 @@ func generate(world_seed_hash: int, poi_id: String, w: int, h: int) -> Dictionar
 	tiles.fill(TILE_WALL)
 	objects.fill(OBJ_NONE)
 
-	var mid_y: int = int(h / 2)
+	var mid_y: int = h >> 1
 	var door_pos := Vector2i(w - 2, mid_y)
 	_set_tile(tiles, w, h, door_pos.x, door_pos.y, TILE_DOOR)
 
@@ -37,12 +36,12 @@ func generate(world_seed_hash: int, poi_id: String, w: int, h: int) -> Dictionar
 
 	# Boss room placement: far away to the left; seeded for determinism.
 	var seed_root: String = "dun|" + poi_id
-	var boss_cx: int = DeterministicRng.randi_range(world_seed_hash, seed_root + "|boss_cx", 3, max(3, int(w / 4)))
+	var boss_cx: int = DeterministicRng.randi_range(world_seed_hash, seed_root + "|boss_cx", 3, max(3, w >> 2))
 	var boss_cy: int = DeterministicRng.randi_range(world_seed_hash, seed_root + "|boss_cy", 3, h - 4)
 	var boss_rw: int = DeterministicRng.randi_range(world_seed_hash, seed_root + "|boss_rw", 10, 16)
 	var boss_rh: int = DeterministicRng.randi_range(world_seed_hash, seed_root + "|boss_rh", 8, 12)
 	var boss_room := Rect2i(
-		Vector2i(clamp(boss_cx - int(boss_rw / 2), 1, w - 2), clamp(boss_cy - int(boss_rh / 2), 1, h - 2)),
+		Vector2i(clamp(boss_cx - (boss_rw >> 1), 1, w - 2), clamp(boss_cy - (boss_rh >> 1), 1, h - 2)),
 		Vector2i(boss_rw, boss_rh)
 	)
 	boss_room.size.x = clamp(boss_room.size.x, 6, w - boss_room.position.x - 1)
@@ -54,7 +53,7 @@ func generate(world_seed_hash: int, poi_id: String, w: int, h: int) -> Dictionar
 	_carve_room(tiles, w, h, br_x0, br_y0, br_x1, br_y1)
 
 	var start := Vector2i(door_pos.x - 1, door_pos.y)
-	var goal := Vector2i(clamp(boss_room.position.x + int(boss_room.size.x / 2), 1, w - 2), clamp(boss_room.position.y + int(boss_room.size.y / 2), 1, h - 2))
+	var goal := Vector2i(clamp(boss_room.position.x + (boss_room.size.x >> 1), 1, w - 2), clamp(boss_room.position.y + (boss_room.size.y >> 1), 1, h - 2))
 
 	# Golden path: A* on a seeded "cost field" to create organic corridors.
 	var golden_path: Array[Vector2i] = _astar_carve_path(world_seed_hash, seed_root + "|gold", w, h, start, goal)
@@ -175,7 +174,7 @@ func _astar_carve_path(world_seed_hash: int, seed_key: String, w: int, h: int, s
 
 		closed[current_id] = true
 		var cx: int = int(current_id % w)
-		var cy: int = int(current_id / w)
+		var cy: int = int(floor(float(current_id) / float(max(1, w))))
 		for d in dirs:
 			var nx: int = cx + d.x
 			var ny: int = cy + d.y
@@ -201,7 +200,7 @@ func _reconstruct_path(w: int, came_from: Dictionary, current_id: int, start_id:
 	var cur: int = int(current_id)
 	var safety: int = 0
 	while true:
-		out.append(Vector2i(int(cur % w), int(cur / w)))
+		out.append(Vector2i(int(cur % w), int(floor(float(cur) / float(max(1, w))))))
 		if cur == start_id:
 			break
 		if not came_from.has(cur):
@@ -224,10 +223,10 @@ func _add_branches(world_seed_hash: int, seed_root: String, tiles: PackedByteArr
 	for i in range(max(0, int(branch_count))):
 		var pi: int = DeterministicRng.randi_range(world_seed_hash, "%s|br|i=%d|pi" % [seed_root, i], 0, golden_path.size() - 1)
 		var p: Vector2i = golden_path[pi]
-		var len: int = DeterministicRng.randi_range(world_seed_hash, "%s|br|i=%d|len" % [seed_root, i], min_len, max_len)
+		var branch_len: int = DeterministicRng.randi_range(world_seed_hash, "%s|br|i=%d|len" % [seed_root, i], min_len, max_len)
 		var x: int = p.x
 		var y: int = p.y
-		for s in range(len):
+		for s in range(branch_len):
 			_set_tile(tiles, w, h, x, y, TILE_FLOOR)
 			var rr: float = DeterministicRng.randf01(world_seed_hash, "%s|br|i=%d|s=%d|r" % [seed_root, i, s])
 			var d: Vector2i = Vector2i(0, 0)
@@ -247,7 +246,7 @@ func _add_branches(world_seed_hash: int, seed_root: String, tiles: PackedByteArr
 			if (s % 11) == 0:
 				var rw: int = DeterministicRng.randi_range(world_seed_hash, "%s|br|i=%d|s=%d|rw" % [seed_root, i, s], 4, 8)
 				var rh: int = DeterministicRng.randi_range(world_seed_hash, "%s|br|i=%d|s=%d|rh" % [seed_root, i, s], 3, 6)
-				_carve_room(tiles, w, h, x - int(rw / 2), y - int(rh / 2), x + int(rw / 2), y + int(rh / 2))
+				_carve_room(tiles, w, h, x - (rw >> 1), y - (rh >> 1), x + (rw >> 1), y + (rh >> 1))
 
 func _add_side_rooms(world_seed_hash: int, seed_root: String, tiles: PackedByteArray, w: int, h: int, golden_path: Array[Vector2i], room_count: int) -> void:
 	if golden_path.is_empty():
@@ -255,10 +254,10 @@ func _add_side_rooms(world_seed_hash: int, seed_root: String, tiles: PackedByteA
 	for i in range(int(room_count)):
 		var rw: int = DeterministicRng.randi_range(world_seed_hash, "%s|rm|i=%d|w" % [seed_root, i], 6, 14)
 		var rh: int = DeterministicRng.randi_range(world_seed_hash, "%s|rm|i=%d|h" % [seed_root, i], 5, 11)
-		var cx: int = DeterministicRng.randi_range(world_seed_hash, "%s|rm|i=%d|cx" % [seed_root, i], 2 + int(rw / 2), w - 3 - int(rw / 2))
-		var cy: int = DeterministicRng.randi_range(world_seed_hash, "%s|rm|i=%d|cy" % [seed_root, i], 2 + int(rh / 2), h - 3 - int(rh / 2))
-		var x0: int = cx - int(rw / 2)
-		var y0: int = cy - int(rh / 2)
+		var cx: int = DeterministicRng.randi_range(world_seed_hash, "%s|rm|i=%d|cx" % [seed_root, i], 2 + (rw >> 1), w - 3 - (rw >> 1))
+		var cy: int = DeterministicRng.randi_range(world_seed_hash, "%s|rm|i=%d|cy" % [seed_root, i], 2 + (rh >> 1), h - 3 - (rh >> 1))
+		var x0: int = cx - (rw >> 1)
+		var y0: int = cy - (rh >> 1)
 		var x1: int = x0 + rw - 1
 		var y1: int = y0 + rh - 1
 		if _room_overlaps(tiles, w, h, x0 - 1, y0 - 1, x1 + 1, y1 + 1):

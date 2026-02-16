@@ -1,9 +1,5 @@
 extends CanvasLayer
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
-const GpuMapView = preload("res://scripts/gameplay/rendering/GpuMapView.gd")
-const WorldTimeStateModel = preload("res://scripts/gameplay/models/WorldTimeState.gd")
 
 signal closed
 
@@ -373,39 +369,39 @@ func _resolve_world_snapshot() -> bool:
 		_snapshot_moist = _state_f32_snapshot(game_state, "world_moisture", game_w * game_h)
 		_snapshot_land_mask = _state_u8_snapshot(game_state, "world_land_mask", game_w * game_h)
 		_snapshot_beach_mask = _state_u8_snapshot(game_state, "world_beach_mask", game_w * game_h)
-	var size: int = _snapshot_w * _snapshot_h
+	var snapshot_cell_count: int = _snapshot_w * _snapshot_h
 	var peer_state: Node = game_state if use_startup else startup_state
-	if _snapshot_height_raw.size() != size:
-		_snapshot_height_raw = _state_f32_snapshot(peer_state, "world_height_raw", size)
-	if _snapshot_temp.size() != size:
-		_snapshot_temp = _state_f32_snapshot(peer_state, "world_temperature", size)
-	if _snapshot_moist.size() != size:
-		_snapshot_moist = _state_f32_snapshot(peer_state, "world_moisture", size)
-	if _snapshot_land_mask.size() != size:
-		_snapshot_land_mask = _state_u8_snapshot(peer_state, "world_land_mask", size)
-	if _snapshot_beach_mask.size() != size:
-		_snapshot_beach_mask = _state_u8_snapshot(peer_state, "world_beach_mask", size)
+	if _snapshot_height_raw.size() != snapshot_cell_count:
+		_snapshot_height_raw = _state_f32_snapshot(peer_state, "world_height_raw", snapshot_cell_count)
+	if _snapshot_temp.size() != snapshot_cell_count:
+		_snapshot_temp = _state_f32_snapshot(peer_state, "world_temperature", snapshot_cell_count)
+	if _snapshot_moist.size() != snapshot_cell_count:
+		_snapshot_moist = _state_f32_snapshot(peer_state, "world_moisture", snapshot_cell_count)
+	if _snapshot_land_mask.size() != snapshot_cell_count:
+		_snapshot_land_mask = _state_u8_snapshot(peer_state, "world_land_mask", snapshot_cell_count)
+	if _snapshot_beach_mask.size() != snapshot_cell_count:
+		_snapshot_beach_mask = _state_u8_snapshot(peer_state, "world_beach_mask", snapshot_cell_count)
 	if _snapshot_seed_hash == 0:
 		_snapshot_seed_hash = 1
 	return true
 
-func _state_f32_snapshot(state: Node, prop_name: String, size: int) -> PackedFloat32Array:
-	if state == null or size <= 0:
+func _state_f32_snapshot(state: Node, prop_name: String, expected_size: int) -> PackedFloat32Array:
+	if state == null or expected_size <= 0:
 		return PackedFloat32Array()
 	var v: Variant = state.get(prop_name)
 	if v is PackedFloat32Array:
 		var arr: PackedFloat32Array = v
-		if arr.size() == size:
+		if arr.size() == expected_size:
 			return arr.duplicate()
 	return PackedFloat32Array()
 
-func _state_u8_snapshot(state: Node, prop_name: String, size: int) -> PackedByteArray:
-	if state == null or size <= 0:
+func _state_u8_snapshot(state: Node, prop_name: String, expected_size: int) -> PackedByteArray:
+	if state == null or expected_size <= 0:
 		return PackedByteArray()
 	var v: Variant = state.get(prop_name)
 	if v is PackedByteArray:
 		var arr: PackedByteArray = v
-		if arr.size() == size:
+		if arr.size() == expected_size:
 			return arr.duplicate()
 	return PackedByteArray()
 
@@ -422,7 +418,7 @@ func _get_snapshot_biome_id(x: int, y: int) -> int:
 func _build_world_overlay_fields() -> Dictionary:
 	var w: int = _snapshot_w
 	var h: int = _snapshot_h
-	var size: int = w * h
+	var field_cell_count: int = w * h
 	var biomes: PackedInt32Array = _snapshot_biomes
 	if not _is_valid_snapshot(w, h, biomes):
 		return {}
@@ -437,18 +433,18 @@ func _build_world_overlay_fields() -> Dictionary:
 	var biome := PackedInt32Array()
 	var land := PackedInt32Array()
 	var beach := PackedInt32Array()
-	height_raw.resize(size)
-	temp.resize(size)
-	moist.resize(size)
-	biome.resize(size)
-	land.resize(size)
-	beach.resize(size)
+	height_raw.resize(field_cell_count)
+	temp.resize(field_cell_count)
+	moist.resize(field_cell_count)
+	biome.resize(field_cell_count)
+	land.resize(field_cell_count)
+	beach.resize(field_cell_count)
 
-	var have_height: bool = _snapshot_height_raw.size() == size
-	var have_temp: bool = _snapshot_temp.size() == size
-	var have_moist: bool = _snapshot_moist.size() == size
-	var have_land: bool = _snapshot_land_mask.size() == size
-	var have_beach: bool = _snapshot_beach_mask.size() == size
+	var have_height: bool = _snapshot_height_raw.size() == field_cell_count
+	var have_temp: bool = _snapshot_temp.size() == field_cell_count
+	var have_moist: bool = _snapshot_moist.size() == field_cell_count
+	var have_land: bool = _snapshot_land_mask.size() == field_cell_count
+	var have_beach: bool = _snapshot_beach_mask.size() == field_cell_count
 
 	for y in range(h):
 		var lat_signed: float = 0.0

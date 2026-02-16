@@ -5,7 +5,7 @@ class_name ComputeShaderBase
 # Lightweight shared helpers for compute wrappers.
 # We keep this static/composable so existing wrappers can adopt it incrementally.
 
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 const ShaderLoader = preload("res://scripts/systems/ShaderLoader.gd")
 const Log = preload("res://scripts/systems/Logger.gd")
 
@@ -68,7 +68,7 @@ static func uniform_set_is_alive(rd: RenderingDevice, uniform_set: RID) -> bool:
 	if not (uniform_set is RID and uniform_set.is_valid()):
 		return false
 	if rd.has_method("uniform_set_is_valid"):
-		return VariantCasts.to_bool(rd.uniform_set_is_valid(uniform_set))
+		return VariantCastsUtil.to_bool(rd.uniform_set_is_valid(uniform_set))
 	return true
 
 static func free_uniform_set_if_alive(rd: RenderingDevice, uniform_set: RID) -> void:

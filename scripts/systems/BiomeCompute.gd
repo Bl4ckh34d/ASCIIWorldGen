@@ -1,8 +1,8 @@
 # File: res://scripts/systems/BiomeCompute.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 
 const BIOME_SHADER_PATH: String = "res://shaders/biome_classify.glsl"
@@ -28,7 +28,7 @@ func _init() -> void:
 	_buf_mgr = GPUBufferManager.new()
 
 func _ensure_main() -> bool:
-	var main_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var main_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_shader,
 		_pipeline,
@@ -38,12 +38,12 @@ func _ensure_main() -> bool:
 	_rd = main_state.get("rd", null)
 	_shader = main_state.get("shader", RID())
 	_pipeline = main_state.get("pipeline", RID())
-	return VariantCasts.to_bool(main_state.get("ok", false))
+	return VariantCastsUtil.to_bool(main_state.get("ok", false))
 
 func _ensure_smooth() -> bool:
 	if not _ensure_main():
 		return false
-	var smooth_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var smooth_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_smooth_shader,
 		_smooth_pipeline,
@@ -52,12 +52,12 @@ func _ensure_smooth() -> bool:
 	)
 	_smooth_shader = smooth_state.get("shader", RID())
 	_smooth_pipeline = smooth_state.get("pipeline", RID())
-	return VariantCasts.to_bool(smooth_state.get("ok", false))
+	return VariantCastsUtil.to_bool(smooth_state.get("ok", false))
 
 func _ensure_reapply() -> bool:
 	if not _ensure_main():
 		return false
-	var reapply_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var reapply_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_reapply_shader,
 		_reapply_pipeline,
@@ -66,7 +66,7 @@ func _ensure_reapply() -> bool:
 	)
 	_reapply_shader = reapply_state.get("shader", RID())
 	_reapply_pipeline = reapply_state.get("pipeline", RID())
-	return VariantCasts.to_bool(reapply_state.get("ok", false))
+	return VariantCastsUtil.to_bool(reapply_state.get("ok", false))
 
 func is_gpu_available() -> bool:
 	"""Check if GPU compute is available and functional"""
@@ -178,7 +178,7 @@ func classify_to_buffer(w: int, h: int,
 	_rd.compute_list_dispatch(cl, gx, gy, 1)
 	_rd.compute_list_end()
 	_rd.free_rid(u_set)
-	var do_smooth: bool = VariantCasts.to_bool(params.get("biome_smoothing_enabled", true))
+	var do_smooth: bool = VariantCastsUtil.to_bool(params.get("biome_smoothing_enabled", true))
 	if do_smooth:
 		var smooth_passes: int = max(1, int(params.get("biome_smoothing_passes", 1)))
 		if not _apply_smoothing_passes(w, h, out_biome_buf, smooth_passes):
@@ -231,7 +231,7 @@ func _dispatch_smooth_pass(w: int, h: int, in_buf: RID, out_buf: RID) -> bool:
 		var zeros := PackedByteArray()
 		zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "BiomeCompute.smooth"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 16, "BiomeCompute.smooth"):
 		_rd.free_rid(u_set)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0))
@@ -320,7 +320,7 @@ func reapply_cryosphere_to_buffer(
 func cleanup() -> void:
 	if _buf_mgr != null:
 		_buf_mgr.cleanup()
-	ComputeShaderBase.free_rids(_rd, [
+	ComputeShaderBaseUtil.free_rids(_rd, [
 		_pipeline,
 		_shader,
 		_smooth_pipeline,
@@ -334,4 +334,3 @@ func cleanup() -> void:
 	_smooth_shader = RID()
 	_reapply_pipeline = RID()
 	_reapply_shader = RID()
-

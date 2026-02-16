@@ -1,5 +1,5 @@
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 # Biome updater: GPU-only classification and post, with optional cryosphere-only mode.
 
@@ -63,8 +63,8 @@ func initialize(gen: Object) -> void:
 	_transition_compute = load("res://scripts/systems/BiomeTransitionCompute.gd").new()
 
 func set_update_modes(full_biome_enabled: bool, cryosphere_enabled: bool) -> void:
-	run_full_biome = VariantCasts.to_bool(full_biome_enabled)
-	run_cryosphere = VariantCasts.to_bool(cryosphere_enabled)
+	run_full_biome = VariantCastsUtil.to_bool(full_biome_enabled)
+	run_cryosphere = VariantCastsUtil.to_bool(cryosphere_enabled)
 
 func cleanup() -> void:
 	_cleanup_if_supported(_biome_tex)
@@ -482,5 +482,5 @@ func _copy_u32_buffer(src: RID, dst: RID, count: int) -> bool:
 	if not src.is_valid() or not dst.is_valid() or count <= 0:
 		return false
 	if "dispatch_copy_u32" in generator:
-		return VariantCasts.to_bool(generator.dispatch_copy_u32(src, dst, count))
+		return VariantCastsUtil.to_bool(generator.dispatch_copy_u32(src, dst, count))
 	return false

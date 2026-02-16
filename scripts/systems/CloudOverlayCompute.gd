@@ -1,8 +1,8 @@
 # File: res://scripts/systems/CloudOverlayCompute.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const CLOUD_SHADER_PATH: String = "res://shaders/cloud_overlay.glsl"
 
 var _rd: RenderingDevice
@@ -10,7 +10,7 @@ var _shader: RID
 var _pipeline: RID
 
 func _ensure() -> bool:
-	var state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_shader,
 		_pipeline,
@@ -20,7 +20,7 @@ func _ensure() -> bool:
 	_rd = state.get("rd", null)
 	_shader = state.get("shader", RID())
 	_pipeline = state.get("pipeline", RID())
-	return VariantCasts.to_bool(state.get("ok", false))
+	return VariantCastsUtil.to_bool(state.get("ok", false))
 
 func compute_clouds_to_buffer(
 		w: int,
@@ -65,7 +65,7 @@ func compute_clouds_to_buffer(
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "CloudOverlayCompute"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 16, "CloudOverlayCompute"):
 		_rd.free_rid(u_set)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0))
@@ -80,6 +80,6 @@ func compute_clouds_to_buffer(
 	return true
 
 func cleanup() -> void:
-	ComputeShaderBase.free_rids(_rd, [_pipeline, _shader])
+	ComputeShaderBaseUtil.free_rids(_rd, [_pipeline, _shader])
 	_pipeline = RID()
 	_shader = RID()

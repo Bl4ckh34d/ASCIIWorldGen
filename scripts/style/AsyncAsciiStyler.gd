@@ -1,6 +1,5 @@
 # File: res://scripts/style/AsyncAsciiStyler.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 const AsciiStyler = preload("res://scripts/style/AsciiStyler.gd")
 const WorldConstants = preload("res://scripts/core/WorldConstants.gd")

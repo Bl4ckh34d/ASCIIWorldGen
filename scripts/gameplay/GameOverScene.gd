@@ -1,7 +1,5 @@
 extends Control
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
 
 @onready var summary_label: Label = %SummaryLabel
 @onready var status_label: Label = %StatusLabel

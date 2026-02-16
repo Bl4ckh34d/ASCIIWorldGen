@@ -1,6 +1,6 @@
 # File: res://scripts/systems/HydroUpdateSystem.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 # Lightweight system to update flow/accumulation/rivers on a cadence.
 # Adds a simple tiling scheduler to amortize updates over several ticks.
@@ -109,7 +109,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				var cycle_end_now: bool = ((_tile_cursor + 1) % total_tiles == 0)
 				if cycle_end_now and river_stage_buf.is_valid() and river_buf.is_valid():
 					if "dispatch_copy_u32" in generator:
-						river_cycle_committed = VariantCasts.to_bool(generator.dispatch_copy_u32(river_stage_buf, river_buf, w * h)) or river_cycle_committed
+						river_cycle_committed = VariantCastsUtil.to_bool(generator.dispatch_copy_u32(river_stage_buf, river_buf, w * h)) or river_cycle_committed
 		processed += 1
 		_tile_cursor = (_tile_cursor + 1) % total_tiles
 	if river_cycle_committed and _river_tex:
@@ -125,7 +125,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		dirty.append("river")
 	if "update_water_budget_and_sea_solver" in generator:
 		var wb: Dictionary = generator.update_water_budget_and_sea_solver(dt_days, world)
-		if VariantCasts.to_bool(wb.get("sea_level_changed", false)):
+		if VariantCastsUtil.to_bool(wb.get("sea_level_changed", false)):
 			dirty.append("is_land")
 			dirty.append("biome")
 	return {

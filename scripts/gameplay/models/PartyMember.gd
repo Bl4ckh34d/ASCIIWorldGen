@@ -7,7 +7,7 @@ const DEFAULT_BAG_ROWS: int = 4
 var member_id: String = "hero"
 var display_name: String = "Hero"
 var level: int = 1
-var exp: int = 0
+var experience_points: int = 0
 var max_hp: int = 42
 var hp: int = 42
 var max_mp: int = 12
@@ -72,10 +72,10 @@ func gain_exp(amount: int) -> PackedStringArray:
 	var logs: PackedStringArray = PackedStringArray()
 	if amount <= 0:
 		return logs
-	exp += amount
+	experience_points += amount
 	logs.append("%s gains %d EXP." % [display_name, amount])
-	while exp >= _exp_to_next_level(level):
-		exp -= _exp_to_next_level(level)
+	while experience_points >= _exp_to_next_level(level):
+		experience_points -= _exp_to_next_level(level)
 		level += 1
 		max_hp += 4
 		max_mp += 2
@@ -93,7 +93,7 @@ func to_dict() -> Dictionary:
 		"member_id": member_id,
 		"display_name": display_name,
 		"level": level,
-		"exp": exp,
+		"exp": experience_points,
 		"max_hp": max_hp,
 		"hp": hp,
 		"max_mp": max_mp,
@@ -114,7 +114,7 @@ static func from_dict(data: Dictionary) -> PartyMemberModel:
 		String(data.get("display_name", "Hero"))
 	)
 	member.level = max(1, int(data.get("level", 1)))
-	member.exp = max(0, int(data.get("exp", 0)))
+	member.experience_points = max(0, int(data.get("exp", 0)))
 	member.max_hp = max(1, int(data.get("max_hp", 42)))
 	member.hp = clamp(int(data.get("hp", member.max_hp)), 0, member.max_hp)
 	member.max_mp = max(0, int(data.get("max_mp", 12)))

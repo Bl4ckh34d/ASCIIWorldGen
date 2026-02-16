@@ -2,7 +2,7 @@
 extends Node
 
 class_name Simulation
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 var systems: Array = [] # Array of dictionaries {instance, cadence, tiles_per_tick, avg_cost_ms, use_time_debt, debt_days, force_next_run, max_catchup_days, max_runs_per_tick}
 var tick_counter: int = 0
@@ -40,13 +40,13 @@ func register_system(
 		"last_tick": -1,
 		"tiles_per_tick": max(0, tiles_per_tick),
 		"avg_cost_ms": 0.0,
-		"use_time_debt": VariantCasts.to_bool(use_time_debt),
+		"use_time_debt": VariantCastsUtil.to_bool(use_time_debt),
 		"debt_days": 0.0,
 		"force_next_run": false,
 		"max_catchup_days": max(1e-6, float(max_catchup_days)),
 		"max_runs_per_tick": max(1, int(max_runs_per_tick)),
 		"priority": int(priority),
-		"emergency_override": VariantCasts.to_bool(emergency_override),
+		"emergency_override": VariantCastsUtil.to_bool(emergency_override),
 		"ema_alpha": clamp(float(ema_alpha), 0.05, 0.95),
 		"prediction_floor_ms": max(0.0, float(prediction_floor_ms)),
 	})
@@ -61,13 +61,13 @@ func accumulate_debt(dt_days: float) -> void:
 	if dt <= 0.0:
 		return
 	for s in systems:
-		if VariantCasts.to_bool(s.get("use_time_debt", true)):
+		if VariantCastsUtil.to_bool(s.get("use_time_debt", true)):
 			s["debt_days"] = float(s.get("debt_days", 0.0)) + dt
 
 func set_system_use_time_debt(instance: Object, enabled: bool) -> void:
 	for s in systems:
 		if s.get("instance", null) == instance:
-			s["use_time_debt"] = VariantCasts.to_bool(enabled)
+			s["use_time_debt"] = VariantCastsUtil.to_bool(enabled)
 			s["debt_days"] = 0.0
 			break
 
@@ -92,7 +92,7 @@ func set_system_priority(instance: Object, priority: int) -> void:
 func set_system_emergency_override(instance: Object, enabled: bool) -> void:
 	for s in systems:
 		if s.get("instance", null) == instance:
-			s["emergency_override"] = VariantCasts.to_bool(enabled)
+			s["emergency_override"] = VariantCastsUtil.to_bool(enabled)
 			break
 
 func set_system_ema_alpha(instance: Object, alpha: float) -> void:
@@ -116,7 +116,7 @@ func _extract_consumed_days(ret: Variant, dt_for_system: float, use_time_debt: b
 		if ret.has("consumed_days"):
 			consumed_days = clamp(float(ret["consumed_days"]), 0.0, dt_for_system)
 		elif ret.has("consumed_dt"):
-			consumed_days = dt_for_system if VariantCasts.to_bool(ret["consumed_dt"]) else 0.0
+			consumed_days = dt_for_system if VariantCastsUtil.to_bool(ret["consumed_dt"]) else 0.0
 		elif use_time_debt and (ret as Dictionary).is_empty():
 			# Empty result means no progress (common early-return failure path).
 			consumed_days = 0.0
@@ -150,7 +150,7 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 		var idx0: int = (_round_robin_start + offset) % total_systems
 		var s0 = systems[idx0]
 		var cadence0: int = int(s0["cadence"])
-		var force_due0: bool = VariantCasts.to_bool(s0.get("force_next_run", false))
+		var force_due0: bool = VariantCastsUtil.to_bool(s0.get("force_next_run", false))
 		var cadence_due0: bool = (tick_counter % cadence0 == 0)
 		if cadence_due0 or force_due0:
 			due_indices.append(idx0)
@@ -174,7 +174,7 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 			break
 		var idx: int = int(idx_v)
 		var s = systems[idx]
-		var use_time_debt: bool = VariantCasts.to_bool(s.get("use_time_debt", true))
+		var use_time_debt: bool = VariantCastsUtil.to_bool(s.get("use_time_debt", true))
 		var runs: int = 0
 		var consumed_this_tick: float = 0.0
 		var base_runs_cap: int = max(1, int(s.get("max_runs_per_tick", max_runs_per_system_tick)))
@@ -203,7 +203,7 @@ func on_tick(dt_days: float, world: Object, gpu_ctx: Dictionary) -> void:
 					float(s.get("prediction_floor_ms", 0.05))
 				)
 				if elapsed_ms + predicted_ms > max(0.0, max_tick_time_ms):
-					var emergency_ok: bool = VariantCasts.to_bool(s.get("emergency_override", false)) and emergency_runs < max_emergency_runs_per_tick
+					var emergency_ok: bool = VariantCastsUtil.to_bool(s.get("emergency_override", false)) and emergency_runs < max_emergency_runs_per_tick
 					# Starvation guard:
 					# 1) Always allow one due system to run each tick.
 					# 2) Mark skipped systems for immediate retry on the next tick.
@@ -291,7 +291,7 @@ func set_max_tick_time_ms(ms: float) -> void:
 	max_tick_time_ms = max(0.0, float(ms))
 
 func set_budget_mode_time(on: bool) -> void:
-	budget_mode_time_ms = VariantCasts.to_bool(on)
+	budget_mode_time_ms = VariantCastsUtil.to_bool(on)
 
 func get_performance_stats() -> Dictionary:
 	"""Get current performance statistics for monitoring and tuning"""

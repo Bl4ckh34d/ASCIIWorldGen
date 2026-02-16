@@ -1,15 +1,5 @@
 extends Control
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
-const PoiCatalog = preload("res://scripts/gameplay/catalog/PoiCatalog.gd")
-const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
-const EncounterRegistry = preload("res://scripts/gameplay/EncounterRegistry.gd")
-const WorldTimeStateModel = preload("res://scripts/gameplay/models/WorldTimeState.gd")
-const GpuMapView = preload("res://scripts/gameplay/rendering/GpuMapView.gd")
-const LocalAreaGenerator = preload("res://scripts/gameplay/local/LocalAreaGenerator.gd")
-const LocalAreaTiles = preload("res://scripts/gameplay/local/LocalAreaTiles.gd")
 
 const TAU: float = 6.28318530718
 const PI: float = 3.14159265359
@@ -52,9 +42,12 @@ var _player_fy: float = 2.0
 
 var _poi_id: String = ""
 var _poi_type: String = "House"
+var _service_type: String = "home" # home|shop|inn|temple|faction_hall|town_hall
 var _boss_defeated: bool = false
 var _opened_chests: Dictionary = {}
 var _door_pos: Vector2i = Vector2i(1, 1)
+var _entry_anchor_x: int = 2
+var _entry_anchor_y: int = 2
 var _boss_pos: Vector2i = Vector2i(-1, -1)
 var _chest_pos: Vector2i = Vector2i(-1, -1)
 var _gpu_view: Object = null
@@ -114,6 +107,7 @@ func _ready() -> void:
 			"biome_name": "Grassland",
 		}
 	_poi_type = String(poi_data.get("type", "House"))
+	_service_type = _resolve_service_type()
 	_poi_id = String(poi_data.get("id", ""))
 	_configure_dimensions_for_poi()
 	_world_seed_hash = _get_world_seed_hash()
@@ -129,8 +123,23 @@ func _ready() -> void:
 			String(poi_data.get("biome_name", ""))
 		)
 	if game_state != null and game_state.has_method("set_local_rest_context"):
-		# v0 scaffold: houses/shops are valid rest spots; dungeons are not.
-		game_state.set_local_rest_context(_poi_type == "House", _poi_type)
+		# Rest context is location/service-sensitive (used by menu "Rest" and pricing gates).
+		var rest_type: String = ""
+		if _poi_type == "House":
+			match _service_type:
+				"shop":
+					rest_type = "shop"
+				"inn":
+					rest_type = "inn"
+				"temple":
+					rest_type = "temple"
+				"faction_hall":
+					rest_type = "faction_hall"
+				"town_hall":
+					rest_type = "faction_hall"
+				_:
+					rest_type = "house"
+		game_state.set_local_rest_context(_poi_type == "House", rest_type)
 	_install_menu_overlay()
 	_install_world_map_overlay()
 	_wire_dialogue_controls()
@@ -351,33 +360,126 @@ func _npc_role_social_rank(role: String, kind: int) -> float:
 	match role:
 		"shopkeeper":
 			return 0.62
+		"innkeeper":
+			return 0.58
+		"priest":
+			return 0.72
+		"acolyte":
+			return 0.48
+		"faction_agent":
+			return 0.78
+		"official":
+			return 0.74
+		"clerk":
+			return 0.52
+		"guard":
+			return 0.60
+		"mercenary":
+			return 0.56
 		"customer":
 			return 0.46
 		_:
 			return 0.40
 
+func _party_avg_level_local() -> float:
+	if game_state == null or game_state.get("party") == null:
+		return 1.0
+	var members: Array = game_state.party.members
+	if members.is_empty():
+		return 1.0
+	var sum_lv: float = 0.0
+	var n: int = 0
+	for mv in members:
+		if mv == null:
+			continue
+		sum_lv += max(1.0, float(mv.level))
+		n += 1
+	return (sum_lv / float(n)) if n > 0 else 1.0
+
+func _inventory_progress_tier() -> int:
+	var avg_level: float = _party_avg_level_local()
+	var tier: int = 1 + int(floor(max(0.0, avg_level - 1.0) / 5.0))
+	if game_state != null and game_state.has_method("get_civilization_epoch_info"):
+		var ei: Dictionary = game_state.get_civilization_epoch_info()
+		tier = max(tier, 1 + int(floor(float(ei.get("epoch_index", 0)) * 0.5)))
+	return clamp(tier, 1, 4)
+
+func _sorted_items_by_tier(ids: Array[String]) -> Array[String]:
+	var out: Array[String] = ids.duplicate()
+	out.sort_custom(func(a: String, b: String) -> bool:
+		var ia: Dictionary = ItemCatalog.get_item(a)
+		var ib: Dictionary = ItemCatalog.get_item(b)
+		var ta: int = int(ia.get("tier", 1))
+		var tb: int = int(ib.get("tier", 1))
+		if ta == tb:
+			return a < b
+		return ta < tb
+	)
+	return out
+
 func _build_shop_stock() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
-	var item_ids: Array[String] = ["Potion", "Herb", "Bomb", "Bronze Sword", "Leather Armor"]
+	var item_ids: Array[String] = []
+	var tier: int = _inventory_progress_tier()
+	var consumables: Array[String] = _sorted_items_by_tier(ItemCatalog.items_up_to_tier(tier, ["consumable"]))
+	var equipment: Array[String] = _sorted_items_by_tier(ItemCatalog.items_up_to_tier(tier, ["weapon", "armor", "accessory"]))
+	for item_name in consumables:
+		if not item_ids.has(item_name):
+			item_ids.append(item_name)
+	for item_name2 in equipment:
+		var eq_data: Dictionary = ItemCatalog.get_item(item_name2)
+		var item_tier: int = int(eq_data.get("tier", 1))
+		var roll: float = DeterministicRng.randf01(_world_seed_hash, _shop_seed_key("equip_roll|" + item_name2))
+		var show_chance: float = clamp(0.26 + float(max(0, tier - item_tier)) * 0.20, 0.16, 0.90)
+		if roll <= show_chance and not item_ids.has(item_name2):
+			item_ids.append(item_name2)
+	var need_weapon: bool = true
+	var need_armor: bool = true
+	for idv in item_ids:
+		var kd: String = String(ItemCatalog.get_item(idv).get("kind", ""))
+		if kd == "weapon":
+			need_weapon = false
+		elif kd == "armor":
+			need_armor = false
+	if need_weapon:
+		for wid in equipment:
+			if String(ItemCatalog.get_item(wid).get("kind", "")) == "weapon":
+				if not item_ids.has(wid):
+					item_ids.append(wid)
+				break
+	if need_armor:
+		for aid in equipment:
+			if String(ItemCatalog.get_item(aid).get("kind", "")) == "armor":
+				if not item_ids.has(aid):
+					item_ids.append(aid)
+				break
+	if item_ids.is_empty():
+		item_ids = ["Potion", "Herb", "Bomb", "Bronze Sword", "Leather Armor"]
+	item_ids = _sorted_items_by_tier(item_ids)
 	for item_id in item_ids:
 		if not ItemCatalog.has_item(item_id):
 			continue
 		var item: Dictionary = ItemCatalog.get_item(item_id)
 		var value: int = max(1, int(item.get("value", 10)))
 		var stackable: bool = VariantCasts.to_bool(item.get("stackable", true))
+		var item_tier: int = int(item.get("tier", 1))
 		var qty: int = 1
 		if stackable:
-			qty = 2 + DeterministicRng.randi_range(_world_seed_hash, _shop_seed_key("qty|" + item_id), 0, 7)
+			var spread: int = max(0, 3 - item_tier)
+			qty = 1 + DeterministicRng.randi_range(_world_seed_hash, _shop_seed_key("qty|" + item_id), 0, 2 + spread)
 		else:
-			qty = 1 + DeterministicRng.randi_range(_world_seed_hash, _shop_seed_key("qty|" + item_id), 0, 1)
+			qty = 1
+			if item_tier <= 1 and DeterministicRng.randf01(_world_seed_hash, _shop_seed_key("qty_extra|" + item_id)) < 0.28:
+				qty = 2
 		if item_id == "Potion":
-			qty = max(qty, 3)
+			qty = max(qty, 2)
 		var markup_jitter: float = DeterministicRng.randf01(_world_seed_hash, _shop_seed_key("mk|" + item_id))
 		var markup: float = 1.00 + markup_jitter * 0.18
+		var tier_markup: float = 1.00 + float(max(0, item_tier - 1)) * 0.14
 		var market: Dictionary = _item_market_mul(item_id)
 		var buy_mul: float = clamp(float(market.get("buy_mul", 1.0)), 0.20, 6.00)
 		var sell_mul: float = clamp(float(market.get("sell_mul", 0.45)), 0.05, 2.00)
-		var buy_price: int = max(1, int(round(float(value) * buy_mul * markup)))
+		var buy_price: int = max(1, int(round(float(value) * buy_mul * markup * tier_markup)))
 		var sell_price: int = max(1, int(floor(float(value) * sell_mul)))
 		out.append({
 			"item_name": item_id,
@@ -603,6 +705,33 @@ func _consume_poi_payload() -> Dictionary:
 		return startup_state.consume_poi()
 	return {}
 
+func _resolve_service_type() -> String:
+	if _poi_type != "House":
+		return ""
+	var out: String = String(poi_data.get("service_type", "")).to_lower().strip_edges()
+	if out.is_empty():
+		out = "shop" if VariantCasts.to_bool(poi_data.get("is_shop", false)) else "home"
+	if out != "shop" and out != "inn" and out != "temple" and out != "faction_hall" and out != "town_hall":
+		out = "home"
+	return out
+
+func _poi_display_name() -> String:
+	if _poi_type != "House":
+		return _poi_type
+	match _service_type:
+		"shop":
+			return "Shop"
+		"inn":
+			return "Inn"
+		"temple":
+			return "Temple"
+		"faction_hall":
+			return "Faction Hall"
+		"town_hall":
+			return "Town Hall"
+		_:
+			return "House"
+
 func _install_menu_overlay() -> void:
 	var packed: PackedScene = load(SceneContracts.SCENE_MENU_OVERLAY)
 	if packed == null:
@@ -757,13 +886,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			vp.set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_Q:
-			_return_to_regional()
+		if event.keycode == KEY_E:
+			_try_interact()
 			if vp:
 				vp.set_input_as_handled()
 			return
-		if event.keycode == KEY_E:
-			_try_interact()
+		if event.keycode == KEY_H:
+			_try_hire_adjacent_npc()
 			if vp:
 				vp.set_input_as_handled()
 			return
@@ -954,9 +1083,7 @@ func _sync_player_float_from_cell() -> void:
 
 func _update_time_visuals() -> void:
 	if header_label:
-		var disp: String = _poi_type
-		if disp == "House" and VariantCasts.to_bool(poi_data.get("is_shop", false)):
-			disp = "Shop"
+		var disp: String = _poi_display_name()
 		header_label.text = "%s Interior - Tile (%d,%d) - %s" % [
 			disp,
 			int(poi_data.get("world_x", 0)),
@@ -994,7 +1121,7 @@ func _move_player(delta: Vector2i) -> bool:
 			nx = player_x + delta.x
 			ny = player_y + delta.y
 	if _tile_at(nx, ny) == Tile.DOOR:
-		_set_footer("At the exit. Press E or Q to leave.")
+		_return_to_regional()
 		return false
 	if _is_blocked(nx, ny):
 		_set_footer("Blocked.")
@@ -1104,21 +1231,22 @@ func _try_roll_dungeon_encounter() -> bool:
 func _render_local_map() -> void:
 	_update_view_window_origin()
 	# Build view fields for GPU renderer (GPU-only visuals).
-	var size: int = _render_w * _render_h
+	var render_cell_count: int = _render_w * _render_h
 	var height_raw := PackedFloat32Array()
 	var temp := PackedFloat32Array()
 	var moist := PackedFloat32Array()
 	var biome := PackedInt32Array()
 	var land := PackedInt32Array()
 	var beach := PackedInt32Array()
-	height_raw.resize(size)
-	temp.resize(size)
-	moist.resize(size)
-	biome.resize(size)
-	land.resize(size)
-	beach.resize(size)
+	height_raw.resize(render_cell_count)
+	temp.resize(render_cell_count)
+	moist.resize(render_cell_count)
+	biome.resize(render_cell_count)
+	land.resize(render_cell_count)
+	beach.resize(render_cell_count)
 
 	var is_dungeon: bool = (_poi_type == "Dungeon")
+	var is_house: bool = (_poi_type == "House")
 	var poi_biome_id: int = int(poi_data.get("biome_id", 7))
 	var base_t: float = _local_visual_temp_for_biome(poi_biome_id)
 	var base_m: float = _local_visual_moist_for_biome(poi_biome_id)
@@ -1131,7 +1259,7 @@ func _render_local_map() -> void:
 				height_raw[idx] = 0.03
 				temp[idx] = base_t
 				moist[idx] = base_m
-				biome[idx] = LocalAreaTiles.MARKER_UNKNOWN if is_dungeon else LocalAreaTiles.MARKER_WALL
+				biome[idx] = LocalAreaTiles.MARKER_VOID if is_dungeon else poi_biome_id
 				land[idx] = 1
 				beach[idx] = 0
 				continue
@@ -1148,11 +1276,14 @@ func _render_local_map() -> void:
 			var h: float = 0.06
 			if t == Tile.WALL:
 				if is_dungeon:
-					b = LocalAreaTiles.MARKER_UNKNOWN
-					h = 0.03
+					b = LocalAreaTiles.MARKER_DUNGEON_WALL
+					h = 0.08
 				else:
 					b = LocalAreaTiles.MARKER_WALL
-					h = 0.20
+					h = 0.13
+			elif is_house and t == Tile.OUTSIDE:
+				b = poi_biome_id
+				h = 0.05
 			elif t == Tile.DOOR:
 				b = LocalAreaTiles.MARKER_DOOR
 				h = 0.08
@@ -1220,9 +1351,7 @@ func _render_local_map() -> void:
 		_apply_scroll_offset()
 		_update_fixed_lonlat_uniform()
 		if header_label:
-			var disp: String = _poi_type
-			if disp == "House" and VariantCasts.to_bool(poi_data.get("is_shop", false)):
-				disp = "Shop"
+			var disp: String = _poi_display_name()
 			header_label.text = "%s Interior - Tile (%d,%d) - %s" % [
 				disp,
 				int(poi_data.get("world_x", 0)),
@@ -1231,18 +1360,19 @@ func _render_local_map() -> void:
 			]
 		if footer_label:
 			if footer_label.text.is_empty():
-				footer_label.text = "Move: WASD/Arrows (diagonals OK) | E: Interact | Door/Q: Exit | M: World Map | Esc/Tab: Menu | Dungeons: random encounters"
+				footer_label.text = "Move: WASD/Arrows (diagonals OK) | E: Talk/Use | H: Hire | Touch door: Exit | M: World Map | Esc/Tab: Menu | Dungeons: random encounters"
 
 func _return_to_regional() -> void:
 	_close_dialogue()
 	_close_shop()
 	if game_state != null and game_state.has_method("clear_local_rest_context"):
 		game_state.clear_local_rest_context()
-	var world_x: int = int(poi_data.get("world_x", 0))
-	var world_y: int = int(poi_data.get("world_y", 0))
-	var local_x: int = int(poi_data.get("local_x", 48))
-	var local_y: int = int(poi_data.get("local_y", 48))
-	var biome_id: int = int(poi_data.get("biome_id", 7))
+	var ret: Dictionary = _compute_regional_exit_target()
+	var world_x: int = int(ret.get("world_x", int(poi_data.get("world_x", 0))))
+	var world_y: int = int(ret.get("world_y", int(poi_data.get("world_y", 0))))
+	var local_x: int = int(ret.get("local_x", int(poi_data.get("local_x", 48))))
+	var local_y: int = int(ret.get("local_y", int(poi_data.get("local_y", 48))))
+	var biome_id: int = int(ret.get("biome_id", int(poi_data.get("biome_id", 7))))
 	var biome_name: String = String(poi_data.get("biome_name", ""))
 	if game_state != null and game_state.has_method("set_location"):
 		game_state.set_location("regional", world_x, world_y, local_x, local_y, biome_id, biome_name)
@@ -1252,6 +1382,42 @@ func _return_to_regional() -> void:
 		scene_router.goto_regional(world_x, world_y, local_x, local_y, biome_id, biome_name)
 	else:
 		get_tree().change_scene_to_file(SceneContracts.SCENE_REGIONAL_MAP)
+
+func _compute_regional_exit_target() -> Dictionary:
+	var dims: Vector2i = _get_world_snapshot_dimensions()
+	var ww: int = max(1, int(dims.x))
+	var wh: int = max(1, int(dims.y))
+	var period_x: int = max(1, ww * 96)
+	var span_y: int = max(1, wh * 96)
+	var base_world_x: int = int(poi_data.get("world_x", 0))
+	var base_world_y: int = int(poi_data.get("world_y", 0))
+	var base_local_x: int = int(poi_data.get("local_x", 48))
+	var base_local_y: int = int(poi_data.get("local_y", 48))
+	var gx: int = posmod(base_world_x * 96 + base_local_x, period_x)
+	var gy: int = clamp(base_world_y * 96 + base_local_y, 0, span_y - 1)
+	var door_dx: int = clamp(_door_pos.x - _anchor_player_x, -1, 1)
+	var door_dy: int = clamp(_door_pos.y - _anchor_player_y, -1, 1)
+	if door_dx == 0 and door_dy == 0:
+		door_dx = 1
+	var step_cells: int = 2 if _poi_type == "House" else 0
+	gx = posmod(gx + door_dx * step_cells, period_x)
+	gy = clamp(gy + door_dy * step_cells, 0, span_y - 1)
+	var out_world_x: int = int(floor(float(gx) / 96.0))
+	var out_world_y: int = int(floor(float(gy) / 96.0))
+	var out_local_x: int = gx - out_world_x * 96
+	var out_local_y: int = gy - out_world_y * 96
+	var out_biome_id: int = int(poi_data.get("biome_id", 7))
+	if game_state != null and game_state.has_method("get_world_biome_id"):
+		out_biome_id = int(game_state.get_world_biome_id(out_world_x, out_world_y))
+	elif startup_state != null and startup_state.has_method("get_world_biome_id"):
+		out_biome_id = int(startup_state.get_world_biome_id(out_world_x, out_world_y))
+	return {
+		"world_x": out_world_x,
+		"world_y": out_world_y,
+		"local_x": out_local_x,
+		"local_y": out_local_y,
+		"biome_id": out_biome_id,
+	}
 
 func _get_time_label() -> String:
 	if game_state != null and game_state.has_method("get_time_label"):
@@ -1296,7 +1462,9 @@ func _is_blocked(x: int, y: int) -> bool:
 		return true
 	if _tile_at(x, y) == Tile.WALL:
 		return true
-	# Doors are interaction exits, not walk-through tiles.
+	if _tile_at(x, y) == Tile.OUTSIDE:
+		return true
+	# Doors are touch exits, not walk-through tiles.
 	if _tile_at(x, y) == Tile.DOOR:
 		return true
 	# NPCs block movement (talk from adjacent tiles).
@@ -1349,14 +1517,14 @@ func _generate_map() -> void:
 			_generate_house()
 
 func _place_player_at_entry() -> void:
-	_anchor_player_x = clamp(_door_pos.x - 1, 1, room_w - 2)
-	_anchor_player_y = clamp(_door_pos.y, 1, room_h - 2)
+	_anchor_player_x = clamp(_entry_anchor_x, 1, room_w - 2)
+	_anchor_player_y = clamp(_entry_anchor_y, 1, room_h - 2)
 	player_x = _anchor_player_x
 	player_y = _anchor_player_y
 
 func _place_player_from_payload_or_entry() -> void:
-	_anchor_player_x = clamp(_door_pos.x - 1, 1, room_w - 2)
-	_anchor_player_y = clamp(_door_pos.y, 1, room_h - 2)
+	_anchor_player_x = clamp(_entry_anchor_x, 1, room_w - 2)
+	_anchor_player_y = clamp(_entry_anchor_y, 1, room_h - 2)
 	# Returning from battle can include an interior position.
 	var ix: int = int(poi_data.get("interior_x", -1))
 	var iy: int = int(poi_data.get("interior_y", -1))
@@ -1379,14 +1547,31 @@ func _apply_generated_map(out: Dictionary) -> void:
 		tiles = t
 	if o is PackedByteArray and (o as PackedByteArray).size() == room_w * room_h:
 		objects = o
-	_door_pos = out.get("door_pos", _door_pos)
-	_boss_pos = out.get("boss_pos", _boss_pos)
-	_chest_pos = out.get("chest_pos", _chest_pos)
+	var door_v: Variant = out.get("door_pos", _door_pos)
+	if door_v is Vector2i:
+		_door_pos = door_v as Vector2i
+	_door_pos.x = clamp(_door_pos.x, 0, room_w - 1)
+	_door_pos.y = clamp(_door_pos.y, 0, room_h - 1)
+	_entry_anchor_x = clamp(int(out.get("anchor_x", _door_pos.x - 1)), 1, room_w - 2)
+	_entry_anchor_y = clamp(int(out.get("anchor_y", _door_pos.y)), 1, room_h - 2)
+	var boss_v: Variant = out.get("boss_pos", _boss_pos)
+	if boss_v is Vector2i:
+		_boss_pos = boss_v as Vector2i
+	var chest_v: Variant = out.get("chest_pos", _chest_pos)
+	if chest_v is Vector2i:
+		_chest_pos = chest_v as Vector2i
 
 func _generate_house() -> void:
-	var out: Dictionary = _local_gen.generate_house(_world_seed_hash, _poi_id, room_w, room_h)
+	var out: Dictionary = _local_gen.generate_house(
+		_world_seed_hash,
+		_poi_id,
+		room_w,
+		room_h,
+		_service_type == "shop",
+		_service_type
+	)
 	_apply_generated_map(out)
-	_spawn_house_npcs(VariantCasts.to_bool(poi_data.get("is_shop", false)))
+	_spawn_house_npcs(_service_type)
 
 func _generate_dungeon() -> void:
 	# Procedural dungeon with a guaranteed solvable golden path to the boss.
@@ -1410,9 +1595,9 @@ func _generate_dungeon() -> void:
 			objects[_idx(_chest_pos.x, _chest_pos.y)] = Obj.MAIN_CHEST
 
 func _init_dungeon_fog() -> void:
-	var size: int = room_w * room_h
+	var room_cell_count: int = room_w * room_h
 	_dungeon_seen = PackedByteArray()
-	_dungeon_seen.resize(size)
+	_dungeon_seen.resize(room_cell_count)
 	_dungeon_seen.fill(0)
 
 func _is_dungeon_seen(x: int, y: int) -> bool:
@@ -1428,8 +1613,8 @@ func _is_dungeon_seen(x: int, y: int) -> bool:
 func _reveal_dungeon_fog_around_player() -> bool:
 	if _poi_type != "Dungeon":
 		return false
-	var size: int = room_w * room_h
-	if _dungeon_seen.size() != size:
+	var room_cell_count: int = room_w * room_h
+	if _dungeon_seen.size() != room_cell_count:
 		_init_dungeon_fog()
 	var r: int = max(1, DUNGEON_FOG_REVEAL_RADIUS)
 	var r2: int = r * r
@@ -1457,12 +1642,13 @@ func _configure_dimensions_for_poi() -> void:
 	room_w = max(8, int(dims.x))
 	room_h = max(8, int(dims.y))
 
-func _spawn_house_npcs(is_shop: bool) -> void:
+func _spawn_house_npcs(service_type: String) -> void:
 	if actors.size() != room_w * room_h:
 		return
+	service_type = String(service_type).to_lower()
 	var key_root: String = "house_npc|%s" % _poi_id
 	var density_mul: float = _npc_density_mul()
-	if is_shop:
+	if service_type == "shop":
 		# Exactly 1 shopkeeper, plus 0..3 customers.
 		var keeper_pref: Array[Vector2i] = [
 			Vector2i(7, 6),
@@ -1478,6 +1664,49 @@ func _spawn_house_npcs(is_shop: bool) -> void:
 		for i in range(customers):
 			var kind: int = _npc_kind_roll("%s|cust_kind|i=%d" % [key_root, i])
 			_place_npc(kind, "%s|cust|i=%d" % [key_root, i], "customer")
+		return
+	if service_type == "inn":
+		var inn_kind: int = Actor.MAN if DeterministicRng.randf01(_world_seed_hash, key_root + "|innkeeper_kind") < 0.5 else Actor.WOMAN
+		_place_npc(inn_kind, key_root + "|innkeeper", "innkeeper", [Vector2i(7, 6), Vector2i(7, 7), Vector2i(6, 7)])
+		var lodgers_base: int = 1 + DeterministicRng.randi_range(_world_seed_hash, key_root + "|lodgers_n", 0, 3)
+		var lodgers: int = _scale_npc_count(lodgers_base, density_mul, key_root + "|lodgers_scale")
+		lodgers = clamp(lodgers, 1, 6)
+		for i2 in range(lodgers):
+			var kind2: int = _npc_kind_roll("%s|lodger_kind|i=%d" % [key_root, i2])
+			_place_npc(kind2, "%s|lodger|i=%d" % [key_root, i2], "mercenary")
+		return
+	if service_type == "temple":
+		var priest_kind: int = Actor.MAN if DeterministicRng.randf01(_world_seed_hash, key_root + "|priest_kind") < 0.5 else Actor.WOMAN
+		_place_npc(priest_kind, key_root + "|priest", "priest", [Vector2i(7, 6), Vector2i(8, 6), Vector2i(7, 7)])
+		var acolytes_base: int = DeterministicRng.randi_range(_world_seed_hash, key_root + "|acolytes_n", 1, 3)
+		var acolytes: int = _scale_npc_count(acolytes_base, density_mul, key_root + "|acolytes_scale")
+		acolytes = clamp(acolytes, 1, 5)
+		for i3 in range(acolytes):
+			var kind3: int = _npc_kind_roll("%s|acolyte_kind|i=%d" % [key_root, i3])
+			_place_npc(kind3, "%s|acolyte|i=%d" % [key_root, i3], "acolyte")
+		return
+	if service_type == "faction_hall":
+		var agent_kind: int = Actor.MAN if DeterministicRng.randf01(_world_seed_hash, key_root + "|agent_kind") < 0.5 else Actor.WOMAN
+		_place_npc(agent_kind, key_root + "|agent", "faction_agent", [Vector2i(7, 6), Vector2i(8, 6), Vector2i(7, 7)])
+		var guards_base: int = 1 + DeterministicRng.randi_range(_world_seed_hash, key_root + "|guards_n", 0, 2)
+		var guards: int = _scale_npc_count(guards_base, density_mul, key_root + "|guards_scale")
+		guards = clamp(guards, 1, 4)
+		for i4 in range(guards):
+			var kind4: int = _npc_kind_roll("%s|guard_kind|i=%d" % [key_root, i4])
+			_place_npc(kind4, "%s|guard|i=%d" % [key_root, i4], "guard")
+		return
+	if service_type == "town_hall":
+		var official_kind: int = Actor.MAN if DeterministicRng.randf01(_world_seed_hash, key_root + "|official_kind") < 0.5 else Actor.WOMAN
+		_place_npc(official_kind, key_root + "|official", "official", [Vector2i(9, 7), Vector2i(10, 7), Vector2i(9, 8)])
+		var clerks_base: int = 1 + DeterministicRng.randi_range(_world_seed_hash, key_root + "|clerks_n", 0, 2)
+		var clerks: int = _scale_npc_count(clerks_base, density_mul, key_root + "|clerks_scale")
+		clerks = clamp(clerks, 1, 4)
+		for i5 in range(clerks):
+			var kind5: int = _npc_kind_roll("%s|clerk_kind|i=%d" % [key_root, i5])
+			_place_npc(kind5, "%s|clerk|i=%d" % [key_root, i5], "clerk")
+		if DeterministicRng.randf01(_world_seed_hash, key_root + "|guard_on") < 0.65:
+			var guard_kind: int = _npc_kind_roll(key_root + "|town_guard_kind")
+			_place_npc(guard_kind, key_root + "|town_guard", "guard")
 		return
 
 	# Normal house: seed-picked “family constellation” (0..4 residents).
@@ -1534,6 +1763,22 @@ func _register_npc(kind: int, x: int, y: int, role: String) -> void:
 	var role_shift: float = 0.0
 	if role == "shopkeeper":
 		role_shift = 0.08
+	elif role == "innkeeper":
+		role_shift = 0.06
+	elif role == "priest":
+		role_shift = 0.10
+	elif role == "acolyte":
+		role_shift = 0.02
+	elif role == "faction_agent":
+		role_shift = -0.06
+	elif role == "official":
+		role_shift = 0.04
+	elif role == "clerk":
+		role_shift = 0.01
+	elif role == "guard":
+		role_shift = -0.08
+	elif role == "mercenary":
+		role_shift = 0.03
 	elif role == "customer":
 		role_shift = -0.03
 	var disposition_bias: float = clamp(base_disp + role_shift + _npc_disposition_epoch_shift(), -0.95, 0.95)
@@ -1567,8 +1812,8 @@ func _can_place_npc(x: int, y: int) -> bool:
 	if x == _door_pos.x and y == _door_pos.y:
 		return false
 	# Avoid spawning directly on the player entry tile.
-	var ex: int = clamp(_door_pos.x - 1, 1, room_w - 2)
-	var ey: int = clamp(_door_pos.y, 1, room_h - 2)
+	var ex: int = clamp(_entry_anchor_x, 1, room_w - 2)
+	var ey: int = clamp(_entry_anchor_y, 1, room_h - 2)
 	if x == ex and y == ey:
 		return false
 	if actors.size() == room_w * room_h:
@@ -1789,6 +2034,31 @@ func _npc_at_or_adjacent(px: int, py: int) -> Dictionary:
 			return npc
 	return {}
 
+func _build_npc_profile(npc: Dictionary, role: String, rank: float, home_state_id: String) -> Dictionary:
+	var kind: int = int(npc.get("kind", Actor.NONE))
+	var recruit_source: String = "home"
+	if _poi_type == "House":
+		recruit_source = _service_type
+	if recruit_source == "town_hall":
+		recruit_source = "faction_hall"
+	if recruit_source.is_empty():
+		recruit_source = "home"
+	return {
+		"npc_id": "local|%s|%d|%d|%d" % [_poi_id, int(npc.get("x", 0)), int(npc.get("y", 0)), kind],
+		"kind": kind,
+		"role": String(role),
+		"home_state_id": String(home_state_id),
+		"poi_type": String(_poi_type),
+		"service_type": String(_service_type),
+		"recruit_source": recruit_source,
+		"faction_id": String(poi_data.get("faction_id", "")),
+		"faction_rank_required": int(poi_data.get("faction_rank_required", 0)),
+		"world_x": int(poi_data.get("world_x", 0)),
+		"world_y": int(poi_data.get("world_y", 0)),
+		"social_class_rank": clamp(float(rank), 0.0, 1.0),
+		"disposition_bias": clamp(float(npc.get("disposition_bias", 0.0)), -1.0, 1.0),
+	}
+
 func _interact_with_npc(npc: Dictionary) -> void:
 	var kind: int = int(npc.get("kind", Actor.NONE))
 	if kind == Actor.SHOPKEEPER:
@@ -1799,19 +2069,14 @@ func _interact_with_npc(npc: Dictionary) -> void:
 	var home_state_id: String = String(poi_data.get("political_state_id", ""))
 	if game_state != null and game_state.has_method("get_political_state_id_at"):
 		home_state_id = String(game_state.get_political_state_id_at(int(poi_data.get("world_x", 0)), int(poi_data.get("world_y", 0))))
+	var npc_profile: Dictionary = _build_npc_profile(npc, role, rank, home_state_id)
 	var dialogue_line: String = ""
 	if game_state != null and game_state.has_method("get_npc_dialogue_line"):
-		dialogue_line = String(game_state.get_npc_dialogue_line({
-			"npc_id": "local|%s|%d|%d|%d" % [_poi_id, int(npc.get("x", 0)), int(npc.get("y", 0)), kind],
-			"kind": kind,
-			"role": role,
-			"home_state_id": home_state_id,
-			"world_x": int(poi_data.get("world_x", 0)),
-			"world_y": int(poi_data.get("world_y", 0)),
-			"social_class_rank": rank,
-			"disposition_bias": float(npc.get("disposition_bias", 0.0)),
-		}))
+		dialogue_line = String(game_state.get_npc_dialogue_line(npc_profile))
 	if not dialogue_line.is_empty():
+		if kind != Actor.CHILD and game_state != null and game_state.has_method("can_hire_party_member"):
+			if bool(game_state.can_hire_party_member()):
+				dialogue_line += "\n\n(Press H nearby if you want to recruit.)"
 		_open_dialogue(dialogue_line)
 		return
 	var lines_man: PackedStringArray = PackedStringArray([
@@ -1835,15 +2100,51 @@ func _interact_with_npc(npc: Dictionary) -> void:
 	var idx: int = DeterministicRng.randi_range(_world_seed_hash, seed_key, 0, max(0, pool.size() - 1))
 	_open_dialogue(String(pool[idx]))
 
+func _try_hire_adjacent_npc() -> void:
+	var npc: Dictionary = _npc_at_or_adjacent(player_x, player_y)
+	if npc.is_empty():
+		_set_footer("No one nearby to recruit.")
+		return
+	var kind: int = int(npc.get("kind", Actor.NONE))
+	if kind == Actor.NONE:
+		_set_footer("No one nearby to recruit.")
+		return
+	if kind == Actor.SHOPKEEPER:
+		_set_footer("The shopkeeper will not leave the post.")
+		return
+	if game_state == null or not game_state.has_method("try_hire_npc"):
+		_set_footer("Hiring unavailable.")
+		return
+	var role: String = String(npc.get("role", "resident"))
+	var rank: float = clamp(float(npc.get("social_class_rank", _npc_role_social_rank(role, kind))), 0.0, 1.0)
+	var home_state_id: String = String(poi_data.get("political_state_id", ""))
+	if game_state.has_method("get_political_state_id_at"):
+		home_state_id = String(game_state.get_political_state_id_at(int(poi_data.get("world_x", 0)), int(poi_data.get("world_y", 0))))
+	var out: Dictionary = game_state.try_hire_npc(_build_npc_profile(npc, role, rank, home_state_id))
+	var msg: String = String(out.get("message", ""))
+	if not msg.is_empty():
+		_set_footer(msg)
+	if not bool(out.get("ok", false)):
+		return
+	var nx: int = int(npc.get("x", -1))
+	var ny: int = int(npc.get("y", -1))
+	if _in_bounds(nx, ny) and actors.size() == room_w * room_h:
+		actors[_idx(nx, ny)] = Actor.NONE
+	for i in range(_npcs.size()):
+		var v: Variant = _npcs[i]
+		if typeof(v) != TYPE_DICTIONARY:
+			continue
+		var d: Dictionary = v as Dictionary
+		if int(d.get("x", -999)) == nx and int(d.get("y", -999)) == ny and int(d.get("kind", Actor.NONE)) == kind:
+			_npcs.remove_at(i)
+			break
+	_render_local_map()
+
 func _try_interact() -> void:
-	# NPC interaction (universal E key).
+	# Manual interaction key for NPCs and dungeon chest.
 	var npc: Dictionary = _npc_at_or_adjacent(player_x, player_y)
 	if not npc.is_empty():
 		_interact_with_npc(npc)
-		return
-	# Door exit.
-	if _adjacent_or_same(player_x, player_y, _door_pos.x, _door_pos.y):
-		_return_to_regional()
 		return
 	# Chest interaction.
 	if _poi_type == "Dungeon" and _adjacent_or_same(player_x, player_y, _chest_pos.x, _chest_pos.y):
@@ -1865,25 +2166,37 @@ func _try_open_main_chest() -> void:
 	_render_local_map()
 
 func _grant_main_treasure() -> void:
-	# Scaffold treasure: small gold + a deterministic item.
-	var gold: int = 60
+	# Progression-aware treasure: deterministic by POI, but scales by party/epoch tier.
+	var tier: int = _inventory_progress_tier()
+	var gold: int = 52 + tier * 18 + DeterministicRng.randi_range(_world_seed_hash, "treasure_gold|%s" % _poi_id, 0, 22)
 	var item_name: String = "Potion"
-	if _poi_id.length() > 0:
-		var roll: int = abs(_poi_id.hash()) % 3
-		if roll == 0 and ItemCatalog.has_item("Bronze Sword"):
-			item_name = "Bronze Sword"
-		elif roll == 1 and ItemCatalog.has_item("Leather Armor"):
-			item_name = "Leather Armor"
-		else:
-			item_name = "Potion"
+	var item_count: int = 1
+	var equipment_pool: Array[String] = ItemCatalog.items_up_to_tier(min(4, tier + 1), ["weapon", "armor", "accessory"])
+	var consumable_pool: Array[String] = ItemCatalog.items_up_to_tier(min(4, tier + 1), ["consumable"])
+	var roll: float = DeterministicRng.randf01(_world_seed_hash, "treasure_roll|%s" % _poi_id)
+	if roll <= 0.72 and not equipment_pool.is_empty():
+		var eq_sorted: Array[String] = _sorted_items_by_tier(equipment_pool)
+		var idx: int = DeterministicRng.randi_range(_world_seed_hash, "treasure_eq_idx|%s" % _poi_id, 0, eq_sorted.size() - 1)
+		item_name = eq_sorted[idx]
+	elif not consumable_pool.is_empty():
+		var c_sorted: Array[String] = _sorted_items_by_tier(consumable_pool)
+		var idx2: int = DeterministicRng.randi_range(_world_seed_hash, "treasure_cons_idx|%s" % _poi_id, 0, c_sorted.size() - 1)
+		item_name = c_sorted[idx2]
+		var ci: Dictionary = ItemCatalog.get_item(item_name)
+		if VariantCasts.to_bool(ci.get("stackable", true)):
+			var max_extra: int = max(0, 2 - int(ci.get("tier", 1)) / 2)
+			item_count = 1 + DeterministicRng.randi_range(_world_seed_hash, "treasure_cons_count|%s" % _poi_id, 0, max_extra)
+	if not ItemCatalog.has_item(item_name):
+		item_name = "Potion"
+		item_count = 1
 	if game_state != null and game_state.party != null:
 		game_state.party.gold += gold
-		game_state.party.add_item(item_name, 1)
+		game_state.party.add_item(item_name, item_count)
 		if game_state.has_method("_emit_party_changed"):
 			game_state._emit_party_changed()
 		if game_state.has_method("_emit_inventory_changed"):
 			game_state._emit_inventory_changed()
-	_set_footer("Treasure found: %s (+%d gold)" % [item_name, gold])
+	_set_footer("Treasure found: %s x%d (+%d gold)" % [item_name, item_count, gold])
 
 func _start_dungeon_boss_battle(return_x: int, return_y: int) -> void:
 	if _poi_type != "Dungeon" or _boss_defeated:
@@ -1946,10 +2259,7 @@ func _update_fixed_lonlat_uniform() -> void:
 	var lon_phi: Vector2 = _get_fixed_lon_phi()
 	gpu_map.set_fixed_lonlat(true, float(lon_phi.x), float(lon_phi.y))
 
-func _build_local_cloud_params() -> Dictionary:
-	var biome_id: int = int(poi_data.get("biome_id", 7))
-	var moist: float = _local_visual_moist_for_biome(biome_id)
-	var temp: float = _local_visual_temp_for_biome(biome_id)
+func _get_world_snapshot_dimensions() -> Vector2i:
 	var ww: int = 275
 	var wh: int = 62
 	if game_state != null and int(game_state.world_width) > 0 and int(game_state.world_height) > 0:
@@ -1958,25 +2268,163 @@ func _build_local_cloud_params() -> Dictionary:
 	elif startup_state != null and int(startup_state.world_width) > 0 and int(startup_state.world_height) > 0:
 		ww = int(startup_state.world_width)
 		wh = int(startup_state.world_height)
+	return Vector2i(max(1, ww), max(1, wh))
+
+func _get_world_weather_field_local(field_name: String, ww: int, wh: int) -> PackedFloat32Array:
+	var world_cell_count: int = ww * wh
+	if world_cell_count <= 0:
+		return PackedFloat32Array()
+	if game_state != null:
+		var gv: Variant = game_state.get(field_name)
+		if gv is PackedFloat32Array:
+			var g_arr: PackedFloat32Array = gv
+			if g_arr.size() == world_cell_count:
+				return g_arr
+	if startup_state != null:
+		var sv: Variant = startup_state.get(field_name)
+		if sv is PackedFloat32Array:
+			var s_arr: PackedFloat32Array = sv
+			if s_arr.size() == world_cell_count:
+				return s_arr
+	return PackedFloat32Array()
+
+func _global_to_world_tile_f_local(gx: float, gy: float, ww: int, wh: int, region_size: int) -> Vector2:
+	var period_x_cells: float = float(max(1, ww * region_size))
+	var span_y_cells: float = float(max(1, wh * region_size))
+	var wrapped_x: float = fposmod(gx, period_x_cells)
+	if wrapped_x < 0.0:
+		wrapped_x += period_x_cells
+	var clamped_y: float = clamp(gy, 0.0, span_y_cells - 1.0)
+	return Vector2(
+		wrapped_x / float(max(1, region_size)),
+		clamped_y / float(max(1, region_size))
+	)
+
+func _sample_world_field_point_local(field: PackedFloat32Array, ww: int, wh: int, wx: int, wy: int, fallback: float) -> float:
+	var world_cell_count: int = ww * wh
+	if world_cell_count <= 0 or field.size() != world_cell_count:
+		return fallback
+	var sx: int = posmod(wx, max(1, ww))
+	var sy: int = clamp(wy, 0, max(1, wh) - 1)
+	var idx: int = sx + sy * ww
+	if idx < 0 or idx >= field.size():
+		return fallback
+	return float(field[idx])
+
+func _sample_world_field_bilinear_local(field: PackedFloat32Array, ww: int, wh: int, tile_x: float, tile_y: float, fallback: float) -> float:
+	var world_cell_count: int = ww * wh
+	if world_cell_count <= 0 or field.size() != world_cell_count:
+		return fallback
+	var x0: int = int(floor(tile_x))
+	var y0: int = int(floor(tile_y))
+	var tx: float = clamp(tile_x - float(x0), 0.0, 1.0)
+	var ty: float = clamp(tile_y - float(y0), 0.0, 1.0)
+	var v00: float = _sample_world_field_point_local(field, ww, wh, x0, y0, fallback)
+	var v10: float = _sample_world_field_point_local(field, ww, wh, x0 + 1, y0, fallback)
+	var v01: float = _sample_world_field_point_local(field, ww, wh, x0, y0 + 1, fallback)
+	var v11: float = _sample_world_field_point_local(field, ww, wh, x0 + 1, y0 + 1, fallback)
+	var vx0: float = lerp(v00, v10, tx)
+	var vx1: float = lerp(v01, v11, tx)
+	return lerp(vx0, vx1, ty)
+
+func _sample_world_weather_for_local(
+	origin_global_x: int,
+	origin_global_y: int,
+	ww: int,
+	wh: int,
+	region_size: int,
+	fallback_cloud_cover: float,
+	fallback_wind_x: float,
+	fallback_wind_y: float
+) -> Dictionary:
+	var clouds_field: PackedFloat32Array = _get_world_weather_field_local("world_cloud_cover", ww, wh)
+	var wind_u_field: PackedFloat32Array = _get_world_weather_field_local("world_wind_u", ww, wh)
+	var wind_v_field: PackedFloat32Array = _get_world_weather_field_local("world_wind_v", ww, wh)
+	var rw: int = max(1, _render_w)
+	var rh: int = max(1, _render_h)
+	var center_x: float = float(origin_global_x) + float(rw) * 0.5
+	var center_y: float = float(origin_global_y) + float(rh) * 0.5
+	var sx: float = float(rw) * 0.32
+	var sy: float = float(rh) * 0.32
+	var sample_offsets: Array[Vector2] = [
+		Vector2(0.0, 0.0),
+		Vector2(-sx, -sy),
+		Vector2(sx, -sy),
+		Vector2(-sx, sy),
+		Vector2(sx, sy),
+	]
+	var cloud_sum: float = 0.0
+	var wind_u_sum: float = 0.0
+	var wind_v_sum: float = 0.0
+	for off in sample_offsets:
+		var tile_pos: Vector2 = _global_to_world_tile_f_local(center_x + off.x, center_y + off.y, ww, wh, region_size)
+		cloud_sum += _sample_world_field_bilinear_local(clouds_field, ww, wh, tile_pos.x, tile_pos.y, fallback_cloud_cover)
+		wind_u_sum += _sample_world_field_bilinear_local(wind_u_field, ww, wh, tile_pos.x, tile_pos.y, fallback_wind_x)
+		wind_v_sum += _sample_world_field_bilinear_local(wind_v_field, ww, wh, tile_pos.x, tile_pos.y, fallback_wind_y)
+	var denom: float = float(max(1, sample_offsets.size()))
+	return {
+		"cloud_cover": clamp(cloud_sum / denom, 0.0, 1.0),
+		"wind_u": wind_u_sum / denom,
+		"wind_v": wind_v_sum / denom,
+	}
+
+func _local_smoothstep01(t: float) -> float:
+	var x: float = clamp(t, 0.0, 1.0)
+	return x * x * (3.0 - 2.0 * x)
+
+func _build_local_cloud_params() -> Dictionary:
+	var biome_id: int = int(poi_data.get("biome_id", 7))
+	var moist: float = _local_visual_moist_for_biome(biome_id)
+	var temp: float = _local_visual_temp_for_biome(biome_id)
+	var dims: Vector2i = _get_world_snapshot_dimensions()
+	var ww: int = dims.x
+	var wh: int = dims.y
 	var region_size: int = 96
 	var base_x: int = int(poi_data.get("world_x", 0)) * region_size + int(poi_data.get("local_x", 48))
 	var base_y: int = int(poi_data.get("world_y", 0)) * region_size + int(poi_data.get("local_y", 48))
 	var origin_global_x: int = base_x + (_render_origin_x - _anchor_player_x)
 	var origin_global_y: int = base_y + (_render_origin_y - _anchor_player_y)
-	var wind_x: float = 0.08 + (temp - 0.5) * 0.10
-	var wind_y: float = 0.03 + (moist - 0.5) * 0.08
-	var coverage: float = clamp(0.22 + moist * 0.68, 0.10, 0.95)
+	var fallback_wind_x: float = 0.08 + (temp - 0.5) * 0.10
+	var fallback_wind_y: float = 0.03 + (moist - 0.5) * 0.08
+	var fallback_cloud_cover: float = clamp(0.18 + moist * 0.62, 0.0, 1.0)
+	var weather: Dictionary = _sample_world_weather_for_local(
+		origin_global_x,
+		origin_global_y,
+		ww,
+		wh,
+		region_size,
+		fallback_cloud_cover,
+		fallback_wind_x,
+		fallback_wind_y
+	)
+	var cloud_cover: float = clamp(float(weather.get("cloud_cover", fallback_cloud_cover)), 0.0, 1.0)
+	var wind_u: float = float(weather.get("wind_u", fallback_wind_x))
+	var wind_v: float = float(weather.get("wind_v", fallback_wind_y))
+	var wind_vec: Vector2 = Vector2(wind_u, wind_v)
+	var wind_x: float = fallback_wind_x
+	var wind_y: float = fallback_wind_y
+	if wind_vec.length() > 0.0001:
+		var wind_dir: Vector2 = wind_vec.normalized()
+		var wind_speed: float = clamp(0.06 + wind_vec.length() * 0.03, 0.06, 0.26)
+		wind_x = wind_dir.x * wind_speed
+		wind_y = wind_dir.y * wind_speed
+	var coverage_threshold: float = clamp(1.0 - cloud_cover, 0.02, 0.98)
+	var overcast_floor: float = _local_smoothstep01((cloud_cover - 0.62) / 0.30) * 0.94
+	var contrast: float = lerp(1.75, 0.82, cloud_cover)
+	var cloud_scale: float = lerp(0.016, 0.024, clamp(0.35 + cloud_cover * 0.55, 0.0, 1.0))
 	return {
 		"enabled": true,
 		"origin_x": origin_global_x,
 		"origin_y": origin_global_y,
 		"world_period_x": max(1, ww * region_size),
 		"world_height": max(1, wh * region_size),
-		"scale": lerp(0.017, 0.024, moist),
+		"scale": cloud_scale,
 		"wind_x": wind_x,
 		"wind_y": wind_y,
-		"coverage": coverage,
-		"contrast": lerp(1.15, 1.40, coverage),
+		"coverage": coverage_threshold,
+		"contrast": contrast,
+		"overcast_floor": clamp(overcast_floor, 0.0, 0.94),
+		"morph_strength": 0.30,
 	}
 
 func _local_visual_temp_for_biome(biome_id: int) -> float:

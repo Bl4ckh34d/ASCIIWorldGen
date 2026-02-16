@@ -1,12 +1,5 @@
 extends Control
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
-const BattleStateMachine = preload("res://scripts/gameplay/BattleStateMachine.gd")
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
-const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
-const SpellCatalog = preload("res://scripts/gameplay/catalog/SpellCatalog.gd")
-const WorldTimeStateModel = preload("res://scripts/gameplay/models/WorldTimeState.gd")
 const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 const BiomePalette = preload("res://scripts/style/BiomePalette.gd")
 
@@ -210,10 +203,10 @@ func _day_index_0_364() -> int:
 func _weather_for_battle(biome_id: int) -> Dictionary:
 	var wx: int = int(battle_data.get("world_x", 0))
 	var wy: int = int(battle_data.get("world_y", 0))
-	var seed: int = int(game_state.world_seed_hash) if game_state != null and int(game_state.world_seed_hash) != 0 else 1
+	var seed_value: int = int(game_state.world_seed_hash) if game_state != null and int(game_state.world_seed_hash) != 0 else 1
 	var d: int = _day_index_0_364()
 	var key: String = "wthr|%d|%d|d=%d" % [wx, wy, d]
-	var base: float = DeterministicRng.randf01(seed, key)
+	var base: float = DeterministicRng.randf01(seed_value, key)
 	var humidity: float = _humidity_for_biome(biome_id)
 	var cloud_coverage: float = clamp(0.20 + 0.70 * base + (humidity - 0.5) * 0.20, 0.0, 1.0)
 	# Rain: require high humidity + high cloud coverage.
@@ -265,7 +258,7 @@ func _set_moons(mat: ShaderMaterial) -> void:
 		return
 	var wx: int = int(battle_data.get("world_x", 0))
 	var wy: int = int(battle_data.get("world_y", 0))
-	var seed: int = int(game_state.world_seed_hash) if game_state != null and int(game_state.world_seed_hash) != 0 else 1
+	var seed_value: int = int(game_state.world_seed_hash) if game_state != null and int(game_state.world_seed_hash) != 0 else 1
 	var moon_count: int = 0
 	var moon_seed_val: float = 0.0
 	if startup_state != null:
@@ -276,9 +269,9 @@ func _set_moons(mat: ShaderMaterial) -> void:
 	var moons: Array[Vector4] = []
 	for i in range(moon_count):
 		var kroot: String = "moon|%d|%d|%d" % [i, wx, wy]
-		var mx: float = lerp(0.18, 0.82, DeterministicRng.randf01(seed, kroot + "|x"))
-		var my: float = lerp(0.10, 0.32, DeterministicRng.randf01(seed, kroot + "|y"))
-		var mr: float = lerp(0.035, 0.070, DeterministicRng.randf01(seed, kroot + "|r"))
+		var mx: float = lerp(0.18, 0.82, DeterministicRng.randf01(seed_value, kroot + "|x"))
+		var my: float = lerp(0.10, 0.32, DeterministicRng.randf01(seed_value, kroot + "|y"))
+		var mr: float = lerp(0.035, 0.070, DeterministicRng.randf01(seed_value, kroot + "|r"))
 		var period: float = float(18 + i * 9)
 		var phase: float = fposmod(float(base + i * 7) / period, 1.0)
 		var bright: float = 0.35 + 0.65 * (0.5 - 0.5 * cos(phase * TAU))
@@ -815,3 +808,4 @@ func _on_continue_pressed() -> void:
 		scene_router.goto_regional(world_x, world_y, local_x, local_y, biome_id, biome_name)
 	else:
 		get_tree().change_scene_to_file(SceneContracts.SCENE_REGIONAL_MAP)
+

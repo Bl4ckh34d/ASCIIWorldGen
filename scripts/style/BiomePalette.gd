@@ -16,7 +16,7 @@ func color_for_biome(biome: int, is_beach: bool) -> Color:
 			202: # POI: Cleared dungeon
 				return Color(0.60, 0.60, 0.60)
 			210: # Interior: Wall
-				return Color(0.20, 0.20, 0.22)
+				return Color(0.14, 0.14, 0.16)
 			211: # Interior: Floor
 				return Color(0.50, 0.40, 0.28)
 			212: # Interior: Door
@@ -41,7 +41,11 @@ func color_for_biome(biome: int, is_beach: bool) -> Color:
 				return Color(0.92, 0.86, 0.40)
 			222: # NPC: Shopkeeper
 				return Color(0.35, 0.90, 0.55)
+			223: # Dungeon wall
+				return Color(0.08, 0.08, 0.10)
 			254: # Unknown / fog / unvisited
+				return Color(0.0, 0.0, 0.0)
+			255: # Solid void / non-walkable rock
 				return Color(0.0, 0.0, 0.0)
 			_:
 				return Color(1.0, 1.0, 1.0)

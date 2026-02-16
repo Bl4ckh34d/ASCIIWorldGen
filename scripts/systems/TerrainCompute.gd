@@ -1,8 +1,8 @@
 # File: res://scripts/systems/TerrainCompute.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 
 const TERRAIN_SHADER_PATH: String = "res://shaders/terrain_gen.glsl"
@@ -24,7 +24,7 @@ func _init() -> void:
 	_buf_mgr = GPUBufferManager.new()
 
 func _ensure() -> bool:
-	var terrain_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var terrain_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_shader,
 		_pipeline,
@@ -34,10 +34,10 @@ func _ensure() -> bool:
 	_rd = terrain_state.get("rd", null)
 	_shader = terrain_state.get("shader", RID())
 	_pipeline = terrain_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(terrain_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(terrain_state.get("ok", false)):
 		return false
 
-	var fbm_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var fbm_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_fbm_shader,
 		_fbm_pipeline,
@@ -46,7 +46,7 @@ func _ensure() -> bool:
 	)
 	_fbm_shader = fbm_state.get("shader", RID())
 	_fbm_pipeline = fbm_state.get("pipeline", RID())
-	return VariantCasts.to_bool(fbm_state.get("ok", false))
+	return VariantCastsUtil.to_bool(fbm_state.get("ok", false))
 
 func _ensure_intermediate_buffers(size: int) -> bool:
 	if size <= 0:
@@ -97,7 +97,7 @@ func _dispatch_noise_fbm(w: int, h: int, params: Dictionary, wrap_x: bool) -> bo
 		var zeros_n := PackedByteArray()
 		zeros_n.resize(pad_n)
 		pc_n.append_array(zeros_n)
-	if not ComputeShaderBase.validate_push_constant_size(pc_n, 48, "TerrainCompute.noise_fbm"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc_n, 48, "TerrainCompute.noise_fbm"):
 		_rd.free_rid(u_set_n)
 		return false
 
@@ -133,7 +133,7 @@ func _dispatch_terrain(w: int, h: int, sea_level: float, noise_x_scale: float, w
 		var zeros := PackedByteArray()
 		zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 32, "TerrainCompute.terrain"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 32, "TerrainCompute.terrain"):
 		_rd.free_rid(u_set)
 		return false
 
@@ -169,7 +169,7 @@ func generate_to_buffers(
 		return false
 
 	var sea_level: float = float(params.get("sea_level", 0.0))
-	var wrap_x: bool = VariantCasts.to_bool(params.get("wrap_x", true))
+	var wrap_x: bool = VariantCastsUtil.to_bool(params.get("wrap_x", true))
 	var noise_x_scale: float = float(params.get("noise_x_scale", 1.0))
 	var warp_amount: float = float(params.get("warp", 24.0))
 
@@ -184,7 +184,7 @@ func generate(_w: int, _h: int, _params: Dictionary) -> Dictionary:
 func cleanup() -> void:
 	if _buf_mgr != null:
 		_buf_mgr.cleanup()
-	ComputeShaderBase.free_rids(_rd, [
+	ComputeShaderBaseUtil.free_rids(_rd, [
 		_pipeline,
 		_shader,
 		_fbm_pipeline,

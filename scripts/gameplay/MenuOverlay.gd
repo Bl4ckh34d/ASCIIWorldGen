@@ -1,11 +1,5 @@
 extends CanvasLayer
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
-const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
-const InventorySlotButton = preload("res://scripts/gameplay/ui/InventorySlotButton.gd")
-const MemberRowDropTarget = preload("res://scripts/gameplay/ui/MemberRowDropTarget.gd")
-const StatBar = preload("res://scripts/gameplay/ui/StatBar.gd")
 
 signal closed
 
@@ -442,8 +436,8 @@ func _fmt_total_stat(total: int, base: int) -> String:
 	var bonus: int = int(total) - int(base)
 	if bonus == 0:
 		return str(total)
-	var sign: String = "+" if bonus > 0 else ""
-	return "%d(%s%d)" % [total, sign, bonus]
+	var sign_prefix: String = "+" if bonus > 0 else ""
+	return "%d(%s%d)" % [total, sign_prefix, bonus]
 
 func _find_member_by_id(member_id: String) -> Variant:
 	for m in _party_members():

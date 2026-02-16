@@ -1,13 +1,6 @@
 extends RefCounted
 class_name SocietySeeder
 
-const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
-const CommodityCatalog = preload("res://scripts/gameplay/catalog/CommodityCatalog.gd")
-const EconomyStateModel = preload("res://scripts/gameplay/models/EconomyState.gd")
-const PoliticsStateModel = preload("res://scripts/gameplay/models/PoliticsState.gd")
-const NpcWorldStateModel = preload("res://scripts/gameplay/models/NpcWorldState.gd")
-const EpochSystem = preload("res://scripts/gameplay/sim/EpochSystem.gd")
-
 static func seed_on_world_tile_visit(world_seed_hash: int, world_x: int, world_y: int, biome_id: int, econ: EconomyStateModel, pol: PoliticsStateModel, npc: NpcWorldStateModel, epoch_id: String = "prehistoric", epoch_variant: String = "stable") -> void:
 	if econ == null or pol == null or npc == null:
 		return

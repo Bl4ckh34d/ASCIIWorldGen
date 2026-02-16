@@ -1,7 +1,6 @@
 # File: res://scripts/core/ErrorHandler.gd
 extends RefCounted
 class_name ErrorHandler
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # Standardized error handling patterns for the world generation system
 # Provides consistent error reporting, recovery, and logging

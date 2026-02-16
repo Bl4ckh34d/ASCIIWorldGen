@@ -1,8 +1,8 @@
 # File: res://scripts/systems/RiverCompute.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 
 const SEED_SHADER_PATH: String = "res://shaders/river_seed_nms.glsl"
@@ -41,7 +41,7 @@ func _river_max_iters(w: int, h: int, min_len: int) -> int:
 	return max(min_len, cap)
 
 func _ensure() -> bool:
-	var seed_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var seed_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_seed_shader,
 		_seed_pipeline,
@@ -51,10 +51,10 @@ func _ensure() -> bool:
 	_rd = seed_state.get("rd", null)
 	_seed_shader = seed_state.get("shader", RID())
 	_seed_pipeline = seed_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(seed_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(seed_state.get("ok", false)):
 		return false
 
-	var trace_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var trace_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_trace_shader,
 		_trace_pipeline,
@@ -63,10 +63,10 @@ func _ensure() -> bool:
 	)
 	_trace_shader = trace_state.get("shader", RID())
 	_trace_pipeline = trace_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(trace_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(trace_state.get("ok", false)):
 		return false
 
-	var clear_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var clear_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_clear_shader,
 		_clear_pipeline,
@@ -75,7 +75,7 @@ func _ensure() -> bool:
 	)
 	_clear_shader = clear_state.get("shader", RID())
 	_clear_pipeline = clear_state.get("pipeline", RID())
-	return VariantCasts.to_bool(clear_state.get("ok", false))
+	return VariantCastsUtil.to_bool(clear_state.get("ok", false))
 
 func _ensure_frontier_buffers(size: int) -> void:
 	if _buf_size == size and _seeds_buf.is_valid() and _front_a_buf.is_valid() and _front_b_buf.is_valid() and _active_flag_buf.is_valid():
@@ -137,7 +137,7 @@ func trace_rivers_gpu_buffers(
 		var z_clear := PackedByteArray()
 		z_clear.resize(pad_clear)
 		pc_c.append_array(z_clear)
-	if not ComputeShaderBase.validate_push_constant_size(pc_c, 16, "RiverCompute.clear"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc_c, 16, "RiverCompute.clear"):
 		return false
 	# Clear river output only when requested by caller (tile scheduler controls this).
 	if clear_output:
@@ -180,7 +180,7 @@ func trace_rivers_gpu_buffers(
 	if pad_seed > 0:
 		var z_seed := PackedByteArray(); z_seed.resize(pad_seed)
 		pc.append_array(z_seed)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 32, "RiverCompute.seed"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 32, "RiverCompute.seed"):
 		_rd.free_rid(u_set)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0)); var gy: int = int(ceil(float(h) / 16.0))
@@ -234,7 +234,7 @@ func trace_rivers_gpu_buffers(
 			var z_flag := PackedByteArray()
 			z_flag.resize(pad_flag)
 			pc_flag.append_array(z_flag)
-		if not ComputeShaderBase.validate_push_constant_size(pc_flag, 16, "RiverCompute.active_flag_clear"):
+		if not ComputeShaderBaseUtil.validate_push_constant_size(pc_flag, 16, "RiverCompute.active_flag_clear"):
 			_rd.free_rid(u_set_c)
 			_rd.free_rid(u_set)
 			return false
@@ -250,7 +250,7 @@ func trace_rivers_gpu_buffers(
 		if pad_trace > 0:
 			var z_trace := PackedByteArray(); z_trace.resize(pad_trace)
 			pc.append_array(z_trace)
-		if not ComputeShaderBase.validate_push_constant_size(pc, 16, "RiverCompute.trace"):
+		if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 16, "RiverCompute.trace"):
 			_rd.free_rid(u_set)
 			return false
 		var g1d := int(ceil(float(size) / 256.0))
@@ -274,7 +274,7 @@ func trace_rivers_gpu_buffers(
 		if pad_clear > 0:
 			var z_clear3 := PackedByteArray(); z_clear3.resize(pad_clear)
 			pc_c.append_array(z_clear3)
-		if not ComputeShaderBase.validate_push_constant_size(pc_c, 16, "RiverCompute.frontier_clear"):
+		if not ComputeShaderBaseUtil.validate_push_constant_size(pc_c, 16, "RiverCompute.frontier_clear"):
 			_rd.free_rid(u_set_c)
 			_rd.free_rid(u_set)
 			return false
@@ -303,7 +303,7 @@ func trace_rivers_gpu_buffers(
 func cleanup() -> void:
 	if _buf_mgr != null:
 		_buf_mgr.cleanup()
-	ComputeShaderBase.free_rids(_rd, [
+	ComputeShaderBaseUtil.free_rids(_rd, [
 		_seed_pipeline,
 		_seed_shader,
 		_trace_pipeline,

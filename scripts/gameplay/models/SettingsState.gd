@@ -1,6 +1,5 @@
 extends RefCounted
 class_name SettingsStateModel
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 var encounter_rate_multiplier: float = 1.0
 var auto_battle_enabled: bool = false

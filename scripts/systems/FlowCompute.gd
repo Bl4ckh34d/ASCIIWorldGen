@@ -1,8 +1,8 @@
 # File: res://scripts/systems/FlowCompute.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
+const ComputeShaderBaseUtil = preload("res://scripts/systems/ComputeShaderBase.gd")
 const GPUBufferManager = preload("res://scripts/systems/GPUBufferManager.gd")
 
 const FLOW_DIR_SHADER_PATH: String = "res://shaders/flow_dir.glsl"
@@ -31,7 +31,7 @@ func _init() -> void:
 	_owned_buffer_manager = GPUBufferManager.new()
 
 func _ensure() -> bool:
-	var dir_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var dir_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_dir_shader,
 		_dir_pipeline,
@@ -41,10 +41,10 @@ func _ensure() -> bool:
 	_rd = dir_state.get("rd", null)
 	_dir_shader = dir_state.get("shader", RID())
 	_dir_pipeline = dir_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(dir_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(dir_state.get("ok", false)):
 		return false
 
-	var push_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var push_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_push_shader,
 		_push_pipeline,
@@ -53,10 +53,10 @@ func _ensure() -> bool:
 	)
 	_push_shader = push_state.get("shader", RID())
 	_push_pipeline = push_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(push_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(push_state.get("ok", false)):
 		return false
 
-	var clear_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var clear_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_clear_shader,
 		_clear_pipeline,
@@ -65,10 +65,10 @@ func _ensure() -> bool:
 	)
 	_clear_shader = clear_state.get("shader", RID())
 	_clear_pipeline = clear_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(clear_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(clear_state.get("ok", false)):
 		return false
 
-	var copy_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var copy_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_copy_shader,
 		_copy_pipeline,
@@ -77,10 +77,10 @@ func _ensure() -> bool:
 	)
 	_copy_shader = copy_state.get("shader", RID())
 	_copy_pipeline = copy_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(copy_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(copy_state.get("ok", false)):
 		return false
 
-	var conv_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var conv_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_u32_to_f32_shader,
 		_u32_to_f32_pipeline,
@@ -89,11 +89,11 @@ func _ensure() -> bool:
 	)
 	_u32_to_f32_shader = conv_state.get("shader", RID())
 	_u32_to_f32_pipeline = conv_state.get("pipeline", RID())
-	if not VariantCasts.to_bool(conv_state.get("ok", false)):
+	if not VariantCastsUtil.to_bool(conv_state.get("ok", false)):
 		return false
 
 	# Optional compatibility pipeline (currently not used by compute_flow_gpu_buffers).
-	var acc_state: Dictionary = ComputeShaderBase.ensure_rd_and_pipeline(
+	var acc_state: Dictionary = ComputeShaderBaseUtil.ensure_rd_and_pipeline(
 		_rd,
 		_acc_shader,
 		_acc_pipeline,
@@ -118,7 +118,7 @@ func _dispatch_copy_u32(src: RID, dst: RID, count: int) -> bool:
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "FlowCompute.copy_u32"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 16, "FlowCompute.copy_u32"):
 		_rd.free_rid(u_set)
 		return false
 	var g1d: int = int(ceil(float(count) / 256.0))
@@ -144,7 +144,7 @@ func _dispatch_clear_u32(buf: RID, count: int) -> bool:
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "FlowCompute.clear_u32"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 16, "FlowCompute.clear_u32"):
 		_rd.free_rid(u_set)
 		return false
 	var g1d: int = int(ceil(float(count) / 256.0))
@@ -171,7 +171,7 @@ func _dispatch_u32_to_f32(src: RID, dst: RID, count: int) -> bool:
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 16, "FlowCompute.u32_to_f32"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 16, "FlowCompute.u32_to_f32"):
 		_rd.free_rid(u_set)
 		return false
 	var g1d: int = int(ceil(float(count) / 256.0))
@@ -212,7 +212,7 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 	if pad0 > 0:
 		var zeros0 := PackedByteArray(); zeros0.resize(pad0)
 		pc.append_array(zeros0)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 32, "FlowCompute.dir"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 32, "FlowCompute.dir"):
 		_rd.free_rid(u_set)
 		return false
 	var gx: int = int(ceil(float(w) / 16.0)); var gy: int = int(ceil(float(h) / 16.0))
@@ -259,7 +259,7 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 	if pad_p > 0:
 		var zeros_p := PackedByteArray(); zeros_p.resize(pad_p)
 		pc.append_array(zeros_p)
-	if not ComputeShaderBase.validate_push_constant_size(pc, 32, "FlowCompute.push"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 32, "FlowCompute.push"):
 		_rd.free_rid(u_set)
 		return false
 	var g1d: int = int(ceil(float(size) / 256.0))
@@ -293,7 +293,7 @@ func compute_flow_gpu_buffers(w: int, h: int, height_buf: RID, land_buf: RID, wr
 func cleanup() -> void:
 	if _owned_buffer_manager != null:
 		_owned_buffer_manager.cleanup()
-	ComputeShaderBase.free_rids(_rd, [
+	ComputeShaderBaseUtil.free_rids(_rd, [
 		_dir_pipeline, _dir_shader,
 		_acc_pipeline, _acc_shader,
 		_push_pipeline, _push_shader,
@@ -313,5 +313,3 @@ func cleanup() -> void:
 	_copy_shader = RID()
 	_u32_to_f32_pipeline = RID()
 	_u32_to_f32_shader = RID()
-
-

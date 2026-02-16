@@ -4,8 +4,6 @@ class_name PoliticsFromSettlements
 # v0: derive coarse state ownership from extracted settlements (cities as capitals).
 # Ownership is assigned at the province-grid level (not per world-tile conquest).
 
-const PoliticsStateModel = preload("res://scripts/gameplay/models/PoliticsState.gd")
-const SettlementStateModel = preload("res://scripts/gameplay/models/SettlementState.gd")
 
 static func _capitals_from_settlements(settlements: Dictionary) -> Array[Dictionary]:
 	var caps: Array[Dictionary] = []

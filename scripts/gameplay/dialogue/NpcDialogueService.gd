@@ -1,8 +1,6 @@
 extends RefCounted
 class_name NpcDialogueService
 
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
-
 # Dialogue scaffolding:
 # - Builds a deterministic context payload for future LLM providers.
 # - Returns local fallback lines for now (no network dependency).

@@ -1,6 +1,5 @@
 extends Node
 class_name RenderController
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 # GPU ASCII renderer lifecycle scaffold for refactor plan M4.
 

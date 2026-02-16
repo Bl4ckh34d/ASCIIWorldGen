@@ -1,9 +1,6 @@
 extends RefCounted
 class_name EconomySim
 
-const EconomyStateModel = preload("res://scripts/gameplay/models/EconomyState.gd")
-const CommodityCatalog = preload("res://scripts/gameplay/catalog/CommodityCatalog.gd")
-
 # Background daily economy tick.
 # This is a minimal deterministic "plumbing" pass to prove save/load + ticking.
 

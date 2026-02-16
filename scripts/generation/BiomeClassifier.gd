@@ -1,6 +1,6 @@
 # File: res://scripts/generation/BiomeClassifier.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 const BiomeRules = preload("res://scripts/systems/BiomeRules.gd")
 
@@ -112,7 +112,7 @@ func classify(
 	var lapse_c_per_km: float = float(params.get("lapse_c_per_km", 5.5))
 	var xscale: float = float(params.get("noise_x_scale", 1.0))
 	var freeze_t: float = float(params.get("freeze_temp_threshold", 0.15))
-	var smooth_enabled: bool = VariantCasts.to_bool(params.get("biome_smoothing_enabled", true))
+	var smooth_enabled: bool = VariantCastsUtil.to_bool(params.get("biome_smoothing_enabled", true))
 
 	var desert_field: PackedFloat32Array = params.get("desert_noise_field", PackedFloat32Array())
 	var ice_wiggle_field: PackedFloat32Array = params.get("ice_wiggle_field", PackedFloat32Array())

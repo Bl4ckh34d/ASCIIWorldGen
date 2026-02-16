@@ -1,6 +1,5 @@
 # File: res://scripts/core/JobSystem.gd
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 ## Thin wrapper intended to stripe work across rows; sequential for now.
 var worker_threads_enabled: bool = false

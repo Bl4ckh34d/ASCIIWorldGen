@@ -1,7 +1,6 @@
 # File: res://scripts/SettingsDialog.gd
 extends AcceptDialog
 class_name SettingsDialog
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
 signal apply_requested(patch: Dictionary)
 signal cancel_requested

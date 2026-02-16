@@ -1,8 +1,6 @@
 extends RefCounted
 class_name RegionalChunkGenerator
 
-const PoiRegistry = preload("res://scripts/gameplay/PoiRegistry.gd")
-const RegionalGenParams = preload("res://scripts/gameplay/RegionalGenParams.gd")
 
 enum Ground {
 	GRASS = 0,
@@ -26,6 +24,15 @@ enum Obj {
 const FLAG_BLOCKED: int = 1 << 0
 const FLAG_SHALLOW_WATER: int = 1 << 1
 const FLAG_DEEP_WATER: int = 1 << 2
+const _OCEAN_C: int = 1 << 0
+const _OCEAN_W: int = 1 << 1
+const _OCEAN_E: int = 1 << 2
+const _OCEAN_N: int = 1 << 3
+const _OCEAN_S: int = 1 << 4
+const _OCEAN_NW: int = 1 << 5
+const _OCEAN_NE: int = 1 << 6
+const _OCEAN_SW: int = 1 << 7
+const _OCEAN_SE: int = 1 << 8
 
 var world_seed_hash: int = 1
 var world_width: int = 1
@@ -38,6 +45,9 @@ var region_size: int = 96
 var blend_band_m: int = 8
 var border_warp_m: float = 2.0
 var wade_depth_m: int = 3
+# Prevent "neighbor takeover" on the first/last column of a world tile.
+# Keeping edge influence below 0.5 avoids mirrored double-rims at tile seams.
+var edge_neighbor_influence_max: float = 0.48
 
 var _world_period_x_m: int = 96
 var _world_radius_x_m: float = 1.0
@@ -47,6 +57,13 @@ var _noise_rugged: FastNoiseLite = FastNoiseLite.new()
 var _noise_veg: FastNoiseLite = FastNoiseLite.new()
 var _noise_rock: FastNoiseLite = FastNoiseLite.new()
 var _noise_border: FastNoiseLite = FastNoiseLite.new()
+var _biome_param_cache: Dictionary = {} # biome_id -> RegionalGenParams dictionary
+var _active_sample_cache: bool = false
+var _active_blend_cache: Dictionary = {} # Vector2i(global_x, global_y) -> blended params
+var _active_elev_cache: Dictionary = {} # Vector2i(global_x, global_y) -> float elevation
+var _active_noise_x_cache: Dictionary = {} # wrapped_global_x -> Vector2(rx, rz)
+var _macro_ocean_mask_cache: Dictionary = {} # Vector2i(world_tile_x, world_tile_y) -> bitmask
+var _poi_grid_step: int = 12
 
 func configure(seed_hash: int, world_w: int, world_h: int, biome_ids: PackedInt32Array, region_size_m: int = 96) -> void:
 	world_seed_hash = seed_hash if seed_hash != 0 else 1
@@ -58,22 +75,29 @@ func configure(seed_hash: int, world_w: int, world_h: int, biome_ids: PackedInt3
 	region_size = max(16, region_size_m)
 	_world_period_x_m = world_width * region_size
 	_world_radius_x_m = float(_world_period_x_m) / TAU
+	_biome_param_cache.clear()
+	_macro_ocean_mask_cache.clear()
+	_poi_grid_step = max(1, int(PoiRegistry.POI_GRID_STEP))
 	_seed_noises()
 
 func set_biome_overrides(overrides: Dictionary) -> void:
 	# Optional: used to patch snapshot mismatches at runtime (e.g., click-selected biome).
 	if typeof(overrides) != TYPE_DICTIONARY or overrides.is_empty():
 		biome_overrides.clear()
+		_macro_ocean_mask_cache.clear()
 		return
 	biome_overrides = overrides.duplicate(true)
+	_macro_ocean_mask_cache.clear()
 
 func set_biome_transition_overrides(overrides: Dictionary) -> void:
 	# Optional gradual transitions keyed by world tile.
 	# Entry schema: { from_biome: int, to_biome: int, progress: float 0..1 }.
 	if typeof(overrides) != TYPE_DICTIONARY or overrides.is_empty():
 		biome_transition_overrides.clear()
+		_macro_ocean_mask_cache.clear()
 		return
 	biome_transition_overrides = overrides.duplicate(true)
+	_macro_ocean_mask_cache.clear()
 
 func _seed_noises() -> void:
 	_noise_elev.seed = world_seed_hash ^ 0x1A2B3C
@@ -126,6 +150,10 @@ func generate_chunk(chunk_x: int, chunk_y: int, chunk_size: int) -> Dictionary:
 	flags.fill(0)
 	heights.fill(0.0)
 	biomes.fill(7)
+	_active_sample_cache = true
+	_active_blend_cache.clear()
+	_active_elev_cache.clear()
+	_active_noise_x_cache.clear()
 
 	for y in range(cs):
 		for x in range(cs):
@@ -146,6 +174,10 @@ func generate_chunk(chunk_x: int, chunk_y: int, chunk_size: int) -> Dictionary:
 					"type": poi_type,
 					"id": String(cell.get("poi_id", "")),
 				}
+	_active_sample_cache = false
+	_active_blend_cache.clear()
+	_active_elev_cache.clear()
+	_active_noise_x_cache.clear()
 	return {
 		"chunk_size": cs,
 		"ground": ground,
@@ -161,7 +193,7 @@ func sample_cell(gx: int, gy: int) -> Dictionary:
 	var y: int = _clamp_y(gy)
 
 	# Biome blending (noise-pattern border).
-	var blend: Dictionary = _blend_params_at(x, y)
+	var blend: Dictionary = _blend_params_cached(x, y)
 	var surface_biome: int = int(blend.get("_biome_choice", 7))
 	var wateriness: float = float(blend.get("water", 0.0))
 	var sandiness: float = float(blend.get("sand", 0.0))
@@ -172,7 +204,7 @@ func sample_cell(gx: int, gy: int) -> Dictionary:
 	var rocks: float = float(blend.get("rocks", 0.0))
 	var roughness: float = float(blend.get("roughness", 0.0))
 
-	var elev: float = _sample_elevation(x, y, blend)
+	var elev: float = _sample_elevation_cached(x, y, blend)
 	var height_raw: float = elev
 
 	var out_ground: int = Ground.GRASS
@@ -229,13 +261,15 @@ func sample_cell(gx: int, gy: int) -> Dictionary:
 				out_obj = Obj.BOULDER
 
 		# Slope/cliff blocking (steep gradients are impassable).
-		var slope: float = _estimate_slope(x, y, blend, elev)
+		var slope: float = _estimate_slope(x, y, elev)
 		var slope_threshold: float = lerp(0.18, 0.10, clamp(roughness, 0.0, 1.0))
 		if slope >= slope_threshold:
 			out_flags |= FLAG_BLOCKED
 
 	# Ensure deterministic POIs remain reachable (override terrain at POI origin cell).
-	var poi: Dictionary = _poi_at_global(x, y)
+	var poi: Dictionary = {}
+	if posmod(x, _poi_grid_step) == 0 and posmod(y, _poi_grid_step) == 0:
+		poi = _poi_at_global(x, y)
 	if not poi.is_empty():
 		out_poi_type = String(poi.get("type", ""))
 		out_poi_id = String(poi.get("id", ""))
@@ -259,8 +293,9 @@ func sample_cell(gx: int, gy: int) -> Dictionary:
 	}
 
 func _poi_at_global(gx: int, gy: int) -> Dictionary:
-	var wx: int = int(gx / region_size)
-	var wy: int = int(gy / region_size)
+	var rs: float = float(max(1, region_size))
+	var wx: int = int(floor(float(gx) / rs))
+	var wy: int = int(floor(float(gy) / rs))
 	var lx: int = gx - wx * region_size
 	var ly: int = gy - wy * region_size
 	wx = posmod(wx, world_width)
@@ -291,10 +326,10 @@ func _resolved_world_biome_at_sample(wx: int, wy: int, gx_sample: int, gy_sample
 	var vv: Variant = biome_transition_overrides.get(key, {})
 	if typeof(vv) != TYPE_DICTIONARY:
 		return base_id
-	var tr: Dictionary = vv as Dictionary
-	var from_id: int = int(tr.get("from_biome", base_id))
-	var to_id: int = int(tr.get("to_biome", base_id))
-	var progress: float = clamp(float(tr.get("progress", 1.0)), 0.0, 1.0)
+	var tr_data: Dictionary = vv as Dictionary
+	var from_id: int = int(tr_data.get("from_biome", base_id))
+	var to_id: int = int(tr_data.get("to_biome", base_id))
+	var progress: float = clamp(float(tr_data.get("progress", 1.0)), 0.0, 1.0)
 	if progress <= 0.0001:
 		return from_id
 	if progress >= 0.9999 or from_id == to_id:
@@ -308,8 +343,9 @@ func _resolved_world_biome_at_sample(wx: int, wy: int, gx_sample: int, gy_sample
 	return to_id if patch <= threshold else from_id
 
 func _blend_params_at(gx: int, gy: int) -> Dictionary:
-	var wx: int = int(gx / region_size)
-	var wy: int = int(gy / region_size)
+	var rs: float = float(max(1, region_size))
+	var wx: int = int(floor(float(gx) / rs))
+	var wy: int = int(floor(float(gy) / rs))
 	var lx: int = gx - wx * region_size
 	var ly: int = gy - wy * region_size
 
@@ -321,10 +357,11 @@ func _blend_params_at(gx: int, gy: int) -> Dictionary:
 	lx_f = clamp(lx_f + (_noise_border_periodic(gx, gy) * border_warp_m), 0.0, float(region_size - 1))
 	ly_f = clamp(ly_f + (_noise_border_periodic(gx + 97, gy - 53) * border_warp_m), 0.0, float(region_size - 1))
 
-	var x_w: float = _smooth01(clamp((band - lx_f) / band, 0.0, 1.0))
-	var x_e: float = _smooth01(clamp((band - (float(region_size - 1) - lx_f)) / band, 0.0, 1.0))
-	var y_n: float = _smooth01(clamp((band - ly_f) / band, 0.0, 1.0))
-	var y_s: float = _smooth01(clamp((band - (float(region_size - 1) - ly_f)) / band, 0.0, 1.0))
+	var edge_cap: float = clamp(edge_neighbor_influence_max, 0.0, 0.4999)
+	var x_w: float = _smooth01(clamp((band - lx_f) / band, 0.0, 1.0)) * edge_cap
+	var x_e: float = _smooth01(clamp((band - (float(region_size - 1) - lx_f)) / band, 0.0, 1.0)) * edge_cap
+	var y_n: float = _smooth01(clamp((band - ly_f) / band, 0.0, 1.0)) * edge_cap
+	var y_s: float = _smooth01(clamp((band - (float(region_size - 1) - ly_f)) / band, 0.0, 1.0)) * edge_cap
 
 	var x_c: float = clamp(1.0 - x_w - x_e, 0.0, 1.0)
 	var y_c: float = clamp(1.0 - y_n - y_s, 0.0, 1.0)
@@ -347,7 +384,7 @@ func _blend_params_at(gx: int, gy: int) -> Dictionary:
 		sum_w += float(weights[k])
 	if sum_w <= 0.0001:
 		var base_id: int = _resolved_world_biome_at_sample(wx, wy, gx, gy)
-		var p0: Dictionary = RegionalGenParams.params_for_biome(base_id)
+		var p0: Dictionary = _params_for_biome_cached(base_id).duplicate(true)
 		p0["_biome_choice"] = base_id
 		p0["_biome_dominant"] = base_id
 		return p0
@@ -358,10 +395,15 @@ func _blend_params_at(gx: int, gy: int) -> Dictionary:
 			continue
 		var ox: int = int(k.x)
 		var oy: int = int(k.y)
-		var bid: int = _resolved_world_biome_at_sample(wx + ox, wy + oy, gx + ox * region_size, gy + oy * region_size)
-		var p: Dictionary = RegionalGenParams.params_for_biome(bid)
+		# Evaluate all candidate macro tiles at the same global sample point.
+		# Using shifted sample points causes mirrored seam stripes at tile borders.
+		var bid: int = _resolved_world_biome_at_sample(wx + ox, wy + oy, gx, gy)
+		var p: Dictionary = _params_for_biome_cached(bid)
 		for key in p.keys():
 			out[key] = float(out.get(key, 0.0)) + float(p[key]) * w
+	var coast_influence: float = _coastal_ocean_influence(wx, wy, gx, gy, lx_f, ly_f)
+	if coast_influence > 0.00001:
+		_apply_coastal_bias(out, coast_influence, gx, gy)
 
 	# Also expose a deterministic biome choice for rendering (patchy border blend).
 	var order := [
@@ -381,7 +423,7 @@ func _blend_params_at(gx: int, gy: int) -> Dictionary:
 		var ww: float = float(weights.get(off, 0.0)) / sum_w
 		if ww > dominant_w:
 			dominant_w = ww
-			dominant_id = _resolved_world_biome_at_sample(wx + off.x, wy + off.y, gx + off.x * region_size, gy + off.y * region_size)
+			dominant_id = _resolved_world_biome_at_sample(wx + off.x, wy + off.y, gx, gy)
 	var r: float = clamp((_noise_border_periodic(gx + 191, gy + 73) * 0.5 + 0.5), 0.0, 0.99999)
 	var acc: float = 0.0
 	var chosen_id: int = dominant_id
@@ -391,7 +433,7 @@ func _blend_params_at(gx: int, gy: int) -> Dictionary:
 			continue
 		acc += ww2
 		if r <= acc:
-			chosen_id = _resolved_world_biome_at_sample(wx + off2.x, wy + off2.y, gx + off2.x * region_size, gy + off2.y * region_size)
+			chosen_id = _resolved_world_biome_at_sample(wx + off2.x, wy + off2.y, gx, gy)
 			break
 	out["_biome_choice"] = chosen_id
 	out["_biome_dominant"] = dominant_id
@@ -407,11 +449,11 @@ func _sample_elevation(gx: int, gy: int, blend: Dictionary) -> float:
 	var elev: float = base_bias + (n0 - 0.5) * amp + (n1 - 0.5) * amp * (0.35 + rough * 0.85)
 	return clamp(elev, 0.0, 1.0)
 
-func _estimate_slope(gx: int, gy: int, blend: Dictionary, elev_here: float) -> float:
-	var e_r: float = _sample_elevation(_wrap_x(gx + 1), gy, _blend_params_at(_wrap_x(gx + 1), gy))
-	var e_l: float = _sample_elevation(_wrap_x(gx - 1), gy, _blend_params_at(_wrap_x(gx - 1), gy))
-	var e_d: float = _sample_elevation(gx, _clamp_y(gy + 1), _blend_params_at(gx, _clamp_y(gy + 1)))
-	var e_u: float = _sample_elevation(gx, _clamp_y(gy - 1), _blend_params_at(gx, _clamp_y(gy - 1)))
+func _estimate_slope(gx: int, gy: int, elev_here: float) -> float:
+	var e_r: float = _sample_elevation_cached(_wrap_x(gx + 1), gy)
+	var e_l: float = _sample_elevation_cached(_wrap_x(gx - 1), gy)
+	var e_d: float = _sample_elevation_cached(gx, _clamp_y(gy + 1))
+	var e_u: float = _sample_elevation_cached(gx, _clamp_y(gy - 1))
 	var s: float = 0.0
 	s = max(s, abs(elev_here - e_r))
 	s = max(s, abs(elev_here - e_l))
@@ -429,38 +471,171 @@ func _clamp_y(gy: int) -> int:
 	return clamp(gy, 0, max_y)
 
 func _noise01_elev(gx: int, gy: int) -> float:
-	var theta: float = TAU * (float(_wrap_x(gx)) / max(1.0, float(_world_period_x_m)))
-	var rx: float = cos(theta) * _world_radius_x_m
-	var rz: float = sin(theta) * _world_radius_x_m
-	return _noise_elev.get_noise_3d(rx, float(gy), rz) * 0.5 + 0.5
+	var nx: Vector2 = _noise_coords_for_x(gx)
+	return _noise_elev.get_noise_3d(float(nx.x), float(gy), float(nx.y)) * 0.5 + 0.5
 
 func _noise01_rugged(gx: int, gy: int) -> float:
-	var theta: float = TAU * (float(_wrap_x(gx)) / max(1.0, float(_world_period_x_m)))
-	var rx: float = cos(theta) * _world_radius_x_m
-	var rz: float = sin(theta) * _world_radius_x_m
-	return _noise_rugged.get_noise_3d(rx, float(gy), rz) * 0.5 + 0.5
+	var nx: Vector2 = _noise_coords_for_x(gx)
+	return _noise_rugged.get_noise_3d(float(nx.x), float(gy), float(nx.y)) * 0.5 + 0.5
 
 func _noise01_veg(gx: int, gy: int) -> float:
-	var theta: float = TAU * (float(_wrap_x(gx)) / max(1.0, float(_world_period_x_m)))
-	var rx: float = cos(theta) * _world_radius_x_m
-	var rz: float = sin(theta) * _world_radius_x_m
-	return _noise_veg.get_noise_3d(rx, float(gy), rz) * 0.5 + 0.5
+	var nx: Vector2 = _noise_coords_for_x(gx)
+	return _noise_veg.get_noise_3d(float(nx.x), float(gy), float(nx.y)) * 0.5 + 0.5
 
 func _noise01_rock(gx: int, gy: int) -> float:
-	var theta: float = TAU * (float(_wrap_x(gx)) / max(1.0, float(_world_period_x_m)))
-	var rx: float = cos(theta) * _world_radius_x_m
-	var rz: float = sin(theta) * _world_radius_x_m
-	return _noise_rock.get_noise_3d(rx, float(gy), rz) * 0.5 + 0.5
+	var nx: Vector2 = _noise_coords_for_x(gx)
+	return _noise_rock.get_noise_3d(float(nx.x), float(gy), float(nx.y)) * 0.5 + 0.5
 
 func _noise_border_periodic(gx: int, gy: int) -> float:
 	# Periodic in X using the same cylindrical mapping as other fields.
 	# Returns -1..1
-	var theta: float = TAU * (float(_wrap_x(gx)) / max(1.0, float(_world_period_x_m)))
-	var rx: float = cos(theta) * _world_radius_x_m
-	var rz: float = sin(theta) * _world_radius_x_m
-	return _noise_border.get_noise_3d(rx, float(gy), rz)
+	var nx: Vector2 = _noise_coords_for_x(gx)
+	return _noise_border.get_noise_3d(float(nx.x), float(gy), float(nx.y))
 
 func _smooth01(t: float) -> float:
 	# Smoothstep(0..1)
 	var x: float = clamp(t, 0.0, 1.0)
 	return x * x * (3.0 - 2.0 * x)
+
+func _params_for_biome_cached(biome_id: int) -> Dictionary:
+	var bid: int = int(biome_id)
+	var vv: Variant = _biome_param_cache.get(bid, null)
+	if typeof(vv) == TYPE_DICTIONARY:
+		return vv as Dictionary
+	var p: Dictionary = RegionalGenParams.params_for_biome(bid)
+	_biome_param_cache[bid] = p
+	return p
+
+func _blend_params_cached(gx: int, gy: int) -> Dictionary:
+	gx = _wrap_x(gx)
+	gy = _clamp_y(gy)
+	var key := Vector2i(gx, gy)
+	if _active_sample_cache:
+		var vv: Variant = _active_blend_cache.get(key, null)
+		if typeof(vv) == TYPE_DICTIONARY:
+			return vv as Dictionary
+	var blend: Dictionary = _blend_params_at(gx, gy)
+	if _active_sample_cache:
+		_active_blend_cache[key] = blend
+	return blend
+
+func _sample_elevation_cached(gx: int, gy: int, blend: Dictionary = {}) -> float:
+	gx = _wrap_x(gx)
+	gy = _clamp_y(gy)
+	var key := Vector2i(gx, gy)
+	if _active_sample_cache and _active_elev_cache.has(key):
+		return float(_active_elev_cache.get(key, 0.0))
+	var blend_d: Dictionary = blend
+	if blend_d.is_empty():
+		blend_d = _blend_params_cached(gx, gy)
+	var elev: float = _sample_elevation(gx, gy, blend_d)
+	if _active_sample_cache:
+		_active_elev_cache[key] = elev
+	return elev
+
+func _noise_coords_for_x(gx: int) -> Vector2:
+	var xw: int = _wrap_x(gx)
+	if _active_sample_cache and _active_noise_x_cache.has(xw):
+		var cv: Variant = _active_noise_x_cache.get(xw, Vector2.ZERO)
+		if cv is Vector2:
+			return cv as Vector2
+	var theta: float = TAU * (float(xw) / max(1.0, float(_world_period_x_m)))
+	var out := Vector2(cos(theta) * _world_radius_x_m, sin(theta) * _world_radius_x_m)
+	if _active_sample_cache:
+		_active_noise_x_cache[xw] = out
+	return out
+
+func _is_macro_ocean_biome(biome_id: int) -> bool:
+	return biome_id == 0 or biome_id == 1
+
+func _macro_ocean_mask(wx: int, wy: int) -> int:
+	var tx: int = posmod(wx, world_width)
+	var ty: int = clamp(wy, 0, world_height - 1)
+	var key := Vector2i(tx, ty)
+	if _macro_ocean_mask_cache.has(key):
+		return int(_macro_ocean_mask_cache.get(key, 0))
+	var mask: int = 0
+	if _is_macro_ocean_biome(get_world_biome_id(tx, ty)):
+		mask |= _OCEAN_C
+	if _is_macro_ocean_biome(get_world_biome_id(tx - 1, ty)):
+		mask |= _OCEAN_W
+	if _is_macro_ocean_biome(get_world_biome_id(tx + 1, ty)):
+		mask |= _OCEAN_E
+	if _is_macro_ocean_biome(get_world_biome_id(tx, ty - 1)):
+		mask |= _OCEAN_N
+	if _is_macro_ocean_biome(get_world_biome_id(tx, ty + 1)):
+		mask |= _OCEAN_S
+	if _is_macro_ocean_biome(get_world_biome_id(tx - 1, ty - 1)):
+		mask |= _OCEAN_NW
+	if _is_macro_ocean_biome(get_world_biome_id(tx + 1, ty - 1)):
+		mask |= _OCEAN_NE
+	if _is_macro_ocean_biome(get_world_biome_id(tx - 1, ty + 1)):
+		mask |= _OCEAN_SW
+	if _is_macro_ocean_biome(get_world_biome_id(tx + 1, ty + 1)):
+		mask |= _OCEAN_SE
+	_macro_ocean_mask_cache[key] = mask
+	return mask
+
+func _coast_falloff(distance_norm: float, range_norm: float) -> float:
+	if range_norm <= 0.0001:
+		return 0.0
+	return _smooth01(clamp((range_norm - distance_norm) / range_norm, 0.0, 1.0))
+
+func _coastal_ocean_influence(wx: int, wy: int, gx: int, gy: int, lx_f: float, ly_f: float) -> float:
+	var mask: int = _macro_ocean_mask(wx, wy)
+	if (mask & _OCEAN_C) != 0:
+		return 1.0
+	if (mask & (_OCEAN_W | _OCEAN_E | _OCEAN_N | _OCEAN_S | _OCEAN_NW | _OCEAN_NE | _OCEAN_SW | _OCEAN_SE)) == 0:
+		return 0.0
+	var denom: float = float(max(1, region_size - 1))
+	var u: float = clamp(lx_f / denom, 0.0, 1.0)
+	var v: float = clamp(ly_f / denom, 0.0, 1.0)
+	# Light domain warp to avoid axis-aligned coast pressure.
+	u = clamp(u + _noise_border_periodic(gx + 131, gy - 89) * 0.08, 0.0, 1.0)
+	v = clamp(v + _noise_border_periodic(gx - 63, gy + 147) * 0.08, 0.0, 1.0)
+
+	var range_card: float = 0.62
+	var range_corner: float = 0.82
+
+	var card: float = 0.0
+	if (mask & _OCEAN_W) != 0:
+		card = max(card, _coast_falloff(u, range_card))
+	if (mask & _OCEAN_E) != 0:
+		card = max(card, _coast_falloff(1.0 - u, range_card))
+	if (mask & _OCEAN_N) != 0:
+		card = max(card, _coast_falloff(v, range_card))
+	if (mask & _OCEAN_S) != 0:
+		card = max(card, _coast_falloff(1.0 - v, range_card))
+
+	var corner: float = 0.0
+	if (mask & _OCEAN_NW) != 0:
+		corner = max(corner, _coast_falloff(Vector2(u, v).length(), range_corner))
+	if (mask & _OCEAN_NE) != 0:
+		corner = max(corner, _coast_falloff(Vector2(1.0 - u, v).length(), range_corner))
+	if (mask & _OCEAN_SW) != 0:
+		corner = max(corner, _coast_falloff(Vector2(u, 1.0 - v).length(), range_corner))
+	if (mask & _OCEAN_SE) != 0:
+		corner = max(corner, _coast_falloff(Vector2(1.0 - u, 1.0 - v).length(), range_corner))
+	# If two cardinal ocean neighbors meet at a corner, synthesize a soft radial cut
+	# even when the diagonal tile is not ocean. This avoids blocky L-corners.
+	if (mask & _OCEAN_W) != 0 and (mask & _OCEAN_N) != 0:
+		corner = max(corner, _coast_falloff(Vector2(u, v).length(), range_corner * 0.90) * 0.82)
+	if (mask & _OCEAN_E) != 0 and (mask & _OCEAN_N) != 0:
+		corner = max(corner, _coast_falloff(Vector2(1.0 - u, v).length(), range_corner * 0.90) * 0.82)
+	if (mask & _OCEAN_W) != 0 and (mask & _OCEAN_S) != 0:
+		corner = max(corner, _coast_falloff(Vector2(u, 1.0 - v).length(), range_corner * 0.90) * 0.82)
+	if (mask & _OCEAN_E) != 0 and (mask & _OCEAN_S) != 0:
+		corner = max(corner, _coast_falloff(Vector2(1.0 - u, 1.0 - v).length(), range_corner * 0.90) * 0.82)
+
+	return clamp(max(card, corner) + card * 0.10, 0.0, 1.0)
+
+func _apply_coastal_bias(out: Dictionary, coast_influence: float, gx: int, gy: int) -> void:
+	var n0: float = clamp(_noise_border_periodic(gx + 211, gy - 157) * 0.5 + 0.5, 0.0, 1.0)
+	var shaped: float = clamp(coast_influence + (n0 - 0.5) * 0.24, 0.0, 1.0)
+	var coast_push: float = _smooth01(clamp((shaped - 0.16) / 0.78, 0.0, 1.0))
+	var water_base: float = float(out.get("water", 0.0))
+	out["water"] = clamp(max(water_base, water_base * 0.50 + coast_push * 0.94), 0.0, 1.0)
+	var sand_base: float = float(out.get("sand", 0.0))
+	var shore_band: float = _smooth01(clamp((shaped - 0.10) / 0.42, 0.0, 1.0))
+	shore_band *= 1.0 - _smooth01(clamp((shaped - 0.66) / 0.28, 0.0, 1.0))
+	out["sand"] = clamp(max(sand_base, sand_base * 0.72 + shore_band * 0.48), 0.0, 1.0)

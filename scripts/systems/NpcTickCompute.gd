@@ -1,7 +1,5 @@
 extends RefCounted
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
 
-const ComputeShaderBase = preload("res://scripts/systems/ComputeShaderBase.gd")
 const GPUBufferHelper = preload("res://scripts/systems/GPUBufferHelper.gd")
 
 var _rd: RenderingDevice = null

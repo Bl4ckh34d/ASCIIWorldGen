@@ -48,9 +48,9 @@ static func extract_settlements(
 	var size: int = w * h
 	if size <= 0 or pop.size() != size:
 		return []
-	var seed: int = int(world_seed_hash)
-	if seed == 0:
-		seed = 1
+	var seed_value: int = int(world_seed_hash)
+	if seed_value == 0:
+		seed_value = 1
 
 	# Gather local maxima above threshold.
 	var candidates: Array[Dictionary] = []
@@ -65,7 +65,7 @@ static func extract_settlements(
 			var level: String = _level_for_pop(p)
 			if level.is_empty():
 				continue
-			var noise: float = float(abs(int(("%d|%d|%d" % [seed, x, y]).hash())) % 10000) / 10000.0
+			var noise: float = float(abs(int(("%d|%d|%d" % [seed_value, x, y]).hash())) % 10000) / 10000.0
 			candidates.append({
 				"x": x,
 				"y": y,
@@ -119,4 +119,5 @@ static func extract_settlements(
 			"level": level,
 		})
 	return out
+
 

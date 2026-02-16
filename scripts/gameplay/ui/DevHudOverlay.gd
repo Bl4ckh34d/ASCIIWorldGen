@@ -95,12 +95,18 @@ func _refresh_text() -> void:
 					var misses: int = int(rs.get("cache_misses_total", 0))
 					var generated_total: int = int(rs.get("chunks_generated_total", 0))
 					var generated_prefetch: int = int(rs.get("chunks_generated_last_prefetch", -1))
+					var requested_prefetch: int = int(rs.get("chunks_requested_last_prefetch", -1))
 					var lookups: int = hits + misses
 					var hit_pct: float = (100.0 * float(hits) / float(lookups)) if lookups > 0 else 0.0
 					lines.append("Regional cache: %d/%d chunks (%dm)" % [cached, max_chunks, chunk_size])
 					lines.append("Regional cache hit: %.1f%% (%d/%d) | generated: %d" % [hit_pct, hits, lookups, generated_total])
 					if generated_prefetch >= 0:
-						lines.append("Regional prefetch generated (last): %d" % generated_prefetch)
+						lines.append("Regional prefetch: %d/%d generated (%.3f ms last | %.3f ms avg)" % [
+							generated_prefetch,
+							max(0, requested_prefetch),
+							float(rs.get("prefetch_ms_last", 0.0)),
+							float(rs.get("prefetch_ms_avg", 0.0)),
+						])
 					var redraw_mode: String = String(rs.get("redraw_mode", ""))
 					if not redraw_mode.is_empty():
 						lines.append("Regional redraw: %s dx:%d dy:%d %.3f ms | fresh:%d reused:%d" % [
@@ -124,6 +130,21 @@ func _refresh_text() -> void:
 							float(rs.get("redraw_p95_ms", 0.0)),
 							float(rs.get("redraw_p99_ms", 0.0)),
 							redraw_samples,
+						])
+					var chunk_gen_avg_ms: float = float(rs.get("chunk_gen_ms_avg", 0.0))
+					if chunk_gen_avg_ms > 0.0:
+						lines.append("Regional chunk gen avg/max: %.3f / %.3f ms | evicted: %d" % [
+							chunk_gen_avg_ms,
+							float(rs.get("chunk_gen_ms_max", 0.0)),
+							int(rs.get("chunks_evicted_total", 0)),
+						])
+					var seam_checks: int = int(rs.get("seam_checks_total", 0))
+					if seam_checks > 0:
+						lines.append("Regional seams step avg/max: %.4f / %.4f | anomalies: %.2f%% (%d)" % [
+							float(rs.get("seam_step_avg", 0.0)),
+							float(rs.get("seam_step_max", 0.0)),
+							float(rs.get("seam_anomaly_ratio", 0.0)) * 100.0,
+							seam_checks,
 						])
 					lines.append("Regional center: tile(%d,%d) local(%d,%d)" % [
 						int(rs.get("world_x", -1)),

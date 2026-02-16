@@ -144,7 +144,9 @@ func _update_data_texture_2(
 			var is_land = is_land_data[i] if i < is_land_data.size() else 0
 			var is_beach = beach_mask[i] if i < beach_mask.size() else 0
 			var surface_id: int = biome_id
-			if use_bedrock_view and is_land != 0:
+			# Keep gameplay/render markers (>=200) stable in all views.
+			var is_marker: bool = biome_id >= 200
+			if use_bedrock_view and is_land != 0 and not is_marker:
 				surface_id = rock_id
 			
 			# Get character index for this cell

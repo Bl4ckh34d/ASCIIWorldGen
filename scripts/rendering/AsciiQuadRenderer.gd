@@ -1,7 +1,7 @@
 # File: res://scripts/rendering/AsciiQuadRenderer.gd
 extends Control
 class_name AsciiQuadRenderer
-const VariantCasts = preload("res://scripts/core/VariantCasts.gd")
+const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
 
 # GPU-instanced quad renderer for ASCII map
 # Replaces RichTextLabel with high-performance GPU rendering
@@ -500,7 +500,7 @@ func set_solar_params(day_of_year: float, time_of_day: float) -> void:
 		cloud_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
 
 func set_fixed_lonlat(enabled: bool, lon_rad: float, phi_rad: float) -> void:
-	_use_fixed_lonlat = VariantCasts.to_bool(enabled)
+	_use_fixed_lonlat = VariantCastsUtil.to_bool(enabled)
 	_fixed_lon = float(lon_rad)
 	_fixed_phi = float(phi_rad)
 	if quad_material and quad_material is ShaderMaterial:
