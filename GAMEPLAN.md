@@ -134,6 +134,7 @@ Locked decisions (2026-02-09):
     - Deterministic biome-aware ASCII terrain generation.
     - Player movement and seamless cross-tile traversal (X wrap, Y clamp).
     - Incremental redraw path for movement (edge-only cell re-sampling over cached field buffers), with partial GPU edge uploads in `GpuMapView`, live F3 HUD redraw/upload percentiles, and perf harness (`tools_regional_redraw_perf.gd`).
+    - Player marker now renders through the GPU biome marker pipeline (`220`) instead of a scene overlay.
     - Seeded POI placement + entry to interior scene.
     - Seeded random encounter entry to battle scene.
   - Battle prototype:
@@ -142,6 +143,8 @@ Locked decisions (2026-02-09):
     - Game Over on defeat.
   - Interior prototype:
     - Walkable local map with return path to regional map.
+    - Player + NPC markers now render via biome marker IDs (`220`, `218/219/221/222`) in the GPU field path (no local ColorRect marker overlays).
+    - Local/interior map now enables cloud/shadow dynamic layers through the same GPU pipeline as world/regional maps.
     - Dungeon boss battle trigger and persistent POI instance state (boss defeated + main chest opened).
   - Map overlay + fast travel scaffold:
     - `M` opens a world-map overlay from gameplay scenes.
@@ -164,7 +167,7 @@ Locked decisions (2026-02-09):
     - Tabbed menu overlay (`Overview`, `Party`, `Characters`, `Stats`, `Quests`, `Settings`) wired to live data + save/load/settings apply.
       - Characters tab: per-member slot inventory (Valheim-like), HP/MP bars, right-click Use/Equip/Drop, drag & drop between slots.
 - Pending/Next:
-  - Replace prototype ASCII local/regional rendering with full art/render layer.
+  - Continue render-layer polish (palette tuning/material variety); optional sprite/tile art pass later without regressing GPU-first pipeline.
   - Continue regional continuity/perf tuning (generation seams are scaffolded; tuning remains).
   - Expand civilization epoch effects from metadata into gameplay consequences (economy/politics/NPC behavior modifiers).
   - Deepen time/day-night effects (baseline hooks exist; expand tables and balancing).

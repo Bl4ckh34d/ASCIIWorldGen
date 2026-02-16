@@ -257,6 +257,7 @@ void fragment() {
     // Convert normalized values back to indices
     float biome_id = biome_id_norm * 255.0;
     float char_index = char_index_norm * 255.0;
+    bool is_unknown_marker = abs(biome_id - 254.0) < 0.5;
     
     // Robustness: in GPU-only mode, if packed land-mask texture is missing/stale,
     // infer land from relief so terrain does not disappear into full-ocean rendering.
@@ -281,7 +282,10 @@ void fragment() {
             out_char_index = CHAR_IDX_HASH;
         }
     } else {
-        if (!bedrock_mode && beach_flag > 0.5) {
+        if (is_unknown_marker) {
+            base_color = vec3(0.0);
+            out_char_index = 0.0;
+        } else if (!bedrock_mode && beach_flag > 0.5) {
             base_color = BEACH_COLOR;
         } else {
             base_color = sample_biome_color(biome_id);
@@ -316,7 +320,7 @@ void fragment() {
         out_char_index = CHAR_IDX_HASH;
     }
 
-    if (is_land_tile && !bedrock_mode) {
+    if (is_land_tile && !bedrock_mode && !is_unknown_marker) {
         if (temperature > 0.7) {
             base_color = mix(base_color, base_color * vec3(1.2, 0.9, 0.7), 0.15);
         } else if (temperature < 0.3) {
@@ -405,7 +409,7 @@ void fragment() {
         glint_add = clamp(glint, 0.0, 0.62);
     }
 
-    if (cloud_cov > 0.0) {
+    if (cloud_cov > 0.0 && !is_unknown_marker) {
         // Suppress relief-scale ground contrast under cloud cover so terrain
         // shadows don't visually leak through semi-transparent clouds.
         float sky_day = smoothstep(-0.16, 0.58, sun_dot);
@@ -436,7 +440,7 @@ void fragment() {
     }
 
     // Civilization overlay (worldgen debug): subtle tint + boundary outline around human presence.
-    if (use_society_overlay != 0) {
+    if (use_society_overlay != 0 && !is_unknown_marker) {
         vec4 soc = _society_at(world_cell);
         float human = clamp(soc.r, 0.0, 1.0);
         float wild = clamp(soc.g, 0.0, 1.0);

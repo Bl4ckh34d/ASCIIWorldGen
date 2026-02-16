@@ -21,6 +21,7 @@ const RENDER_H: int = VIEW_H + VIEW_PAD * 2
 
 const MOVE_SPEED_CELLS_PER_SEC: float = 5.0
 const MOVE_EPS: float = 0.0001
+const MARKER_PLAYER: int = 220
 
 @onready var header_label: Label = %HeaderLabel
 @onready var gpu_map: Control = %GpuMap
@@ -45,8 +46,6 @@ var _location_biome_override_id: int = -1
 var _chunk_gen: RegionalChunkGenerator = null
 var _chunk_cache: RegionalChunkCache = null
 var _gpu_view: Object = null
-var _player_marker: ColorRect = null
-var _marker_initialized: bool = false
 
 var _player_gx: float = 0.0
 var _player_gy: float = 0.0
@@ -104,7 +103,6 @@ func _ready() -> void:
 	set_process(true)
 	_render_view()
 	_apply_scroll_offset()
-	call_deferred("_update_player_marker")
 
 func _init_regional_generation() -> void:
 	if world_biome_ids.is_empty():
@@ -249,18 +247,6 @@ func _init_gpu_rendering() -> void:
 	if gpu_map != null and gpu_map is Control:
 		if not (gpu_map as Control).resized.is_connected(_on_gpu_map_resized):
 			(gpu_map as Control).resized.connect(_on_gpu_map_resized)
-	_ensure_player_marker()
-	_update_player_marker()
-
-func _ensure_player_marker() -> void:
-	if _player_marker != null or gpu_map == null:
-		return
-	_player_marker = ColorRect.new()
-	_player_marker.color = Color(0.98, 0.90, 0.30, 0.50)
-	_player_marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_player_marker.z_index = 200
-	_player_marker.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	gpu_map.add_child(_player_marker)
 
 func _load_location_from_state() -> void:
 	if game_state != null and game_state.has_method("ensure_world_snapshot_integrity"):
@@ -365,9 +351,6 @@ func _toggle_world_map() -> void:
 func _process(delta: float) -> void:
 	if delta <= 0.0:
 		return
-	# Ensure the player marker is visible even if layout happens after _ready().
-	if not _marker_initialized:
-		_update_player_marker()
 	# Pause movement while overlays are open.
 	if world_map_overlay != null and world_map_overlay.visible:
 		_apply_scroll_offset()
@@ -1079,11 +1062,15 @@ func _present_field_buffers(
 	var lon_phi: Vector2 = _get_fixed_lon_phi(_center_gx, _center_gy)
 	var clouds: Dictionary = _build_cloud_params(origin_x, origin_y)
 	if _gpu_view != null and gpu_map != null:
+		var render_biome: PackedInt32Array = _field_biome.duplicate()
+		var center_idx: int = (VIEW_W / 2 + VIEW_PAD) + (VIEW_H / 2 + VIEW_PAD) * RENDER_W
+		if center_idx >= 0 and center_idx < render_biome.size():
+			render_biome[center_idx] = MARKER_PLAYER
 		var field_payload: Dictionary = {
 			"height_raw": _field_height_raw,
 			"temp": _field_temp,
 			"moist": _field_moist,
-			"biome": _field_biome,
+			"biome": render_biome,
 			"land": _field_land,
 			"beach": _field_beach,
 		}
@@ -1112,7 +1099,6 @@ func _present_field_buffers(
 			)
 		_last_gpu_upload_us = Time.get_ticks_usec() - t0_upload_us
 		_last_gpu_upload_mode = "partial" if used_partial_upload else "full"
-		_update_player_marker()
 		_update_header_text()
 		if footer_label != null:
 			var poi_hint: String = _nearby_poi_hint()
@@ -1324,7 +1310,6 @@ func _try_quick_load() -> void:
 			_refresh_regional_transition_overrides(true)
 			_render_view()
 			_apply_scroll_offset()
-			call_deferred("_update_player_marker")
 			footer_label.text = "Loaded %s" % SceneContracts.SAVE_SLOT_0
 		else:
 			footer_label.text = "Load failed (missing file or schema mismatch)."
@@ -1400,21 +1385,7 @@ func _exit_tree() -> void:
 		game_state.set_regional_cache_stats({})
 
 func _on_gpu_map_resized() -> void:
-	_update_player_marker()
 	_apply_scroll_offset()
-
-func _update_player_marker() -> void:
-	if _player_marker == null or gpu_map == null:
-		return
-	# Cell size must use the visible view dimensions, not the padded render dimensions.
-	var cs: Vector2 = Vector2(float(gpu_map.size.x) / float(VIEW_W), float(gpu_map.size.y) / float(VIEW_H))
-	if cs.x <= 0.0 or cs.y <= 0.0:
-		return
-	var cx: int = VIEW_W / 2
-	var cy: int = VIEW_H / 2
-	_player_marker.size = cs
-	_player_marker.position = Vector2(float(cx) * cs.x, float(cy) * cs.y)
-	_marker_initialized = true
 
 func _get_solar_params() -> Dictionary:
 	var day_of_year: float = 0.0

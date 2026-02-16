@@ -21,6 +21,7 @@ const VIEW_W_DEFAULT: int = 64
 const VIEW_H_DEFAULT: int = 30
 const VIEW_PAD: int = 2
 const DUNGEON_FOG_REVEAL_RADIUS: int = 7
+const MARKER_PLAYER: int = 220
 
 @onready var header_label: Label = %HeaderLabel
 @onready var gpu_map: Control = %GpuMap
@@ -57,8 +58,6 @@ var _door_pos: Vector2i = Vector2i(1, 1)
 var _boss_pos: Vector2i = Vector2i(-1, -1)
 var _chest_pos: Vector2i = Vector2i(-1, -1)
 var _gpu_view: Object = null
-var _player_marker: ColorRect = null
-var _npc_markers: Array[ColorRect] = []
 var _npcs: Array[Dictionary] = []
 var _npc_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _npc_move_accum: float = 0.0
@@ -651,14 +650,8 @@ func _init_gpu_rendering() -> void:
 	if gpu_map != null and gpu_map is Control:
 		if not (gpu_map as Control).resized.is_connected(_on_gpu_map_resized):
 			(gpu_map as Control).resized.connect(_on_gpu_map_resized)
-	_ensure_player_marker()
-	_ensure_npc_markers()
 	_apply_scroll_offset()
 	_update_fixed_lonlat_uniform()
-	_update_player_marker()
-	_update_npc_markers()
-	call_deferred("_update_player_marker")
-	call_deferred("_update_npc_markers")
 
 func _configure_view_window() -> void:
 	_view_w = max(1, min(room_w, VIEW_W_DEFAULT))
@@ -681,51 +674,18 @@ func _update_view_window_origin() -> void:
 	_render_origin_x = _view_origin_x - VIEW_PAD
 	_render_origin_y = _view_origin_y - VIEW_PAD
 
-func _ensure_player_marker() -> void:
-	if _player_marker != null or gpu_map == null:
-		return
-	_player_marker = ColorRect.new()
-	_player_marker.color = Color(0.98, 0.90, 0.30, 0.55)
-	_player_marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_player_marker.z_index = 200
-	_player_marker.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	gpu_map.add_child(_player_marker)
-
-func _ensure_npc_markers() -> void:
-	if gpu_map == null:
-		return
-	while _npc_markers.size() > _npcs.size():
-		var last_idx: int = _npc_markers.size() - 1
-		var marker: ColorRect = _npc_markers[last_idx]
-		_npc_markers.remove_at(last_idx)
-		if marker != null and is_instance_valid(marker):
-			marker.queue_free()
-	while _npc_markers.size() < _npcs.size():
-		var m := ColorRect.new()
-		m.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		m.z_index = 190
-		m.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-		gpu_map.add_child(m)
-		_npc_markers.append(m)
-
-func _clear_npc_markers() -> void:
-	for marker in _npc_markers:
-		if marker != null and is_instance_valid(marker):
-			marker.queue_free()
-	_npc_markers.clear()
-
-func _npc_marker_color(kind: int) -> Color:
+func _actor_marker_for_kind(kind: int) -> int:
 	match kind:
 		Actor.MAN:
-			return Color(0.35, 0.60, 0.95, 0.75)
+			return LocalAreaTiles.MARKER_NPC_MAN
 		Actor.WOMAN:
-			return Color(0.95, 0.45, 0.55, 0.75)
+			return LocalAreaTiles.MARKER_NPC_WOMAN
 		Actor.CHILD:
-			return Color(0.92, 0.86, 0.40, 0.75)
+			return LocalAreaTiles.MARKER_NPC_CHILD
 		Actor.SHOPKEEPER:
-			return Color(0.35, 0.90, 0.55, 0.78)
+			return LocalAreaTiles.MARKER_NPC_SHOPKEEPER
 		_:
-			return Color(1.0, 1.0, 1.0, 0.0)
+			return -1
 
 func _apply_scroll_offset() -> void:
 	if gpu_map == null:
@@ -852,7 +812,6 @@ func _process(delta: float) -> void:
 	_update_view_window_origin()
 	_apply_scroll_offset()
 	_update_fixed_lonlat_uniform()
-	_update_player_marker()
 
 	_npc_move_accum += delta
 	_dynamic_refresh_accum += delta
@@ -863,12 +822,10 @@ func _process(delta: float) -> void:
 		if _step_npcs():
 			_render_local_map()
 			did_npc_step = true
-	_update_npc_visuals(delta, npc_interval)
 	if did_npc_step:
 		_update_view_window_origin()
 		_apply_scroll_offset()
 		_update_fixed_lonlat_uniform()
-	_update_npc_markers()
 	if _dynamic_refresh_accum >= DYNAMIC_REFRESH_INTERVAL:
 		_dynamic_refresh_accum = 0.0
 		_update_time_visuals()
@@ -1012,7 +969,7 @@ func _update_time_visuals() -> void:
 		_gpu_view.update_dynamic_layers(
 			gpu_map,
 			solar,
-			{"enabled": false},
+			_build_local_cloud_params(),
 			float(lon_phi.x),
 			float(lon_phi.y),
 			0.0
@@ -1162,6 +1119,9 @@ func _render_local_map() -> void:
 	beach.resize(size)
 
 	var is_dungeon: bool = (_poi_type == "Dungeon")
+	var poi_biome_id: int = int(poi_data.get("biome_id", 7))
+	var base_t: float = _local_visual_temp_for_biome(poi_biome_id)
+	var base_m: float = _local_visual_moist_for_biome(poi_biome_id)
 	for sy in range(_render_h):
 		for sx in range(_render_w):
 			var idx: int = sx + sy * _render_w
@@ -1169,16 +1129,16 @@ func _render_local_map() -> void:
 			var y: int = _render_origin_y + sy
 			if not _in_bounds(x, y):
 				height_raw[idx] = 0.03
-				temp[idx] = 0.50
-				moist[idx] = 0.50
+				temp[idx] = base_t
+				moist[idx] = base_m
 				biome[idx] = LocalAreaTiles.MARKER_UNKNOWN if is_dungeon else LocalAreaTiles.MARKER_WALL
 				land[idx] = 1
 				beach[idx] = 0
 				continue
 			if is_dungeon and not _is_dungeon_seen(x, y):
 				height_raw[idx] = 0.03
-				temp[idx] = 0.50
-				moist[idx] = 0.50
+				temp[idx] = base_t
+				moist[idx] = base_m
 				biome[idx] = LocalAreaTiles.MARKER_UNKNOWN
 				land[idx] = 1
 				beach[idx] = 0
@@ -1187,8 +1147,12 @@ func _render_local_map() -> void:
 			var b: int = LocalAreaTiles.MARKER_FLOOR
 			var h: float = 0.06
 			if t == Tile.WALL:
-				b = LocalAreaTiles.MARKER_WALL
-				h = 0.20
+				if is_dungeon:
+					b = LocalAreaTiles.MARKER_UNKNOWN
+					h = 0.03
+				else:
+					b = LocalAreaTiles.MARKER_WALL
+					h = 0.20
 			elif t == Tile.DOOR:
 				b = LocalAreaTiles.MARKER_DOOR
 				h = 0.08
@@ -1212,6 +1176,17 @@ func _render_local_map() -> void:
 						h = 0.10
 					_:
 						pass
+
+			if x == player_x and y == player_y:
+				b = MARKER_PLAYER
+				h = max(h, 0.12)
+			elif actors.size() == room_w * room_h:
+				var actor_kind: int = int(actors[_idx(x, y)])
+				var actor_marker: int = _actor_marker_for_kind(actor_kind)
+				if actor_marker >= 200:
+					b = actor_marker
+					h = max(h, 0.10)
+
 			height_raw[idx] = h
 			biome[idx] = b
 			land[idx] = 1
@@ -1220,8 +1195,8 @@ func _render_local_map() -> void:
 			# Mild per-cell variation to avoid flat fills.
 			var jt: float = (float(abs(("t|%d|%d|%s" % [x, y, _poi_id]).hash()) % 10000) / 10000.0 - 0.5) * 0.06
 			var jm: float = (float(abs(("m|%d|%d|%s" % [x, y, _poi_id]).hash()) % 10000) / 10000.0 - 0.5) * 0.06
-			temp[idx] = clamp(0.50 + jt, 0.0, 1.0)
-			moist[idx] = clamp(0.50 + jm, 0.0, 1.0)
+			temp[idx] = clamp(base_t + jt, 0.0, 1.0)
+			moist[idx] = clamp(base_m + jm, 0.0, 1.0)
 
 	var solar: Dictionary = _get_solar_params()
 	var lon_phi: Vector2 = _get_fixed_lon_phi()
@@ -1237,16 +1212,13 @@ func _render_local_map() -> void:
 				"beach": beach,
 			},
 			solar,
-			{"enabled": false},
+			_build_local_cloud_params(),
 			float(lon_phi.x),
 			float(lon_phi.y),
 			0.0
 		)
 		_apply_scroll_offset()
 		_update_fixed_lonlat_uniform()
-		_ensure_npc_markers()
-		_update_npc_markers()
-		_update_player_marker()
 		if header_label:
 			var disp: String = _poi_type
 			if disp == "House" and VariantCasts.to_bool(poi_data.get("is_shop", false)):
@@ -1369,7 +1341,6 @@ func _generate_map() -> void:
 	objects.fill(Obj.NONE)
 	actors.fill(Actor.NONE)
 	_dungeon_seen = PackedByteArray()
-	_clear_npc_markers()
 	_npcs.clear()
 	match _poi_type:
 		"Dungeon":
@@ -1698,70 +1669,6 @@ func _step_npcs() -> bool:
 		_npcs[i] = npc
 	return moved
 
-func _update_npc_visuals(delta: float, step_interval: float) -> void:
-	if _npcs.is_empty():
-		return
-	var step_dt: float = max(0.001, float(step_interval))
-	for i in range(_npcs.size()):
-		var npc: Dictionary = _npcs[i]
-		var t: float = clamp(float(npc.get("anim_t", 1.0)), 0.0, 1.0)
-		var fx0: float = float(npc.get("from_x", float(npc.get("x", 0))))
-		var fy0: float = float(npc.get("from_y", float(npc.get("y", 0))))
-		var fx1: float = float(npc.get("to_x", float(npc.get("x", 0))))
-		var fy1: float = float(npc.get("to_y", float(npc.get("y", 0))))
-		if t < 1.0:
-			t = min(1.0, t + max(0.0, delta) / step_dt)
-			npc["anim_t"] = t
-		else:
-			fx0 = float(npc.get("x", 0))
-			fy0 = float(npc.get("y", 0))
-			fx1 = fx0
-			fy1 = fy0
-		npc["vx"] = lerpf(fx0, fx1, t)
-		npc["vy"] = lerpf(fy0, fy1, t)
-		_npcs[i] = npc
-
-func _update_npc_markers() -> void:
-	if gpu_map == null:
-		return
-	_ensure_npc_markers()
-	if _npc_markers.is_empty():
-		return
-	var cs: Vector2 = Vector2(float(gpu_map.size.x) / float(max(1, _view_w)), float(gpu_map.size.y) / float(max(1, _view_h)))
-	if cs.x <= 0.0 or cs.y <= 0.0:
-		return
-	var off: Vector2 = _current_scroll_offset_cells()
-	var fx: float = float(off.x)
-	var fy: float = float(off.y)
-	for i in range(_npc_markers.size()):
-		var marker: ColorRect = _npc_markers[i]
-		if marker == null or not is_instance_valid(marker):
-			continue
-		if i >= _npcs.size():
-			marker.visible = false
-			continue
-		var npc: Dictionary = _npcs[i]
-		var kind: int = int(npc.get("kind", Actor.NONE))
-		if kind == Actor.NONE:
-			marker.visible = false
-			continue
-		var gx: float = float(npc.get("vx", float(npc.get("x", 0))))
-		var gy: float = float(npc.get("vy", float(npc.get("y", 0))))
-		var cell_x: int = int(floor(gx))
-		var cell_y: int = int(floor(gy))
-		if _poi_type == "Dungeon" and not _is_dungeon_seen(cell_x, cell_y):
-			marker.visible = false
-			continue
-		var sx: float = gx - float(_view_origin_x) - fx
-		var sy: float = gy - float(_view_origin_y) - fy
-		if sx < -1.0 or sy < -1.0 or sx > float(_view_w) + 1.0 or sy > float(_view_h) + 1.0:
-			marker.visible = false
-			continue
-		marker.visible = true
-		marker.color = _npc_marker_color(kind)
-		marker.size = cs
-		marker.position = Vector2(sx * cs.x, sy * cs.y)
-
 func _npc_pick_path(start: Vector2i) -> Array[Vector2i]:
 	for _t in range(NPC_MAX_DEST_TRIES):
 		var gx: int = _npc_rng.randi_range(2, room_w - 3)
@@ -2023,7 +1930,6 @@ func _exit_tree() -> void:
 	_close_shop()
 	if game_state != null and game_state.has_method("clear_local_rest_context"):
 		game_state.clear_local_rest_context()
-	_clear_npc_markers()
 	if _gpu_view != null and "cleanup" in _gpu_view:
 		_gpu_view.cleanup()
 	_gpu_view = null
@@ -2031,23 +1937,6 @@ func _exit_tree() -> void:
 func _on_gpu_map_resized() -> void:
 	_apply_scroll_offset()
 	_update_fixed_lonlat_uniform()
-	_update_player_marker()
-	_update_npc_markers()
-
-func _update_player_marker() -> void:
-	if _player_marker == null or gpu_map == null:
-		return
-	var cs: Vector2 = Vector2(float(gpu_map.size.x) / float(max(1, _view_w)), float(gpu_map.size.y) / float(max(1, _view_h)))
-	if cs.x <= 0.0 or cs.y <= 0.0:
-		return
-	var off: Vector2 = _current_scroll_offset_cells()
-	var fx: float = float(off.x)
-	var fy: float = float(off.y)
-	var sx: float = _player_fx - float(_view_origin_x) - fx
-	var sy: float = _player_fy - float(_view_origin_y) - fy
-	_player_marker.size = cs
-	_player_marker.position = Vector2(sx * cs.x, sy * cs.y)
-	_player_marker.visible = true
 
 func _update_fixed_lonlat_uniform() -> void:
 	if gpu_map == null:
@@ -2056,6 +1945,67 @@ func _update_fixed_lonlat_uniform() -> void:
 		return
 	var lon_phi: Vector2 = _get_fixed_lon_phi()
 	gpu_map.set_fixed_lonlat(true, float(lon_phi.x), float(lon_phi.y))
+
+func _build_local_cloud_params() -> Dictionary:
+	var biome_id: int = int(poi_data.get("biome_id", 7))
+	var moist: float = _local_visual_moist_for_biome(biome_id)
+	var temp: float = _local_visual_temp_for_biome(biome_id)
+	var ww: int = 275
+	var wh: int = 62
+	if game_state != null and int(game_state.world_width) > 0 and int(game_state.world_height) > 0:
+		ww = int(game_state.world_width)
+		wh = int(game_state.world_height)
+	elif startup_state != null and int(startup_state.world_width) > 0 and int(startup_state.world_height) > 0:
+		ww = int(startup_state.world_width)
+		wh = int(startup_state.world_height)
+	var region_size: int = 96
+	var base_x: int = int(poi_data.get("world_x", 0)) * region_size + int(poi_data.get("local_x", 48))
+	var base_y: int = int(poi_data.get("world_y", 0)) * region_size + int(poi_data.get("local_y", 48))
+	var origin_global_x: int = base_x + (_render_origin_x - _anchor_player_x)
+	var origin_global_y: int = base_y + (_render_origin_y - _anchor_player_y)
+	var wind_x: float = 0.08 + (temp - 0.5) * 0.10
+	var wind_y: float = 0.03 + (moist - 0.5) * 0.08
+	var coverage: float = clamp(0.22 + moist * 0.68, 0.10, 0.95)
+	return {
+		"enabled": true,
+		"origin_x": origin_global_x,
+		"origin_y": origin_global_y,
+		"world_period_x": max(1, ww * region_size),
+		"world_height": max(1, wh * region_size),
+		"scale": lerp(0.017, 0.024, moist),
+		"wind_x": wind_x,
+		"wind_y": wind_y,
+		"coverage": coverage,
+		"contrast": lerp(1.15, 1.40, coverage),
+	}
+
+func _local_visual_temp_for_biome(biome_id: int) -> float:
+	if biome_id >= 200:
+		return 0.5
+	match biome_id:
+		1, 5, 20, 22, 23, 24, 29, 30, 33, 34:
+			return 0.15
+		11, 15:
+			return 0.78
+		3, 4, 28, 40, 41:
+			return 0.82
+		10:
+			return 0.60
+		_:
+			return 0.55
+
+func _local_visual_moist_for_biome(biome_id: int) -> float:
+	if biome_id >= 200:
+		return 0.5
+	match biome_id:
+		10, 15, 11:
+			return 0.80
+		3, 4, 28:
+			return 0.18
+		1, 5, 20, 24:
+			return 0.35
+		_:
+			return 0.55
 
 func _get_solar_params() -> Dictionary:
 	var day_of_year: float = 0.0

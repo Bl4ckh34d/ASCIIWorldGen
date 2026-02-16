@@ -1,21 +1,54 @@
 extends Node
 
 const SceneContracts = preload("res://scripts/gameplay/SceneContracts.gd")
+const DeterministicRng = preload("res://scripts/gameplay/DeterministicRng.gd")
 const EncounterRegistry = preload("res://scripts/gameplay/EncounterRegistry.gd")
 const PartyStateModel = preload("res://scripts/gameplay/models/PartyState.gd")
+const PartyMemberModel = preload("res://scripts/gameplay/models/PartyMember.gd")
 const WorldTimeStateModel = preload("res://scripts/gameplay/models/WorldTimeState.gd")
 const SettingsStateModel = preload("res://scripts/gameplay/models/SettingsState.gd")
 const QuestStateModel = preload("res://scripts/gameplay/models/QuestState.gd")
 const WorldFlagsStateModel = preload("res://scripts/gameplay/models/WorldFlagsState.gd")
+const EconomyStateModel = preload("res://scripts/gameplay/models/EconomyState.gd")
+const PoliticsStateModel = preload("res://scripts/gameplay/models/PoliticsState.gd")
+const NpcWorldStateModel = preload("res://scripts/gameplay/models/NpcWorldState.gd")
+const CivilizationStateModel = preload("res://scripts/gameplay/models/CivilizationState.gd")
+const CommodityCatalog = preload("res://scripts/gameplay/catalog/CommodityCatalog.gd")
 const ItemCatalog = preload("res://scripts/gameplay/catalog/ItemCatalog.gd")
+const NpcDialogueService = preload("res://scripts/gameplay/dialogue/NpcDialogueService.gd")
+const EpochSystem = preload("res://scripts/gameplay/sim/EpochSystem.gd")
+const EconomySim = preload("res://scripts/gameplay/sim/EconomySim.gd")
+const PoliticsSim = preload("res://scripts/gameplay/sim/PoliticsSim.gd")
+const NpcSim = preload("res://scripts/gameplay/sim/NpcSim.gd")
+const PoliticsEventLayer = preload("res://scripts/gameplay/sim/PoliticsEventLayer.gd")
+const SocietySeeder = preload("res://scripts/gameplay/sim/SocietySeeder.gd")
+const PoliticsSeeder = preload("res://scripts/gameplay/sim/PoliticsSeeder.gd")
+const TradeRouteSeeder = preload("res://scripts/gameplay/sim/TradeRouteSeeder.gd")
+const NpcSeederFromSettlements = preload("res://scripts/gameplay/sim/NpcSeederFromSettlements.gd")
 
-const SAVE_SCHEMA_VERSION: int = 3
+const SAVE_SCHEMA_VERSION: int = 6
+const PARTY_MEMBER_CAP: int = 4
+const REST_MORNING_HOUR: int = 6
+
+const _TOD_NIGHT: int = 0
+const _TOD_DAWN: int = 1
+const _TOD_DAY: int = 2
+const _TOD_DUSK: int = 3
+
+const _SEASON_SPRING: int = 0
+const _SEASON_SUMMER: int = 1
+const _SEASON_AUTUMN: int = 2
+const _SEASON_WINTER: int = 3
 
 var party: PartyStateModel = PartyStateModel.new()
 var world_time: WorldTimeStateModel = WorldTimeStateModel.new()
 var settings_state: SettingsStateModel = SettingsStateModel.new()
 var quest_state: QuestStateModel = QuestStateModel.new()
 var world_flags: WorldFlagsStateModel = WorldFlagsStateModel.new()
+var economy_state: EconomyStateModel = EconomyStateModel.new()
+var politics_state: PoliticsStateModel = PoliticsStateModel.new()
+var npc_world_state: NpcWorldStateModel = NpcWorldStateModel.new()
+var civilization_state: CivilizationStateModel = CivilizationStateModel.new()
 
 var world_seed_hash: int = 0
 var world_width: int = 0
@@ -41,6 +74,9 @@ var pending_battle: Dictionary = {}
 var pending_poi: Dictionary = {}
 var last_battle_result: Dictionary = {}
 var run_flags: Dictionary = {}
+var regional_cache_stats: Dictionary = {}
+var local_rest_context: Dictionary = {}
+var society_gpu_stats: Dictionary = {}
 
 # In-game realtime clock (separate from world-map simulation TimeSystem).
 # We advance `world_time` only while exploring (regional/local), at 1:1 by default.
@@ -50,6 +86,7 @@ var _ingame_time_accum_seconds: float = 0.0
 var _ui_pause_count: int = 0
 
 var _events: Node = null
+var _dialogue_service: NpcDialogueService = NpcDialogueService.new()
 
 func _ready() -> void:
 	_events = get_node_or_null("/root/GameEvents")
@@ -60,6 +97,8 @@ func _ready() -> void:
 		world_time.reset_defaults()
 	if quest_state.quests.is_empty():
 		quest_state.ensure_default_quests()
+	_ensure_sim_state_defaults()
+	_refresh_epoch_metadata()
 	_emit_party_changed()
 	_emit_inventory_changed()
 	_emit_time_advanced()
@@ -120,6 +159,10 @@ func reset_run() -> void:
 	settings_state.reset_defaults()
 	quest_state.reset_defaults()
 	world_flags.reset_defaults()
+	economy_state.reset_defaults()
+	politics_state.reset_defaults()
+	npc_world_state.reset_defaults()
+	civilization_state.reset_defaults()
 	world_seed_hash = 0
 	world_width = 0
 	world_height = 0
@@ -142,6 +185,9 @@ func reset_run() -> void:
 	pending_poi.clear()
 	last_battle_result.clear()
 	run_flags.clear()
+	regional_cache_stats.clear()
+	local_rest_context.clear()
+	society_gpu_stats.clear()
 	_ingame_time_accum_seconds = 0.0
 	_ui_pause_count = 0
 	_emit_party_changed()
@@ -173,6 +219,18 @@ func initialize_world_snapshot(
 	world_moisture = moisture.duplicate() if moisture.size() == size else PackedFloat32Array()
 	world_land_mask = land_mask.duplicate() if land_mask.size() == size else PackedByteArray()
 	world_beach_mask = beach_mask.duplicate() if beach_mask.size() == size else PackedByteArray()
+	_ensure_sim_state_defaults()
+	civilization_state.ensure_size(world_width, world_height)
+	if civilization_state.emergence_abs_day < 0:
+		civilization_state.emergence_abs_day = 365 + DeterministicRng.randi_range(
+			_seed_or_default(),
+			"civ_emergence_abs_day",
+			0,
+			4 * 365
+		)
+	# New world snapshots should invalidate regional perf telemetry from older maps.
+	regional_cache_stats.clear()
+	run_flags.erase("society_seeded_tiles")
 	if _events and _events.has_signal("world_snapshot_updated"):
 		_events.emit_signal("world_snapshot_updated", world_width, world_height, world_seed_hash)
 
@@ -189,6 +247,55 @@ func get_world_biome_id(x: int, y: int) -> int:
 		return int(location.get("biome_id", -1))
 	return world_biome_ids[i]
 
+func ensure_world_snapshot_integrity() -> void:
+	var startup_state: Node = get_node_or_null("/root/StartupState")
+	if startup_state == null:
+		return
+	if not startup_state.has_method("has_world_snapshot") or not bool(startup_state.has_world_snapshot()):
+		return
+	var startup_w: int = int(startup_state.get("world_width"))
+	var startup_h: int = int(startup_state.get("world_height"))
+	var startup_biomes_v: Variant = startup_state.get("world_biome_ids")
+	if startup_w <= 0 or startup_h <= 0 or not (startup_biomes_v is PackedInt32Array):
+		return
+	var startup_biomes: PackedInt32Array = startup_biomes_v
+	if startup_biomes.size() != startup_w * startup_h:
+		return
+	var use_startup: bool = false
+	if not has_world_snapshot():
+		use_startup = true
+	else:
+		var loc_x: int = int(location.get("world_x", 0))
+		var loc_y: int = int(location.get("world_y", 0))
+		var game_here: int = get_world_biome_id(loc_x, loc_y)
+		var startup_here: int = int(startup_state.get_world_biome_id(loc_x, loc_y)) if startup_state.has_method("get_world_biome_id") else game_here
+		if game_here <= 1 and startup_here > 1:
+			use_startup = true
+		else:
+			var game_ocean: float = _ocean_fraction(world_biome_ids)
+			var startup_ocean: float = _ocean_fraction(startup_biomes)
+			if game_ocean >= 0.995 and startup_ocean < game_ocean:
+				use_startup = true
+	if not use_startup:
+		return
+	var startup_seed: int = int(startup_state.get("world_seed_hash"))
+	var height_raw: PackedFloat32Array = startup_state.get("world_height_raw") if startup_state.get("world_height_raw") is PackedFloat32Array else PackedFloat32Array()
+	var temp: PackedFloat32Array = startup_state.get("world_temperature") if startup_state.get("world_temperature") is PackedFloat32Array else PackedFloat32Array()
+	var moist: PackedFloat32Array = startup_state.get("world_moisture") if startup_state.get("world_moisture") is PackedFloat32Array else PackedFloat32Array()
+	var land_mask: PackedByteArray = startup_state.get("world_land_mask") if startup_state.get("world_land_mask") is PackedByteArray else PackedByteArray()
+	var beach_mask: PackedByteArray = startup_state.get("world_beach_mask") if startup_state.get("world_beach_mask") is PackedByteArray else PackedByteArray()
+	initialize_world_snapshot(
+		startup_w,
+		startup_h,
+		startup_seed,
+		startup_biomes,
+		height_raw,
+		temp,
+		moist,
+		land_mask,
+		beach_mask
+	)
+
 func set_location(scene_name: String, world_x: int, world_y: int, local_x: int, local_y: int, biome_id: int = -1, biome_name: String = "") -> void:
 	# UI pauses are transient; don't let them leak across scene changes.
 	var next_scene: String = String(scene_name)
@@ -203,6 +310,8 @@ func set_location(scene_name: String, world_x: int, world_y: int, local_x: int, 
 		location["biome_id"] = biome_id
 	if not biome_name.is_empty():
 		location["biome_name"] = biome_name
+	if next_scene == SceneContracts.STATE_REGIONAL or next_scene == SceneContracts.STATE_LOCAL:
+		_ensure_society_tile_records(world_x, world_y)
 	_emit_location_changed()
 
 func get_location() -> Dictionary:
@@ -238,11 +347,21 @@ func reset_encounter_meter_after_battle(encounter_ctx: Dictionary = {}) -> void:
 	EncounterRegistry.reset_danger_meter(world_seed_hash, st, wx, wy, biome_id, minute)
 
 func advance_world_time(minutes: int, _reason: String = "") -> void:
-	world_time.advance_minutes(max(0, minutes))
+	var mins: int = max(0, minutes)
+	if mins <= 0:
+		return
+	var day_before: int = world_time.abs_day_index()
+	world_time.advance_minutes(mins)
+	_tick_background_society_days(day_before, world_time.abs_day_index())
 	_emit_time_advanced()
 
 func advance_world_time_seconds(seconds: int, _reason: String = "") -> void:
-	world_time.advance_seconds(max(0, seconds))
+	var secs: int = max(0, seconds)
+	if secs <= 0:
+		return
+	var day_before: int = world_time.abs_day_index()
+	world_time.advance_seconds(secs)
+	_tick_background_society_days(day_before, world_time.abs_day_index())
 	_emit_time_advanced()
 
 func queue_battle(encounter_data: Dictionary) -> void:
@@ -276,6 +395,7 @@ func register_poi_discovery(poi_data: Dictionary) -> void:
 
 func mark_world_tile_visited(world_x: int, world_y: int) -> void:
 	world_flags.mark_world_tile_visited(world_x, world_y)
+	_ensure_society_tile_records(world_x, world_y)
 	_emit_world_flags_changed()
 
 func is_world_tile_visited(world_x: int, world_y: int) -> bool:
@@ -328,11 +448,13 @@ func apply_battle_result(result_data: Dictionary) -> Dictionary:
 				member.mp = clamp(int(mp_map[mid]), 0, member.max_mp)
 	var logs: PackedStringArray = PackedStringArray()
 	if bool(result_data.get("victory", false)):
-		var rewards: Dictionary = result_data.get("rewards", {})
+		var enc_ctx: Dictionary = result_data.get("encounter", {})
+		var rewards: Dictionary = _apply_reward_context_multipliers(result_data.get("rewards", {}), enc_ctx)
 		logs = party.grant_rewards(rewards)
 		last_battle_result["reward_logs"] = logs
+		last_battle_result["rewards"] = rewards.duplicate(true)
 		# Dungeon boss clears the dungeon POI.
-		var enc: Dictionary = result_data.get("encounter", {})
+		var enc: Dictionary = enc_ctx
 		var battle_kind: String = String(enc.get("battle_kind", ""))
 		if battle_kind == "dungeon_boss":
 			var poi_id: String = String(enc.get("poi_id", ""))
@@ -363,6 +485,433 @@ func get_settings_snapshot() -> Dictionary:
 
 func get_encounter_rate_multiplier() -> float:
 	return clamp(settings_state.encounter_rate_multiplier, 0.10, 2.00)
+
+func get_epoch_encounter_rate_multiplier() -> float:
+	var gp: Dictionary = _epoch_gameplay_multipliers()
+	var out: float = clamp(float(gp.get("encounter_rate_mul", 1.0)), 0.25, 3.00)
+	var tod: int = _tod_bucket_from_minute(_minute_of_day())
+	match tod:
+		_TOD_NIGHT:
+			out *= 1.14
+		_TOD_DAWN:
+			out *= 1.05
+		_TOD_DUSK:
+			out *= 1.08
+		_:
+			out *= 0.95
+	var season: int = _season_bucket_from_day(_day_of_year_0_364())
+	if season == _SEASON_WINTER:
+		out *= 1.07
+	elif season == _SEASON_SUMMER:
+		out *= 1.03
+	return clamp(out, 0.30, 3.20)
+
+func apply_epoch_gameplay_to_encounter(encounter_data: Dictionary) -> Dictionary:
+	if typeof(encounter_data) != TYPE_DICTIONARY or encounter_data.is_empty():
+		return encounter_data
+	var out: Dictionary = encounter_data.duplicate(true)
+	var gp: Dictionary = _epoch_gameplay_multipliers()
+	var context: Dictionary = _local_society_context(
+		int(out.get("world_x", int(location.get("world_x", 0)))),
+		int(out.get("world_y", int(location.get("world_y", 0)))),
+		String(out.get("home_state_id", ""))
+	)
+	var scarcity: float = clamp(float(context.get("scarcity_pressure", 0.0)), 0.0, 1.0)
+	var war_pressure: float = clamp(float(context.get("local_war_pressure", 0.0)), 0.0, 1.0)
+	var tod: int = _tod_bucket_from_minute(int(out.get("minute_of_day", _minute_of_day())))
+	var season: int = _season_bucket_from_day(int(out.get("day_of_year", _day_of_year_0_364())))
+
+	var power_mul: float = clamp(float(gp.get("encounter_power_mul", 1.0)), 0.50, 3.00)
+	var hp_mul: float = clamp(float(gp.get("encounter_hp_mul", 1.0)), 0.50, 3.50)
+	var power_add: int = int(gp.get("encounter_power_add", 0))
+	power_mul *= (1.0 + scarcity * 0.22 + war_pressure * 0.28)
+	hp_mul *= (1.0 + scarcity * 0.18 + war_pressure * 0.22)
+	if tod == _TOD_NIGHT:
+		power_mul *= 1.10
+		hp_mul *= 1.06
+	elif tod == _TOD_DAWN:
+		power_mul *= 0.98
+	if season == _SEASON_WINTER:
+		hp_mul *= 1.06
+	elif season == _SEASON_SUMMER:
+		power_mul *= 1.03
+	power_add += int(round(scarcity * 2.0 + war_pressure * 3.0))
+
+	out["enemy_power"] = max(1, int(round(float(out.get("enemy_power", 8)) * power_mul)) + power_add)
+	out["enemy_hp"] = max(4, int(round(float(out.get("enemy_hp", 30)) * hp_mul)))
+
+	var flee_mul: float = clamp(float(gp.get("flee_mul", 1.0)), 0.35, 1.80)
+	flee_mul *= (1.0 - scarcity * 0.16 - war_pressure * 0.18)
+	if tod == _TOD_NIGHT:
+		flee_mul *= 0.92
+	out["flee_chance"] = clamp(float(out.get("flee_chance", 0.45)) * flee_mul, 0.03, 0.97)
+
+	var reward_gold_mul: float = clamp(float(gp.get("reward_gold_mul", 1.0)), 0.25, 4.00)
+	var reward_exp_mul: float = clamp(float(gp.get("reward_exp_mul", 1.0)), 0.25, 4.00)
+	reward_gold_mul *= (1.0 + scarcity * 0.10 + war_pressure * 0.16)
+	reward_exp_mul *= (1.0 + scarcity * 0.08 + war_pressure * 0.10)
+	if tod == _TOD_NIGHT:
+		reward_exp_mul *= 1.06
+	if season == _SEASON_WINTER:
+		reward_gold_mul *= 1.04
+	var rewards: Dictionary = out.get("rewards", {}).duplicate(true)
+	rewards["exp"] = max(0, int(round(float(rewards.get("exp", 0)) * reward_exp_mul)))
+	rewards["gold"] = max(0, int(round(float(rewards.get("gold", 0)) * reward_gold_mul)))
+	out["rewards"] = rewards
+	out["rewards_scaled"] = true
+	out["reward_exp_mul"] = reward_exp_mul
+	out["reward_gold_mul"] = reward_gold_mul
+	out["epoch_gameplay_mul"] = gp.duplicate(true)
+	out["scarcity_pressure"] = scarcity
+	out["local_war_pressure"] = war_pressure
+	out["top_shortage"] = String(context.get("top_shortage", ""))
+	out["top_shortage_value"] = float(context.get("top_shortage_value", 0.0))
+	return out
+
+func get_item_market_price_multipliers(item_name: String, world_x: int, world_y: int) -> Dictionary:
+	item_name = String(item_name)
+	var gp: Dictionary = _epoch_gameplay_multipliers()
+	var ec: Dictionary = _local_society_context(world_x, world_y, "")
+	var scarcity: float = clamp(float(ec.get("scarcity_pressure", 0.0)), 0.0, 1.0)
+	var war_pressure: float = clamp(float(ec.get("local_war_pressure", 0.0)), 0.0, 1.0)
+	var buy_mul: float = clamp(float(gp.get("shop_buy_mul", 1.0)), 0.35, 4.00)
+	var sell_mul: float = clamp(float(gp.get("shop_sell_mul", 0.45)), 0.10, 1.60)
+	buy_mul *= (1.0 + scarcity * 0.70 + war_pressure * 0.45)
+	sell_mul *= (1.0 - scarcity * 0.20 - war_pressure * 0.20)
+	var tod: int = _tod_bucket_from_minute(_minute_of_day())
+	if tod == _TOD_NIGHT:
+		buy_mul *= 1.08
+		sell_mul *= 0.94
+	elif tod == _TOD_DAWN:
+		buy_mul *= 0.98
+		sell_mul *= 1.02
+	var season: int = _season_bucket_from_day(_day_of_year_0_364())
+	var item: Dictionary = ItemCatalog.get_item(item_name)
+	var kind: String = String(item.get("kind", "item"))
+	if season == _SEASON_WINTER and (kind == "consumable" or item_name == "Herb" or item_name == "Potion"):
+		buy_mul *= 1.10
+		sell_mul *= 0.96
+	elif season == _SEASON_SUMMER and kind == "weapon":
+		buy_mul *= 1.05
+	if kind == "weapon" or kind == "armor" or kind == "accessory":
+		buy_mul *= 1.04 + war_pressure * 0.10
+		sell_mul *= 1.02
+	return {
+		"buy_mul": clamp(buy_mul, 0.20, 8.00),
+		"sell_mul": clamp(sell_mul, 0.05, 2.00),
+		"scarcity_pressure": scarcity,
+		"local_war_pressure": war_pressure,
+		"top_shortage": String(ec.get("top_shortage", "")),
+		"top_shortage_value": float(ec.get("top_shortage_value", 0.0)),
+		"epoch_id": String(civilization_state.epoch_id),
+		"epoch_variant": String(civilization_state.epoch_variant),
+	}
+
+func get_local_npc_activity_multipliers(world_x: int, world_y: int, state_id: String = "") -> Dictionary:
+	state_id = String(state_id)
+	var ec: Dictionary = _local_society_context(world_x, world_y, state_id)
+	var scarcity: float = clamp(float(ec.get("scarcity_pressure", 0.0)), 0.0, 1.0)
+	var war_pressure: float = clamp(float(ec.get("local_war_pressure", 0.0)), 0.0, 1.0)
+	var tod: int = _tod_bucket_from_minute(_minute_of_day())
+	var npc_mul: Dictionary = EpochSystem.npc_multipliers(civilization_state.epoch_id, civilization_state.epoch_variant)
+	var density_mul: float = 1.0 - scarcity * 0.35 - war_pressure * 0.28
+	if tod == _TOD_NIGHT:
+		density_mul *= 0.62
+	elif tod == _TOD_DUSK:
+		density_mul *= 0.86
+	elif tod == _TOD_DAWN:
+		density_mul *= 0.92
+	density_mul *= clamp(float(npc_mul.get("local_relief_scale", 1.0)), 0.60, 1.60)
+	var move_interval_mul: float = 1.0 + scarcity * 0.35 + war_pressure * 0.40
+	if tod == _TOD_NIGHT:
+		move_interval_mul *= 1.35
+	move_interval_mul *= clamp(float(npc_mul.get("need_gain_scale", 1.0)), 0.70, 1.80)
+	var disposition_shift: float = -0.10 * scarcity - 0.18 * war_pressure
+	disposition_shift += (0.05 if tod == _TOD_DAY else 0.0)
+	disposition_shift += (0.04 if civilization_state.epoch_variant == "stable" else -0.02)
+	return {
+		"density_mul": clamp(density_mul, 0.25, 2.00),
+		"move_interval_mul": clamp(move_interval_mul, 0.50, 3.00),
+		"disposition_shift": clamp(disposition_shift, -0.90, 0.50),
+		"scarcity_pressure": scarcity,
+		"local_war_pressure": war_pressure,
+	}
+
+func get_political_state_id_at(world_x: int, world_y: int) -> String:
+	_ensure_society_tile_records(world_x, world_y)
+	var prov_id: String = politics_state.province_id_at(world_x, world_y)
+	var pv: Variant = politics_state.provinces.get(prov_id, {})
+	if typeof(pv) == TYPE_DICTIONARY:
+		var pd: Dictionary = pv as Dictionary
+		var owner: String = String(pd.get("owner_state_id", ""))
+		if not owner.is_empty():
+			return owner
+	return ""
+
+func get_npc_dialogue_line(npc_profile: Dictionary) -> String:
+	if typeof(npc_profile) != TYPE_DICTIONARY or npc_profile.is_empty():
+		return ""
+	var world_x: int = int(npc_profile.get("world_x", int(location.get("world_x", 0))))
+	var world_y: int = int(npc_profile.get("world_y", int(location.get("world_y", 0))))
+	var state_id: String = String(npc_profile.get("home_state_id", ""))
+	if state_id.is_empty():
+		state_id = get_political_state_id_at(world_x, world_y)
+	var ec: Dictionary = _local_society_context(world_x, world_y, state_id)
+	var world_ctx: Dictionary = {
+		"epoch_id": String(civilization_state.epoch_id),
+		"epoch_variant": String(civilization_state.epoch_variant),
+		"season_name": world_time.season_name(),
+		"time_bucket": _tod_bucket_name(_tod_bucket_from_minute(_minute_of_day())),
+		"disposition_hint": float(npc_profile.get("disposition_bias", 0.0)) + float(ec.get("disposition_shift", 0.0)),
+		"top_shortage": String(ec.get("top_shortage", "")),
+		"top_shortage_value": float(ec.get("top_shortage_value", 0.0)),
+		"scarcity_pressure": float(ec.get("scarcity_pressure", 0.0)),
+		"states_at_war": bool(ec.get("states_at_war", false)),
+		"local_war_pressure": float(ec.get("local_war_pressure", 0.0)),
+	}
+	var player_ctx: Dictionary = {
+		"party_size": party.members.size(),
+		"party_power": get_party_power(),
+		"gold": party.gold,
+	}
+	var request: Dictionary = _dialogue_service.build_context(npc_profile, player_ctx, world_ctx)
+	var out: Dictionary = _dialogue_service.request_dialogue(request)
+	return String(out.get("text", ""))
+
+func get_regional_biome_transition_overrides(center_world_x: int, center_world_y: int, radius_tiles: int = 1) -> Dictionary:
+	var out: Dictionary = {}
+	radius_tiles = clamp(int(radius_tiles), 0, 4)
+	var d: int = _day_of_year_0_364()
+	var winter_strength: float = _winter_strength(d)
+	for oy in range(-radius_tiles, radius_tiles + 1):
+		for ox in range(-radius_tiles, radius_tiles + 1):
+			var wx: int = posmod(center_world_x + ox, max(1, world_width))
+			var wy: int = clamp(center_world_y + oy, 0, max(1, world_height) - 1)
+			var from_biome: int = get_world_biome_id(wx, wy)
+			var to_biome: int = _seasonal_target_biome_id(from_biome, wx, wy)
+			if from_biome == to_biome:
+				continue
+			var lat_abs: float = _lat_abs01(wy)
+			var noise: float = DeterministicRng.randf01(_seed_or_default(), "region_transition|%d|%d" % [wx, wy])
+			var p: float = clamp(winter_strength * (0.35 + lat_abs * 0.95) + (noise - 0.5) * 0.30, 0.0, 1.0)
+			if p <= 0.01:
+				continue
+			out["%d,%d" % [wx, wy]] = {
+				"from_biome": from_biome,
+				"to_biome": to_biome,
+				"progress": p,
+			}
+	return out
+
+func set_regional_cache_stats(stats: Dictionary) -> void:
+	if typeof(stats) != TYPE_DICTIONARY:
+		regional_cache_stats = {}
+		return
+	regional_cache_stats = stats.duplicate(true)
+
+func get_regional_cache_stats() -> Dictionary:
+	return regional_cache_stats.duplicate(true)
+
+func set_society_gpu_stats(stats: Dictionary) -> void:
+	if typeof(stats) != TYPE_DICTIONARY:
+		society_gpu_stats = {}
+		return
+	society_gpu_stats = stats.duplicate(true)
+
+func get_society_gpu_stats() -> Dictionary:
+	return society_gpu_stats.duplicate(true)
+
+func get_civilization_epoch_info() -> Dictionary:
+	_ensure_sim_state_defaults()
+	return {
+		"epoch_id": String(civilization_state.epoch_id),
+		"epoch_index": int(civilization_state.epoch_index),
+		"epoch_progress": float(civilization_state.epoch_progress),
+		"epoch_variant": String(civilization_state.epoch_variant),
+		"epoch_target_id": String(civilization_state.epoch_target_id),
+		"epoch_target_variant": String(civilization_state.epoch_target_variant),
+		"epoch_shift_due_abs_day": int(civilization_state.epoch_shift_due_abs_day),
+		"tech_level": float(civilization_state.tech_level),
+		"global_devastation": float(civilization_state.global_devastation),
+	}
+
+func get_society_debug_tile(world_x: int, world_y: int) -> Dictionary:
+	world_x = posmod(int(world_x), max(1, world_width))
+	world_y = clamp(int(world_y), 0, max(1, world_height) - 1)
+	var out: Dictionary = {}
+	var biome_id: int = get_world_biome_id(world_x, world_y)
+	out["wildlife"] = _wildlife_proxy_for_biome(biome_id)
+	out["human_pop"] = _settlement_population_proxy(world_x, world_y)
+	var ctx: Dictionary = _local_society_context(world_x, world_y, "")
+	out["war_pressure"] = float(ctx.get("local_war_pressure", 0.0))
+	out["devastation"] = float(civilization_state.global_devastation)
+	out["tech_level"] = float(civilization_state.tech_level)
+	return out
+
+func set_local_rest_context(can_rest: bool, rest_type: String = "") -> void:
+	local_rest_context = {
+		"ok": bool(can_rest),
+		"rest_type": String(rest_type),
+		"scene": String(location.get("scene", "")),
+		"world_x": int(location.get("world_x", 0)),
+		"world_y": int(location.get("world_y", 0)),
+	}
+
+func clear_local_rest_context() -> void:
+	local_rest_context.clear()
+
+func get_local_rest_context() -> Dictionary:
+	return local_rest_context.duplicate(true)
+
+func can_rest_until_morning() -> Dictionary:
+	var scene_name: String = String(location.get("scene", ""))
+	if scene_name != SceneContracts.STATE_LOCAL and scene_name != SceneContracts.STATE_REGIONAL:
+		return {"ok": false, "reason": "Rest is only available while exploring."}
+	if bool(local_rest_context.get("ok", false)):
+		var cost: int = _rest_cost_for_context()
+		if party.gold < cost:
+			return {"ok": false, "reason": "Not enough gold to rest (%d needed)." % cost}
+		return {"ok": true, "cost": cost, "rest_type": String(local_rest_context.get("rest_type", ""))}
+	return {"ok": false, "reason": "No safe resting place here."}
+
+func rest_until_morning() -> Dictionary:
+	var gate: Dictionary = can_rest_until_morning()
+	if not bool(gate.get("ok", false)):
+		return {"ok": false, "message": String(gate.get("reason", "Cannot rest here."))}
+	var cost: int = max(0, int(gate.get("cost", 0)))
+	if cost > 0:
+		party.gold = max(0, party.gold - cost)
+	var now: int = _second_of_day()
+	var target: int = REST_MORNING_HOUR * 60 * 60
+	var delta: int = target - now
+	if delta <= 0:
+		delta += WorldTimeStateModel.SECONDS_PER_DAY
+	advance_world_time_seconds(delta, "rest")
+	for member in party.members:
+		if member == null:
+			continue
+		member.hp = member.max_hp
+		member.mp = member.max_mp
+	_emit_party_changed()
+	_emit_inventory_changed()
+	return {
+		"ok": true,
+		"seconds_advanced": delta,
+		"message": "Rested until morning. Party recovered.",
+	}
+
+func can_hire_party_member() -> bool:
+	return party.members.size() < PARTY_MEMBER_CAP
+
+func try_hire_npc(npc_profile: Dictionary) -> Dictionary:
+	if typeof(npc_profile) != TYPE_DICTIONARY:
+		return {"ok": false, "message": "This person is not interested."}
+	if not can_hire_party_member():
+		return {"ok": false, "message": "Your party is full (max %d)." % PARTY_MEMBER_CAP}
+	var role: String = String(npc_profile.get("role", "resident")).to_lower()
+	var kind: int = int(npc_profile.get("kind", 0))
+	if kind == 3:
+		return {"ok": false, "message": "They are too young to join."}
+	var disposition: float = clamp(float(npc_profile.get("disposition_bias", 0.0)), -1.0, 1.0)
+	if role == "shopkeeper":
+		return {"ok": false, "message": "The shopkeeper will not leave the post."}
+	if disposition < 0.10:
+		return {"ok": false, "message": "They do not trust you enough to join."}
+	var npc_id: String = String(npc_profile.get("npc_id", "npc"))
+	var base_cost: int = 42 + int(round(float(civilization_state.epoch_index) * 8.0))
+	base_cost += int(round(clamp(float(npc_profile.get("social_class_rank", 0.4)), 0.0, 1.0) * 26.0))
+	base_cost += int(round(max(0.0, -disposition) * 18.0))
+	var ctx: Dictionary = _local_society_context(
+		int(npc_profile.get("world_x", int(location.get("world_x", 0)))),
+		int(npc_profile.get("world_y", int(location.get("world_y", 0)))),
+		String(npc_profile.get("home_state_id", ""))
+	)
+	base_cost = int(round(float(base_cost) * (1.0 + float(ctx.get("scarcity_pressure", 0.0)) * 0.20)))
+	base_cost = max(12, base_cost)
+	if party.gold < base_cost:
+		return {"ok": false, "message": "They ask %d gold to join." % base_cost}
+
+	var member := PartyMemberModel.new()
+	member.member_id = _next_hire_member_id(npc_id)
+	member.display_name = _hire_display_name(npc_id, kind)
+	var avg_level: float = _party_average_level()
+	member.level = clamp(int(round(avg_level)), 1, 60)
+	member.exp = 0
+	member.max_hp = 32 + member.level * 4
+	member.max_mp = 8 + member.level * 2
+	member.strength = 7 + int(round(avg_level * 0.6))
+	member.defense = 6 + int(round(avg_level * 0.5))
+	member.agility = 6 + int(round(avg_level * 0.55))
+	member.intellect = 6 + int(round(avg_level * 0.45))
+	if kind == 1:
+		member.strength += 1
+		member.defense += 1
+	elif kind == 2:
+		member.agility += 1
+		member.intellect += 1
+	else:
+		member.agility += 2
+	member.hp = member.max_hp
+	member.mp = member.max_mp
+	member.ensure_bag()
+	party.members.append(member)
+	party.gold = max(0, party.gold - base_cost)
+	party.rebuild_inventory_view()
+	_emit_party_changed()
+	_emit_inventory_changed()
+	return {
+		"ok": true,
+		"member_id": member.member_id,
+		"member_name": member.display_name,
+		"cost": base_cost,
+		"message": "%s joined your party for %d gold." % [member.display_name, base_cost],
+	}
+
+func get_save_slot_metadata(path: String) -> Dictionary:
+	var out: Dictionary = {
+		"exists": FileAccess.file_exists(path),
+		"corrupt": false,
+		"saved_unix": 0,
+		"time_compact": "",
+		"location_label": "",
+		"party_avg_level": 0.0,
+	}
+	if not bool(out.get("exists", false)):
+		return out
+	var f: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		out["corrupt"] = true
+		return out
+	var text: String = f.get_as_text()
+	f.close()
+	var parsed: Variant = JSON.parse_string(text)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		out["corrupt"] = true
+		return out
+	var d: Dictionary = parsed
+	out["saved_unix"] = int(d.get("saved_unix", 0))
+	var wt: WorldTimeStateModel = WorldTimeStateModel.from_dict(d.get("world_time", {}))
+	out["time_compact"] = wt.format_compact()
+	var loc: Dictionary = d.get("location", {})
+	out["location_label"] = "W(%d,%d) L(%d,%d)" % [
+		int(loc.get("world_x", 0)),
+		int(loc.get("world_y", 0)),
+		int(loc.get("local_x", 48)),
+		int(loc.get("local_y", 48)),
+	]
+	var p: Dictionary = d.get("party", {})
+	var members: Array = p.get("members", [])
+	if not members.is_empty():
+		var sum_lv: float = 0.0
+		var n: int = 0
+		for entry in members:
+			if typeof(entry) != TYPE_DICTIONARY:
+				continue
+			sum_lv += max(1.0, float((entry as Dictionary).get("level", 1)))
+			n += 1
+		if n > 0:
+			out["party_avg_level"] = sum_lv / float(n)
+	return out
 
 func get_menu_snapshot() -> Dictionary:
 	var inventory_lines: PackedStringArray = PackedStringArray()
@@ -792,41 +1341,49 @@ func load_from_path(path: String = SceneContracts.SAVE_SLOT_0) -> bool:
 	return true
 
 func _to_save_payload() -> Dictionary:
-	var biome_array: Array = []
-	for b in world_biome_ids:
-		biome_array.append(int(b))
+	var now_unix: int = int(Time.get_unix_time_from_system())
 	return {
 		"version": SAVE_SCHEMA_VERSION,
+		"saved_unix": now_unix,
 		"world_seed_hash": world_seed_hash,
 		"world_width": world_width,
 		"world_height": world_height,
-		"world_biome_ids": biome_array,
+		"world_biome_ids": _packed_int32_to_array(world_biome_ids),
+		"world_height_raw": _packed_float32_to_array(world_height_raw),
+		"world_temperature": _packed_float32_to_array(world_temperature),
+		"world_moisture": _packed_float32_to_array(world_moisture),
+		"world_land_mask": _packed_byte_to_array(world_land_mask),
+		"world_beach_mask": _packed_byte_to_array(world_beach_mask),
 		"location": location.duplicate(true),
 		"party": party.to_dict(),
 		"world_time": world_time.to_dict(),
 		"settings_state": settings_state.to_dict(),
 		"quest_state": quest_state.to_dict(),
 		"world_flags": world_flags.to_dict(),
+		"economy_state": economy_state.to_dict(),
+		"politics_state": politics_state.to_dict(),
+		"npc_world_state": npc_world_state.to_dict(),
+		"civilization_state": civilization_state.to_dict(),
 		"pending_battle": pending_battle.duplicate(true),
 		"pending_poi": pending_poi.duplicate(true),
 		"last_battle_result": last_battle_result.duplicate(true),
 		"run_flags": run_flags.duplicate(true),
+		"regional_cache_stats": regional_cache_stats.duplicate(true),
+		"local_rest_context": local_rest_context.duplicate(true),
+		"society_gpu_stats": society_gpu_stats.duplicate(true),
 	}
 
 func _from_save_payload(data: Dictionary, version: int = SAVE_SCHEMA_VERSION) -> void:
 	world_seed_hash = int(data.get("world_seed_hash", 0))
 	world_width = max(0, int(data.get("world_width", 0)))
 	world_height = max(0, int(data.get("world_height", 0)))
-	world_biome_ids = PackedInt32Array()
-	world_height_raw = PackedFloat32Array()
-	world_temperature = PackedFloat32Array()
-	world_moisture = PackedFloat32Array()
-	world_land_mask = PackedByteArray()
-	world_beach_mask = PackedByteArray()
-	var incoming_biomes: Array = data.get("world_biome_ids", [])
-	world_biome_ids.resize(incoming_biomes.size())
-	for i in range(incoming_biomes.size()):
-		world_biome_ids[i] = int(incoming_biomes[i])
+	var size: int = max(0, world_width * world_height)
+	world_biome_ids = _variant_to_packed_int32(data.get("world_biome_ids", []), size)
+	world_height_raw = _variant_to_packed_float32(data.get("world_height_raw", []), size)
+	world_temperature = _variant_to_packed_float32(data.get("world_temperature", []), size)
+	world_moisture = _variant_to_packed_float32(data.get("world_moisture", []), size)
+	world_land_mask = _variant_to_packed_byte(data.get("world_land_mask", []), size)
+	world_beach_mask = _variant_to_packed_byte(data.get("world_beach_mask", []), size)
 	location = data.get("location", {}).duplicate(true)
 	_normalize_location()
 	party = PartyStateModel.from_dict(data.get("party", {}))
@@ -842,10 +1399,32 @@ func _from_save_payload(data: Dictionary, version: int = SAVE_SCHEMA_VERSION) ->
 		quest_state.reset_defaults()
 		world_flags = WorldFlagsStateModel.new()
 		world_flags.reset_defaults()
+	if version >= 6:
+		economy_state = EconomyStateModel.from_dict(data.get("economy_state", {}))
+		politics_state = PoliticsStateModel.from_dict(data.get("politics_state", {}))
+		npc_world_state = NpcWorldStateModel.from_dict(data.get("npc_world_state", {}))
+		civilization_state = CivilizationStateModel.from_dict(data.get("civilization_state", {}))
+		regional_cache_stats = data.get("regional_cache_stats", {}).duplicate(true)
+		local_rest_context = data.get("local_rest_context", {}).duplicate(true)
+		society_gpu_stats = data.get("society_gpu_stats", {}).duplicate(true)
+	else:
+		economy_state = EconomyStateModel.new()
+		economy_state.reset_defaults()
+		politics_state = PoliticsStateModel.new()
+		politics_state.reset_defaults()
+		npc_world_state = NpcWorldStateModel.new()
+		npc_world_state.reset_defaults()
+		civilization_state = CivilizationStateModel.new()
+		civilization_state.reset_defaults()
+		regional_cache_stats = {}
+		local_rest_context = {}
+		society_gpu_stats = {}
 	pending_battle = data.get("pending_battle", {}).duplicate(true)
 	pending_poi = data.get("pending_poi", {}).duplicate(true)
 	last_battle_result = data.get("last_battle_result", {}).duplicate(true)
 	run_flags = data.get("run_flags", {}).duplicate(true)
+	_ensure_sim_state_defaults()
+	_refresh_epoch_metadata()
 	_ingame_time_accum_seconds = 0.0
 
 func _emit_location_changed() -> void:
