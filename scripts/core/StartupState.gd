@@ -45,6 +45,9 @@ func reset() -> void:
 	_intro_seed_string = ""
 	_intro_seed_base = ""
 	_intro_world_prepared = false
+	clear_runtime_gameplay_state()
+
+func clear_runtime_gameplay_state() -> void:
 	world_seed_hash = 0
 	world_width = 0
 	world_height = 0
@@ -202,34 +205,50 @@ func _derive_world_config(orbit: float) -> Dictionary:
 	var hot_extreme: float = pow(hot_side, 2.20)
 	var cold_extreme: float = pow(cold_side, 2.20)
 	var harshness: float = pow(edge, 1.55)
+	var orbit_signed: float = clamp((0.5 - orbit_n) * 2.0, -1.0, 1.0) # left=+hot, right=-cold
+	var thermal_bias: float = sign(orbit_signed) * pow(abs(orbit_signed), 1.30)
 
-	# Temperature envelope: make hot-side placement warm up more decisively so
-	# ice retreat comes mainly from climate, not explicit cap forcing.
-	var temp_min_c: float = -12.0 - cold_extreme * 50.0 + hot_extreme * 20.0
-	var temp_max_c: float = 46.0 - cold_extreme * 22.0 + hot_extreme * 52.0
+	# Temperature envelope:
+	# - Left/hot side shifts global baseline hotter.
+	# - Right/cold side shifts global baseline colder with similar strength.
+	var temp_mean_shift_c: float = thermal_bias * 40.0
+	var temp_span_boost_c: float = abs(thermal_bias) * 8.0
+	var temp_min_c: float = -16.0 + temp_mean_shift_c - temp_span_boost_c
+	var temp_max_c: float = 44.0 + temp_mean_shift_c + temp_span_boost_c
 
-	# Keep oceans present through most of the band; reduce only near harsh hot edge.
-	var sea_level: float = 0.08 - harshness * 0.10 - hot_extreme * 0.20 + cold_extreme * 0.06
-	sea_level = clamp(sea_level, -0.40, 0.22)
+	# Ocean profile by orbit side:
+	# - Left/hot side dries aggressively (very-left worlds can become near-landlocked).
+	# - Center/right keep ocean levels around the current baseline with deterministic jitter.
+	var left_dryness: float = pow(hot_side, 1.30)
+	var center_right_weight: float = clamp((orbit_n - 0.40) / 0.60, 0.0, 1.0)
+	var ocean_key: String = "%s|ocean_profile|%.4f" % [_intro_seed_base, orbit_n]
+	var ocean_hash: int = int(ocean_key.hash())
+	var ocean_jitter01: float = float(abs(ocean_hash % 10001)) / 10000.0
+	var ocean_jitter: float = (ocean_jitter01 - 0.5) * 0.14
+	var sea_level: float = 0.06 + cold_extreme * 0.05 - harshness * 0.04
+	sea_level -= left_dryness * 0.88
+	sea_level += ocean_jitter * center_right_weight
+	sea_level = clamp(sea_level, -0.95, 0.24)
 
 	# Keep explicit polar-cap forcing small on hot-side worlds; let temperature drive the rest.
 	var hot_cap_suppression: float = clamp(1.0 - hot_extreme * 0.90, 0.08, 1.0)
 	var polar_cap_raw: float = 0.015 + cold_extreme * 0.35 + pow(cold_side, 1.4) * 0.06
 	var polar_cap_frac: float = clamp(polar_cap_raw * hot_cap_suppression, 0.005, 0.50)
-	var moist_base_offset: float = 0.10 + habitability * 0.10 - hot_extreme * 0.20 - cold_extreme * 0.06
-	var moist_scale: float = clamp(0.84 + habitability * 0.22 - hot_extreme * 0.12 + cold_extreme * 0.04, 0.62, 1.14)
+	var moist_base_offset: float = 0.06 + habitability * 0.08 - hot_extreme * 0.48 - pow(hot_side, 1.4) * 0.22 - cold_extreme * 0.02
+	var moist_scale: float = clamp(0.80 + habitability * 0.20 - hot_extreme * 0.34 - pow(hot_side, 1.25) * 0.22 + cold_extreme * 0.06, 0.30, 1.12)
 	var season_amp_equator: float = clamp(lerp(0.05, 0.14, harshness) - hot_extreme * 0.015, 0.04, 0.14)
 	var season_amp_pole: float = clamp(0.14 + cold_extreme * 0.22 + harshness * 0.05 - hot_extreme * 0.08, 0.10, 0.40)
 	var diurnal_amp_equator: float = lerp(0.08, 0.20, hot_extreme)
 	var diurnal_amp_pole: float = lerp(0.04, 0.12, hot_extreme)
-	var min_ocean_fraction: float = clamp(0.03 + habitability * 0.10 + cold_extreme * 0.03 - hot_extreme * 0.04, 0.02, 0.18)
-	var lake_fill_ocean_ref: float = clamp(0.50 + habitability * 0.40 + cold_extreme * 0.08 - hot_extreme * 0.12, 0.30, 1.00)
+	var min_ocean_fraction_base: float = clamp(0.02 + habitability * 0.11 + cold_extreme * 0.03, 0.0, 0.18)
+	var min_ocean_fraction: float = clamp(min_ocean_fraction_base - left_dryness * 0.22, 0.0, 0.18)
+	var lake_fill_ocean_ref: float = clamp(0.48 + habitability * 0.36 + cold_extreme * 0.09 - hot_extreme * 0.08 - left_dryness * 0.22, 0.08, 1.00)
 
 	return {
 		"temp_min_c": temp_min_c,
 		"temp_max_c": temp_max_c,
-		"temp_base_offset": 0.20 + hot_extreme * 0.22 - cold_extreme * 0.18,
-		"temp_scale": clamp(0.96 + hot_extreme * 0.18 + cold_extreme * 0.10 - harshness * 0.05, 0.88, 1.18),
+		"temp_base_offset": 0.18 + thermal_bias * 0.52 + hot_extreme * 0.12 - cold_extreme * 0.12,
+		"temp_scale": clamp(0.92 + abs(thermal_bias) * 0.26 + hot_extreme * 0.10 + cold_extreme * 0.14 - harshness * 0.03, 0.86, 1.35),
 		"sea_level": sea_level,
 		"polar_cap_frac": polar_cap_frac,
 		"moist_base_offset": moist_base_offset,

@@ -1,5 +1,4 @@
 extends RefCounted
-class_name RegionalChunkCache
 
 
 var generator: RegionalChunkGenerator = null
@@ -109,7 +108,7 @@ func invalidate_for_world_tiles(
 			dirty_rects.append(Rect2i(xr.x, ry0, xr.y - xr.x + 1, ry1 - ry0 + 1))
 	if dirty_rects.is_empty():
 		return 0
-	var remove_keys: Array[Vector2i] = []
+	var remove_keys: Array = []
 	var cs: int = max(8, chunk_size)
 	for kv in _chunks.keys():
 		if typeof(kv) != TYPE_VECTOR2I:
@@ -180,8 +179,8 @@ func prefetch_for_view(
 
 	var center_gx: int = _normalize_global_coords(origin_x + int(floor(float(width_cells) * 0.5)), origin_y).x
 	var center_gy: int = clamp(origin_y + int(floor(float(height_cells) * 0.5)), 0, max_world_y)
-	var center_cx: int = center_gx // cs
-	var center_cy: int = center_gy // cs
+	var center_cx: int = _floor_div_int(center_gx, cs)
+	var center_cy: int = _floor_div_int(center_gy, cs)
 	_sort_chunk_keys_by_proximity(chunk_keys, center_cx, center_cy)
 
 	var gen_budget: int = max_generate_chunks if max_generate_chunks >= 0 else int(prefetch_generate_budget_chunks)
@@ -221,8 +220,8 @@ func get_cell(gx: int, gy: int) -> Dictionary:
 	gy = p.y
 	_tick += 1
 	var cs: int = chunk_size
-	var cx: int = gx // cs
-	var cy: int = gy // cs
+	var cx: int = _floor_div_int(gx, cs)
+	var cy: int = _floor_div_int(gy, cs)
 	var key := Vector2i(cx, cy)
 	var had_chunk: bool = _chunks.has(key)
 	_ensure_chunk(cx, cy)
@@ -323,14 +322,14 @@ func set_prefetch_budget(max_generate_chunks: int, budget_time_us: int) -> void:
 
 func _collect_prefetch_chunk_keys(min_x: int, max_x: int, min_y: int, max_y: int, cs: int) -> Array:
 	var out: Array = []
-	var cy0: int = min_y // cs
-	var cy1: int = max_y // cs
+	var cy0: int = _floor_div_int(min_y, cs)
+	var cy1: int = _floor_div_int(max_y, cs)
 	var x_ranges: Array = _wrapped_x_ranges(min_x, max_x)
 	var seen: Dictionary = {}
 	for xr in x_ranges:
 		var rr: Vector2i = xr
-		var cx0: int = rr.x // cs
-		var cx1: int = rr.y // cs
+		var cx0: int = _floor_div_int(rr.x, cs)
+		var cx1: int = _floor_div_int(rr.y, cs)
 		for cy in range(cy0, cy1 + 1):
 			for cx in range(cx0, cx1 + 1):
 				var key := Vector2i(cx, cy)
@@ -344,23 +343,42 @@ func _sort_chunk_keys_by_proximity(keys: Array, center_cx: int, center_cy: int) 
 	if keys.size() <= 1:
 		return
 	var period_x_chunks: int = max(1, int(ceil(float(max(1, int(generator.world_width) * int(generator.region_size))) / float(max(1, chunk_size)))))
-	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
-		if typeof(a) != TYPE_VECTOR2I or typeof(b) != TYPE_VECTOR2I:
-			return false
-		var ka: Vector2i = a as Vector2i
-		var kb: Vector2i = b as Vector2i
-		var dax: int = abs(ka.x - center_cx)
-		dax = min(dax, max(0, period_x_chunks - dax))
-		var dbx: int = abs(kb.x - center_cx)
-		dbx = min(dbx, max(0, period_x_chunks - dbx))
-		var da: int = dax + abs(ka.y - center_cy)
-		var db: int = dbx + abs(kb.y - center_cy)
-		if da == db:
-			if ka.y == kb.y:
-				return ka.x < kb.x
-			return ka.y < kb.y
-		return da < db
-	)
+	var ordered: Array = []
+	for kv in keys:
+		if typeof(kv) != TYPE_VECTOR2I:
+			continue
+		var ck: Vector2i = kv as Vector2i
+		var inserted: bool = false
+		for i in range(ordered.size()):
+			var ov: Variant = ordered[i]
+			if typeof(ov) != TYPE_VECTOR2I:
+				continue
+			var ok: Vector2i = ov as Vector2i
+			if _chunk_key_less(ck, ok, center_cx, center_cy, period_x_chunks):
+				ordered.insert(i, ck)
+				inserted = true
+				break
+		if not inserted:
+			ordered.append(ck)
+	keys.clear()
+	keys.append_array(ordered)
+
+func _floor_div_int(value: int, divisor: int) -> int:
+	var d: int = max(1, int(divisor))
+	return int(floor(float(value) / float(d)))
+
+func _chunk_key_less(a: Vector2i, b: Vector2i, center_cx: int, center_cy: int, period_x_chunks: int) -> bool:
+	var dax: int = abs(a.x - center_cx)
+	dax = min(dax, max(0, period_x_chunks - dax))
+	var dbx: int = abs(b.x - center_cx)
+	dbx = min(dbx, max(0, period_x_chunks - dbx))
+	var da: int = dax + abs(a.y - center_cy)
+	var db: int = dbx + abs(b.y - center_cy)
+	if da == db:
+		if a.y == b.y:
+			return a.x < b.x
+		return a.y < b.y
+	return da < db
 
 func _rect_intersects(
 	ax0: int,

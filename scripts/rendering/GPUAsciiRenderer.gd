@@ -252,6 +252,11 @@ func set_cloud_rendering_params(shadow_strength: float, light_strength: float, s
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_cloud_rendering_params"):
 		quad_renderer.set_cloud_rendering_params(shadow_strength, light_strength, shadow_offset)
 
+func set_water_rendering_params(wave_strength: float) -> void:
+	"""Configure water wave intensity in the terrain shader."""
+	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_water_rendering_params"):
+		quad_renderer.set_water_rendering_params(wave_strength)
+
 func set_noise_world_origin(origin_x: float, origin_y: float) -> void:
 	"""Set world-space cell origin used by shader noise hashing."""
 	if is_gpu_rendering_enabled and quad_renderer and quad_renderer.has_method("set_noise_world_origin"):

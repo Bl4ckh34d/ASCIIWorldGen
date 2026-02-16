@@ -27,6 +27,7 @@ uniform float sea_level = 0.0;
 uniform float cloud_shadow_strength = 0.14;
 uniform float cloud_light_strength = 0.25;
 uniform vec2 cloud_shadow_offset = vec2(1.5, 1.0);
+uniform float water_wave_strength = 0.0;
 uniform float day_of_year = 0.0;
 uniform float time_of_day = 0.0;
 // When enabled, override lon/lat for solar geometry (regional/local map views).
@@ -348,7 +349,8 @@ void fragment() {
     bool relief_water = (height_raw <= sea_level - 0.015);
     bool relief_land = (height_raw > sea_level + 0.02);
     bool is_ocean_biome = (abs(biome_id - BIOME_OCEAN) < 0.5) || (abs(biome_id - BIOME_ICE_SHEET) < 0.5);
-    bool is_land_tile = ((is_land >= 0.5) && !relief_water) || relief_land;
+    bool force_foreground_marker = (!is_unknown_marker) && ((abs(biome_id - 220.0) < 0.5) || (abs(biome_id - MARKER_PLAYER_UNDER_CANOPY) < 0.5));
+    bool is_land_tile = force_foreground_marker || (((is_land >= 0.5) && !relief_water) || relief_land);
     bool submerged_surface = (!is_unknown_marker) && (biome_id < 200.0) && relief_water;
     if (submerged_surface || (!is_unknown_marker && is_ocean_biome && relief_water)) {
         is_land_tile = false;
@@ -539,13 +541,14 @@ void fragment() {
     // Water glint around subsolar region with sparkle breakup.
     bool water_surface = (!hide_ocean_in_bedrock) && (!is_land_tile || lake_here);
     float wave_crest = 0.0;
-    if (water_surface) {
+    float wave_strength = clamp(water_wave_strength, 0.0, 2.0);
+    if (water_surface && wave_strength > 0.0001) {
         float depth = max(0.0, sea_level - height_raw);
         float shallowness = clamp(1.0 - depth / 0.30, 0.0, 1.0);
-        float wave = water_wave_signal(world_cell, char_uv);
+        float wave = water_wave_signal(world_cell, char_uv) * wave_strength;
         float ripple_amp = mix(0.016, 0.052, shallowness);
         base_color = clamp(base_color * (1.0 + wave * ripple_amp), vec3(0.0), vec3(1.0));
-        wave_crest = smoothstep(0.46, 0.98, wave) * (0.12 + shallowness * 0.88);
+        wave_crest = smoothstep(0.46, 0.98, wave) * (0.12 + shallowness * 0.88) * wave_strength;
         base_color = mix(base_color, vec3(0.84, 0.93, 0.99), wave_crest * 0.24);
     }
     float glint_add = 0.0;

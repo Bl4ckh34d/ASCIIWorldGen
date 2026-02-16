@@ -777,6 +777,9 @@ func _init_gpu_rendering() -> void:
 			gpu_map.set_cloud_overlay_enabled(false)
 		if "set_cloud_rendering_params" in gpu_map:
 			gpu_map.set_cloud_rendering_params(0.32, 0.0, Vector2(1.9, 1.25))
+		if "set_water_rendering_params" in gpu_map:
+			# Local/regional gameplay views: no animated water ripple wobble.
+			gpu_map.set_water_rendering_params(0.0)
 	# Initialize per-view GPU field packer.
 	if _gpu_view == null:
 		_gpu_view = GpuMapView.new()
@@ -799,8 +802,8 @@ func _update_view_window_origin() -> void:
 		return
 	var cx: int = int(floor(_player_fx))
 	var cy: int = int(floor(_player_fy))
-	var half_w: int = _view_w / 2
-	var half_h: int = _view_h / 2
+	var half_w: int = int(floor(float(_view_w) * 0.5))
+	var half_h: int = int(floor(float(_view_h) * 0.5))
 	var max_x: int = max(0, room_w - _view_w)
 	var max_y: int = max(0, room_h - _view_h)
 	_view_origin_x = clamp(cx - half_w, 0, max_x)
@@ -1974,7 +1977,7 @@ func _astar_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
 
 		closed[current_id] = true
 		var cx: int = int(current_id % room_w)
-		var cy: int = int(current_id / room_w)
+		var cy: int = int(floor(float(current_id) / float(max(1, room_w))))
 		for d in dirs:
 			var nx: int = cx + d.x
 			var ny: int = cy + d.y
@@ -2019,7 +2022,7 @@ func _reconstruct_astar_path(came_from: Dictionary, current_id: int, start_id: i
 	var cur: int = int(current_id)
 	var safety: int = 0
 	while true:
-		out.append(Vector2i(int(cur % room_w), int(cur / room_w)))
+		out.append(Vector2i(int(cur % room_w), int(floor(float(cur) / float(max(1, room_w))))))
 		if cur == start_id:
 			break
 		if not came_from.has(cur):
@@ -2189,7 +2192,7 @@ func _grant_main_treasure() -> void:
 		item_name = c_sorted[idx2]
 		var ci: Dictionary = ItemCatalog.get_item(item_name)
 		if VariantCasts.to_bool(ci.get("stackable", true)):
-			var max_extra: int = max(0, 2 - int(ci.get("tier", 1)) / 2)
+			var max_extra: int = max(0, 2 - int(floor(float(int(ci.get("tier", 1))) * 0.5)))
 			item_count = 1 + DeterministicRng.randi_range(_world_seed_hash, "treasure_cons_count|%s" % _poi_id, 0, max_extra)
 	if not ItemCatalog.has_item(item_name):
 		item_name = "Potion"

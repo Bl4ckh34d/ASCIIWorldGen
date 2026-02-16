@@ -41,6 +41,7 @@ var _cloud_overlay_enabled: bool = true
 var _cloud_shadow_strength: float = 0.14
 var _cloud_light_strength: float = 0.25
 var _cloud_shadow_offset: Vector2 = Vector2(1.5, 1.0)
+var _water_wave_strength: float = 0.0
 
 # Data managers
 var font_atlas_generator: Object
@@ -183,6 +184,7 @@ func _create_material() -> void:
 		quad_material.set_shader_parameter("cloud_shadow_strength", _cloud_shadow_strength)
 		quad_material.set_shader_parameter("cloud_light_strength", _cloud_light_strength)
 		quad_material.set_shader_parameter("cloud_shadow_offset", _cloud_shadow_offset)
+		quad_material.set_shader_parameter("water_wave_strength", _water_wave_strength)
 		quad_material.set_shader_parameter("day_of_year", _solar_day_of_year)
 		quad_material.set_shader_parameter("time_of_day", _solar_time_of_day)
 		quad_material.set_shader_parameter("use_fixed_lonlat", 0)
@@ -391,6 +393,7 @@ func _update_material_uniforms() -> void:
 		shader_mat.set_shader_parameter("cloud_shadow_strength", _cloud_shadow_strength)
 		shader_mat.set_shader_parameter("cloud_light_strength", _cloud_light_strength)
 		shader_mat.set_shader_parameter("cloud_shadow_offset", _cloud_shadow_offset)
+		shader_mat.set_shader_parameter("water_wave_strength", _water_wave_strength)
 		shader_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 		shader_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
 		shader_mat.set_shader_parameter("use_fixed_lonlat", 1 if _use_fixed_lonlat else 0)
@@ -456,6 +459,7 @@ func _update_light_uniform() -> void:
 		shader_mat.set_shader_parameter("bedrock_only_mode", 1 if _render_bedrock_view else 0)
 		shader_mat.set_shader_parameter("day_of_year", _solar_day_of_year)
 		shader_mat.set_shader_parameter("time_of_day", _solar_time_of_day)
+		shader_mat.set_shader_parameter("water_wave_strength", _water_wave_strength)
 		shader_mat.set_shader_parameter("use_fixed_lonlat", 1 if _use_fixed_lonlat else 0)
 		shader_mat.set_shader_parameter("fixed_lon", _fixed_lon)
 		shader_mat.set_shader_parameter("fixed_phi", _fixed_phi)
@@ -507,6 +511,12 @@ func set_cloud_rendering_params(shadow_strength: float, light_strength: float, s
 		shader_mat.set_shader_parameter("cloud_shadow_strength", _cloud_shadow_strength)
 		shader_mat.set_shader_parameter("cloud_light_strength", _cloud_light_strength)
 		shader_mat.set_shader_parameter("cloud_shadow_offset", _cloud_shadow_offset)
+
+func set_water_rendering_params(wave_strength: float) -> void:
+	_water_wave_strength = clamp(wave_strength, 0.0, 2.0)
+	if quad_material and quad_material is ShaderMaterial:
+		var shader_mat := quad_material as ShaderMaterial
+		shader_mat.set_shader_parameter("water_wave_strength", _water_wave_strength)
 
 func set_noise_world_origin(origin_x: float, origin_y: float) -> void:
 	_noise_world_origin = Vector2(origin_x, origin_y)

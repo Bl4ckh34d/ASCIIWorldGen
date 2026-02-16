@@ -14,7 +14,15 @@ const _SETTLEMENT_CITY: int = 3
 static var _tile_plan_cache: Dictionary = {}
 static var _tile_plan_order: Array[String] = []
 
-static func get_poi_at(world_seed_hash: int, world_x: int, world_y: int, local_x: int, local_y: int, biome_id: int) -> Dictionary:
+static func get_poi_at(
+	world_seed_hash: int,
+	world_x: int,
+	world_y: int,
+	local_x: int,
+	local_y: int,
+	biome_id: int,
+	settlement_context: Dictionary = {}
+) -> Dictionary:
 	if biome_id == 0 or biome_id == 1:
 		return {}
 	local_x = int(local_x)
@@ -23,7 +31,7 @@ static func get_poi_at(world_seed_hash: int, world_x: int, world_y: int, local_x
 		return {}
 	if local_x % POI_GRID_STEP != 0 or local_y % POI_GRID_STEP != 0:
 		return {}
-	var plan: Dictionary = _tile_plan(world_seed_hash, world_x, world_y, biome_id)
+	var plan: Dictionary = _tile_plan(world_seed_hash, world_x, world_y, biome_id, settlement_context)
 	var pv: Variant = plan.get("poi_by_local", {})
 	if typeof(pv) != TYPE_DICTIONARY:
 		return {}
@@ -34,17 +42,24 @@ static func get_poi_at(world_seed_hash: int, world_x: int, world_y: int, local_x
 		return (vv as Dictionary).duplicate(true)
 	return {}
 
-static func _tile_plan(world_seed_hash: int, world_x: int, world_y: int, biome_id: int) -> Dictionary:
+static func _tile_plan(
+	world_seed_hash: int,
+	world_x: int,
+	world_y: int,
+	biome_id: int,
+	settlement_context: Dictionary = {}
+) -> Dictionary:
 	var seed_value: int = 1 if int(world_seed_hash) == 0 else int(world_seed_hash)
 	world_x = int(world_x)
 	world_y = int(world_y)
 	biome_id = int(biome_id)
-	var cache_key: String = "%d|%d|%d|%d" % [seed_value, world_x, world_y, biome_id]
+	var context_sig: String = _settlement_context_signature(settlement_context)
+	var cache_key: String = "%d|%d|%d|%d|%s" % [seed_value, world_x, world_y, biome_id, context_sig]
 	var cv: Variant = _tile_plan_cache.get(cache_key, {})
 	if typeof(cv) == TYPE_DICTIONARY and not (cv as Dictionary).is_empty():
 		return cv as Dictionary
 
-	var built: Dictionary = _build_tile_plan(seed_value, world_x, world_y, biome_id)
+	var built: Dictionary = _build_tile_plan(seed_value, world_x, world_y, biome_id, settlement_context)
 	_tile_plan_cache[cache_key] = built
 	_tile_plan_order.append(cache_key)
 	if _tile_plan_order.size() > _CACHE_LIMIT:
@@ -53,7 +68,13 @@ static func _tile_plan(world_seed_hash: int, world_x: int, world_y: int, biome_i
 		_tile_plan_cache.erase(old_key)
 	return built
 
-static func _build_tile_plan(seed_value: int, world_x: int, world_y: int, biome_id: int) -> Dictionary:
+static func _build_tile_plan(
+	seed_value: int,
+	world_x: int,
+	world_y: int,
+	biome_id: int,
+	settlement_context: Dictionary = {}
+) -> Dictionary:
 	var plan: Dictionary = {
 		"poi_by_local": {},
 		"settlement_tier": "wild",
@@ -63,9 +84,13 @@ static func _build_tile_plan(seed_value: int, world_x: int, world_y: int, biome_
 	var layout_cache: Dictionary = {}
 	var key_root: String = "tile|%d|%d|b=%d" % [world_x, world_y, biome_id]
 
-	var tier: int = _choose_settlement_tier(seed_value, world_x, world_y, biome_id)
+	var tier: int = _choose_settlement_tier(seed_value, world_x, world_y, biome_id, settlement_context)
+	var allow_wild_houses: bool = true
+	if not settlement_context.is_empty():
+		allow_wild_houses = bool(settlement_context.get("allow_wild_houses", false))
 	if tier == _SETTLEMENT_NONE:
-		_populate_wild_houses(seed_value, world_x, world_y, biome_id, key_root + "|wild", poi_by_local, used_boxes, -1, layout_cache)
+		if allow_wild_houses:
+			_populate_wild_houses(seed_value, world_x, world_y, biome_id, key_root + "|wild", poi_by_local, used_boxes, -1, layout_cache)
 		_add_dungeon_pois(seed_value, world_x, world_y, biome_id, key_root + "|dungeons", tier, poi_by_local, used_boxes)
 		return plan
 
@@ -112,7 +137,41 @@ static func _build_tile_plan(seed_value: int, world_x: int, world_y: int, biome_
 	_add_dungeon_pois(seed_value, world_x, world_y, biome_id, key_root + "|dungeons", tier, poi_by_local, used_boxes)
 	return plan
 
-static func _choose_settlement_tier(seed_value: int, world_x: int, world_y: int, biome_id: int) -> int:
+static func _choose_settlement_tier(
+	seed_value: int,
+	world_x: int,
+	world_y: int,
+	biome_id: int,
+	settlement_context: Dictionary = {}
+) -> int:
+	if not settlement_context.is_empty():
+		var humans_emerged: bool = bool(settlement_context.get("humans_emerged", false))
+		if not humans_emerged:
+			return _SETTLEMENT_NONE
+		var allow_settlement: bool = bool(settlement_context.get("allow_settlement", false))
+		var settlement_core: bool = bool(settlement_context.get("settlement_core", false))
+		var effective_pop: float = _effective_pop_from_context(settlement_context)
+		var strength: float = clamp(float(settlement_context.get("settlement_strength", effective_pop / 280.0)), 0.0, 1.0)
+		var biome_weight: float = _settlement_spawn_weight_for_biome(biome_id)
+		if biome_weight <= 0.0001:
+			return _SETTLEMENT_NONE
+		if not allow_settlement and not settlement_core:
+			return _SETTLEMENT_NONE
+		var viability: float = clamp(
+			strength * (0.70 + biome_weight * 0.45) + (0.20 if settlement_core else 0.0),
+			0.0,
+			1.0
+		)
+		if effective_pop >= 320.0 and viability >= 0.45:
+			return _SETTLEMENT_CITY
+		if effective_pop >= 120.0 and viability >= 0.25:
+			return _SETTLEMENT_TOWN
+		if effective_pop >= 18.0 and viability >= 0.08:
+			return _SETTLEMENT_VILLAGE
+		if settlement_core and effective_pop >= 8.0:
+			return _SETTLEMENT_VILLAGE
+		return _SETTLEMENT_NONE
+
 	var weight: float = _settlement_spawn_weight_for_biome(biome_id)
 	if weight <= 0.0001:
 		return _SETTLEMENT_NONE
@@ -128,6 +187,32 @@ static func _choose_settlement_tier(seed_value: int, world_x: int, world_y: int,
 	if size_roll < town_threshold:
 		return _SETTLEMENT_TOWN
 	return _SETTLEMENT_VILLAGE
+
+static func _effective_pop_from_context(settlement_context: Dictionary) -> float:
+	var human_pop: float = max(0.0, float(settlement_context.get("human_pop", 0.0)))
+	var settlement_pop: float = max(0.0, float(settlement_context.get("settlement_pop", 0.0)))
+	var effective_pop: float = max(human_pop, settlement_pop)
+	return max(effective_pop, max(0.0, float(settlement_context.get("effective_pop", effective_pop))))
+
+static func _settlement_context_signature(settlement_context: Dictionary) -> String:
+	if settlement_context.is_empty():
+		return "legacy"
+	var humans: int = 1 if bool(settlement_context.get("humans_emerged", false)) else 0
+	var allow_settlement: int = 1 if bool(settlement_context.get("allow_settlement", false)) else 0
+	var allow_wild_houses: int = 1 if bool(settlement_context.get("allow_wild_houses", false)) else 0
+	var settlement_core: int = 1 if bool(settlement_context.get("settlement_core", false)) else 0
+	var effective_pop: float = _effective_pop_from_context(settlement_context)
+	var pop_bucket: int = int(floor(effective_pop / 8.0))
+	var strength: float = clamp(float(settlement_context.get("settlement_strength", effective_pop / 280.0)), 0.0, 1.0)
+	var strength_bucket: int = int(round(strength * 32.0))
+	return "%d|%d|%d|%d|%d|%d" % [
+		humans,
+		allow_settlement,
+		allow_wild_houses,
+		settlement_core,
+		pop_bucket,
+		strength_bucket,
+	]
 
 static func _settlement_profile(tier: int) -> Dictionary:
 	match int(tier):

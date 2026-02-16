@@ -7,7 +7,7 @@ const PI: float = 3.14159265359
 const REGION_SIZE: int = 96
 const VIEW_W: int = 64
 const VIEW_H: int = 30
-const VIEW_PAD: int = 2
+const VIEW_PAD: int = 10
 const RENDER_W: int = VIEW_W + VIEW_PAD * 2
 const RENDER_H: int = VIEW_H + VIEW_PAD * 2
 
@@ -42,7 +42,7 @@ var world_river_mask: PackedByteArray = PackedByteArray()
 var _location_biome_override_id: int = -1
 
 var _chunk_gen: RegionalChunkGenerator = null
-var _chunk_cache: RegionalChunkCache = null
+var _chunk_cache: RefCounted = null
 var _gpu_view: Object = null
 
 var _player_gx: float = 0.0
@@ -87,6 +87,8 @@ var _field_beach_scratch: PackedInt32Array = PackedInt32Array()
 var _house_layout_cache: Dictionary = {} # key -> generated local house layout
 var _visible_poi_overrides: Dictionary = {} # "gx,gy" -> poi info (for rendered house footprints)
 var _visible_house_wall_blocks: Dictionary = {} # "gx,gy" -> true for rendered house wall cells
+var _poi_context_cache: Dictionary = {} # Vector2i(world_tile_x, world_tile_y) -> context dictionary
+var _poi_context_token: int = -2147483648
 var _last_redraw_mode: String = ""
 var _last_redraw_us: int = 0
 var _last_redraw_fresh_cells: int = 0
@@ -117,6 +119,8 @@ func _init_regional_generation() -> void:
 	_house_layout_cache.clear()
 	_visible_poi_overrides.clear()
 	_visible_house_wall_blocks.clear()
+	_poi_context_cache.clear()
+	_poi_context_token = -2147483648
 	_transition_quantized_tiles.clear()
 	_walk_prefetch_accum = 0.0
 	if world_biome_ids.is_empty():
@@ -140,15 +144,25 @@ func _init_regional_generation() -> void:
 		world_river_mask = PackedByteArray()
 	_chunk_gen = RegionalChunkGenerator.new()
 	_chunk_gen.configure(world_seed_hash, world_width, world_height, world_biome_ids, REGION_SIZE, world_river_mask)
+	if "set_poi_context_resolver" in _chunk_gen:
+		_chunk_gen.set_poi_context_resolver(Callable(self, "_resolve_poi_context_for_tile"))
 	if _location_biome_override_id >= 0 and "set_biome_overrides" in _chunk_gen:
 		_chunk_gen.set_biome_overrides({
 			Vector2i(world_tile_x, world_tile_y): int(_location_biome_override_id),
 		})
-	_chunk_cache = RegionalChunkCache.new()
+	var chunk_cache_script: Script = load("res://scripts/gameplay/RegionalChunkCache.gd")
+	if chunk_cache_script == null:
+		push_error("RegionalMap: failed to load RegionalChunkCache.gd")
+		return
+	_chunk_cache = chunk_cache_script.new()
+	if _chunk_cache == null:
+		push_error("RegionalMap: failed to instantiate RegionalChunkCache")
+		return
 	# Slightly smaller chunks reduce worst-case single-chunk generation spikes while walking.
 	_chunk_cache.configure(_chunk_gen, 24, 320)
 	if _chunk_cache.has_method("set_prefetch_budget"):
 		_chunk_cache.set_prefetch_budget(_CHUNK_PREFETCH_BUDGET_CHUNKS, _CHUNK_PREFETCH_BUDGET_US)
+	_refresh_poi_context_cache_if_needed(true)
 	_refresh_regional_transition_overrides(true)
 
 func _ensure_valid_spawn() -> void:
@@ -324,6 +338,9 @@ func _init_gpu_rendering() -> void:
 			gpu_map.set_cloud_overlay_enabled(false)
 		if "set_cloud_rendering_params" in gpu_map:
 			gpu_map.set_cloud_rendering_params(0.30, 0.0, Vector2(1.9, 1.25))
+		if "set_water_rendering_params" in gpu_map:
+			# Regional map: keep sun reflection, disable ripple/wobble artifacts.
+			gpu_map.set_water_rendering_params(0.0)
 	# Initialize per-view GPU field packer.
 	if _gpu_view == null:
 		_gpu_view = GpuMapView.new()
@@ -490,12 +507,15 @@ func _tick_time_visuals(delta: float) -> void:
 		return
 	_header_refresh_accum += delta
 	_dynamic_refresh_accum += delta
+	var poi_context_changed: bool = _refresh_poi_context_cache_if_needed(false)
 	if _header_refresh_accum >= _HEADER_REFRESH_INTERVAL:
 		_header_refresh_accum = 0.0
 		_update_header_text()
 	if _dynamic_refresh_accum >= _DYNAMIC_REFRESH_INTERVAL:
 		_dynamic_refresh_accum = 0.0
-		if _refresh_regional_transition_overrides(false):
+		if poi_context_changed:
+			_render_view()
+		elif _refresh_regional_transition_overrides(false):
 			_render_view()
 		else:
 			_update_dynamic_layers()
@@ -817,8 +837,8 @@ func _sync_location_from_player_pos() -> void:
 	var gy_int: int = _clamp_global_y(int(floor(_player_gy)))
 	_center_gx = gx_int
 	_center_gy = gy_int
-	var new_world_x: int = gx_int // REGION_SIZE
-	var new_world_y: int = gy_int // REGION_SIZE
+	var new_world_x: int = int(floor(float(gx_int) / float(REGION_SIZE)))
+	var new_world_y: int = int(floor(float(gy_int) / float(REGION_SIZE)))
 	world_tile_x = posmod(new_world_x, world_width)
 	world_tile_y = clamp(new_world_y, 0, world_height - 1)
 	local_x = gx_int - new_world_x * REGION_SIZE
@@ -847,8 +867,8 @@ func _update_fixed_lonlat_uniform() -> void:
 func _world_tile_from_global(gx: int, gy: int) -> Vector2i:
 	var gxw: int = _wrap_global_x(gx)
 	var gyc: int = _clamp_global_y(gy)
-	var wx: int = gxw // REGION_SIZE
-	var wy: int = gyc // REGION_SIZE
+	var wx: int = int(floor(float(gxw) / float(REGION_SIZE)))
+	var wy: int = int(floor(float(gyc) / float(REGION_SIZE)))
 	return Vector2i(posmod(wx, world_width), clamp(wy, 0, world_height - 1))
 
 func _crosses_world_tile_boundary(gx_from: int, gy_from: int, gx_to: int, gy_to: int) -> bool:
@@ -893,8 +913,8 @@ func _move_player(delta: Vector2i) -> void:
 	_player_gy = float(gy1)
 	_center_gx = gx1
 	_center_gy = gy1
-	var new_world_x: int = int(gx1 / REGION_SIZE)
-	var new_world_y: int = int(gy1 / REGION_SIZE)
+	var new_world_x: int = int(floor(float(gx1) / float(REGION_SIZE)))
+	var new_world_y: int = int(floor(float(gy1) / float(REGION_SIZE)))
 	world_tile_x = posmod(new_world_x, world_width)
 	world_tile_y = clamp(new_world_y, 0, world_height - 1)
 	local_x = gx1 - new_world_x * REGION_SIZE
@@ -931,9 +951,10 @@ func _roll_encounter_if_needed() -> bool:
 	var minute_of_day: int = -1
 	var day_of_year: int = -1
 	if game_state != null and game_state.get("world_time") != null:
-		var wt: Object = game_state.world_time
-		minute_of_day = int(wt.minute_of_day) if "minute_of_day" in wt else -1
-		if "abs_day_index" in wt:
+		var wt: WorldTimeStateModel = game_state.world_time
+		if wt != null:
+			minute_of_day = clamp(int(wt.minute_of_day), 0, WorldTimeStateModel.MINUTES_PER_DAY - 1)
+		if wt != null and wt.has_method("abs_day_index"):
 			day_of_year = posmod(int(wt.abs_day_index()), 365)
 	var meter_state: Dictionary = {}
 	if game_state != null and game_state.has_method("ensure_encounter_meter_state"):
@@ -1037,8 +1058,8 @@ func _render_view_incremental(prev_center_x: int, prev_center_y: int) -> bool:
 		return false
 	var t0_us: int = Time.get_ticks_usec()
 	_ensure_field_buffers()
-	var half_w: int = VIEW_W / 2
-	var half_h: int = VIEW_H / 2
+	var half_w: int = int(floor(float(VIEW_W) * 0.5))
+	var half_h: int = int(floor(float(VIEW_H) * 0.5))
 	var origin_x: int = _center_gx - half_w - VIEW_PAD
 	var origin_y: int = _center_gy - half_h - VIEW_PAD
 	var prefetch_generated: int = -1
@@ -1115,8 +1136,8 @@ func _render_view_full() -> void:
 		return
 	var t0_us: int = Time.get_ticks_usec()
 	_ensure_field_buffers()
-	var half_w: int = VIEW_W / 2
-	var half_h: int = VIEW_H / 2
+	var half_w: int = int(floor(float(VIEW_W) * 0.5))
+	var half_h: int = int(floor(float(VIEW_H) * 0.5))
 	var gx0: int = _center_gx
 	var gy0: int = _center_gy
 	var origin_x: int = gx0 - half_w - VIEW_PAD
@@ -1206,7 +1227,9 @@ func _write_field_cell(
 ) -> void:
 	var ground: int = int(cell.get("ground", RegionalChunkGenerator.Ground.GRASS))
 	var h: float = float(cell.get("height_raw", 0.0))
-	var b: int = int(cell.get("biome", _get_world_biome_id(int(gx / REGION_SIZE), int(gy / REGION_SIZE))))
+	var fallback_world_x: int = int(floor(float(gx) / float(REGION_SIZE)))
+	var fallback_world_y: int = int(floor(float(gy) / float(REGION_SIZE)))
+	var b: int = int(cell.get("biome", _get_world_biome_id(fallback_world_x, fallback_world_y)))
 	var climate_biome: int = b
 
 	var is_water: bool = (ground == RegionalChunkGenerator.Ground.WATER_DEEP) or (ground == RegionalChunkGenerator.Ground.WATER_SHALLOW)
@@ -1362,6 +1385,79 @@ func _house_layout_fits_dry_terrain(
 	var blocked_ratio: float = float(blocked_cells) / float(total_cells)
 	return water_ratio <= 0.08 and blocked_ratio <= 0.18
 
+func _marker_is_dynamic_clutter(marker_id: int) -> bool:
+	return marker_id == MARKER_TREE_CANOPY or marker_id == MARKER_SHRUB_CLUSTER or marker_id == MARKER_BOULDER or marker_id == MARKER_REEDS or marker_id == MARKER_PLAYER_UNDER_CANOPY
+
+func _apply_house_forest_clearing(
+	origin_y: int,
+	origin_wrap_x: int,
+	period_x: int,
+	max_global_y: int,
+	anchor_gx: int,
+	anchor_gy: int,
+	anchor_x: int,
+	anchor_y: int,
+	house_w: int,
+	house_h: int,
+	house_biome_id: int,
+	out_biome: PackedInt32Array,
+	out_land: PackedInt32Array,
+	out_beach: PackedInt32Array
+) -> void:
+	if _chunk_cache == null:
+		return
+	if not _is_forest_biome(house_biome_id):
+		return
+	var clear_pad: int = 6
+	var center_x: float = float(house_w - 1) * 0.5
+	var center_y: float = float(house_h - 1) * 0.5
+	var radius_x: float = float(house_w) * 0.55 + float(clear_pad)
+	var radius_y: float = float(house_h) * 0.55 + float(clear_pad)
+	for hy in range(-clear_pad, house_h + clear_pad + 1):
+		for hx in range(-clear_pad, house_w + clear_pad + 1):
+			var rel_x: float = (float(hx) - center_x) / max(1.0, radius_x)
+			var rel_y: float = (float(hy) - center_y) / max(1.0, radius_y)
+			var radial: float = sqrt(rel_x * rel_x + rel_y * rel_y)
+			var gx_target: int = _wrap_global_x(anchor_gx + (hx - anchor_x))
+			var gy_target: int = anchor_gy + (hy - anchor_y)
+			if gy_target < 0 or gy_target > max_global_y:
+				continue
+			var edge_noise: float = _rand01_xy(gx_target, gy_target, 9617)
+			var cutoff: float = 1.0 + (edge_noise - 0.5) * 0.34
+			if radial > cutoff:
+				continue
+			var keep_roll: float = _rand01_xy(gx_target, gy_target, 9618)
+			var inner_strength: float = clamp((cutoff - radial) / max(0.001, cutoff), 0.0, 1.0)
+			if inner_strength < 0.18:
+				var keep_prob: float = clamp((0.18 - inner_strength) * 3.2, 0.0, 0.55)
+				if keep_roll < keep_prob:
+					continue
+			var sx: int = posmod(gx_target - origin_wrap_x, period_x)
+			if sx < 0 or sx >= RENDER_W:
+				continue
+			var sy: int = gy_target - origin_y
+			if sy < 0 or sy >= RENDER_H:
+				continue
+			var ridx: int = sx + sy * RENDER_W
+			if ridx < 0 or ridx >= out_biome.size():
+				continue
+			var cell: Dictionary = _chunk_cache.get_cell(gx_target, gy_target)
+			var ground: int = int(cell.get("ground", RegionalChunkGenerator.Ground.GRASS))
+			if ground == RegionalChunkGenerator.Ground.WATER_DEEP or ground == RegionalChunkGenerator.Ground.WATER_SHALLOW:
+				continue
+			var flags: int = int(cell.get("flags", 0))
+			if (flags & RegionalChunkGenerator.FLAG_BLOCKED) != 0:
+				continue
+			var marker: int = int(out_biome[ridx])
+			if marker >= 200 and not _marker_is_dynamic_clutter(marker):
+				continue
+			var base_biome: int = int(cell.get("biome", house_biome_id))
+			if base_biome < 0 or base_biome >= 200:
+				base_biome = house_biome_id if house_biome_id >= 0 and house_biome_id < 200 else 7
+			out_biome[ridx] = base_biome
+			out_land[ridx] = 1
+			out_beach[ridx] = 0
+
 func _overlay_house_footprints(
 	origin_x: int,
 	origin_y: int,
@@ -1405,7 +1501,8 @@ func _overlay_house_footprints(
 				continue
 			seen_anchor_keys[anchor_key] = true
 			var biome_id: int = _get_world_biome_id(wx_scan, wy_scan)
-			var poi: Dictionary = PoiRegistry.get_poi_at(world_seed_hash, wx_scan, wy_scan, lx_scan, ly_scan, biome_id)
+			var settlement_ctx: Dictionary = _resolve_poi_context_for_tile(wx_scan, wy_scan)
+			var poi: Dictionary = PoiRegistry.get_poi_at(world_seed_hash, wx_scan, wy_scan, lx_scan, ly_scan, biome_id, settlement_ctx)
 			if poi.is_empty() or String(poi.get("type", "")) != "House":
 				continue
 			anchors.append({
@@ -1447,6 +1544,23 @@ func _overlay_house_footprints(
 		var aly: int = int(a.get("ly", 0))
 		if not _house_layout_fits_dry_terrain(agx, agy, anchor_x, anchor_y, tiles, hw, hh, max_global_y):
 			continue
+		var house_biome_id: int = _get_world_biome_id(awx, awy)
+		_apply_house_forest_clearing(
+			origin_y,
+			origin_wrap_x,
+			period_x,
+			max_global_y,
+			agx,
+			agy,
+			anchor_x,
+			anchor_y,
+			hw,
+			hh,
+			house_biome_id,
+			out_biome,
+			out_land,
+			out_beach
+		)
 
 		for hy in range(hh):
 			for hx in range(hw):
@@ -1764,13 +1878,52 @@ func _poi_info_at(tx: int, ty: int, lx: int, ly: int) -> Dictionary:
 	var vv: Variant = _visible_poi_overrides.get(key, {})
 	if typeof(vv) == TYPE_DICTIONARY:
 		return (vv as Dictionary).duplicate(true)
-	var direct: Dictionary = PoiRegistry.get_poi_at(world_seed_hash, tx, ty, lx, ly, _get_world_biome_id(tx, ty))
+	var settlement_ctx: Dictionary = _resolve_poi_context_for_tile(tx, ty)
+	var direct: Dictionary = PoiRegistry.get_poi_at(world_seed_hash, tx, ty, lx, ly, _get_world_biome_id(tx, ty), settlement_ctx)
 	if direct.is_empty():
 		return {}
 	# Houses should be entered from stamped door markers only.
 	if String(direct.get("type", "")) == "House":
 		return {}
 	return direct
+
+func _resolve_poi_context_for_tile(world_x: int, world_y: int) -> Dictionary:
+	var key := Vector2i(posmod(int(world_x), max(1, world_width)), clamp(int(world_y), 0, max(1, world_height) - 1))
+	var cached_v: Variant = _poi_context_cache.get(key, {})
+	if typeof(cached_v) == TYPE_DICTIONARY:
+		return cached_v as Dictionary
+	var out: Dictionary = {}
+	if game_state != null and game_state.has_method("get_poi_generation_context"):
+		var ctx_v: Variant = game_state.get_poi_generation_context(key.x, key.y)
+		if typeof(ctx_v) == TYPE_DICTIONARY:
+			out = (ctx_v as Dictionary).duplicate(true)
+	_poi_context_cache[key] = out
+	return out
+
+func _refresh_poi_context_cache_if_needed(force: bool) -> bool:
+	var token: int = _current_poi_context_token()
+	if not force and token == _poi_context_token:
+		return false
+	_poi_context_token = token
+	_poi_context_cache.clear()
+	if _chunk_gen != null and "invalidate_poi_context_cache" in _chunk_gen:
+		_chunk_gen.invalidate_poi_context_cache()
+	if _chunk_cache != null and _chunk_cache.has_method("invalidate_all"):
+		_chunk_cache.invalidate_all()
+	_field_cache_valid = false
+	return true
+
+func _current_poi_context_token() -> int:
+	var day_index: int = 0
+	var humans_emerged: int = 0
+	if game_state != null:
+		var world_time_state: WorldTimeStateModel = game_state.world_time if game_state.world_time != null else null
+		if world_time_state != null and world_time_state.has_method("abs_day_index"):
+			day_index = int(world_time_state.abs_day_index())
+		var civ_state: CivilizationStateModel = game_state.civilization_state if game_state.civilization_state != null else null
+		if civ_state != null:
+			humans_emerged = 1 if bool(civ_state.humans_emerged) else 0
+	return day_index * 2 + humans_emerged
 
 func _is_poi_cleared(poi_id: String) -> bool:
 	if poi_id.is_empty():
@@ -2031,13 +2184,22 @@ func _get_solar_params() -> Dictionary:
 	var time_of_day: float = 0.0
 	var sim_days: float = 0.0
 	if game_state != null and game_state.get("world_time") != null:
-		var wt = game_state.world_time
+		var wt: WorldTimeStateModel = game_state.world_time
+		if wt == null:
+			return {
+				"day_of_year": day_of_year,
+				"time_of_day": time_of_day,
+				"sim_days": sim_days,
+				"base": 0.008,
+				"contrast": 0.992,
+				"relief_strength": 0.12,
+			}
 		var day_index: int = max(0, int(wt.day) - 1)
 		for m in range(1, int(wt.month)):
 			day_index += WorldTimeStateModel.days_in_month(m)
 		day_index = clamp(day_index, 0, 364)
 		day_of_year = float(day_index) / 365.0
-		var sod: int = int(wt.second_of_day) if ("second_of_day" in wt) else int(wt.minute_of_day) * 60
+		var sod: int = int(wt.second_of_day)
 		sod = clamp(sod, 0, WorldTimeStateModel.SECONDS_PER_DAY - 1)
 		time_of_day = float(sod) / float(WorldTimeStateModel.SECONDS_PER_DAY)
 		sim_days = float(max(1, int(wt.year)) - 1) * 365.0 + float(day_index) + time_of_day

@@ -3178,6 +3178,9 @@ func _initialize_gpu_renderer() -> void:
 		)
 		
 		if success:
+			if gpu_ascii_renderer.has_method("set_water_rendering_params"):
+				# Worldgen/world map: keep sun glint, remove animated ocean wave wobble.
+				gpu_ascii_renderer.set_water_rendering_params(0.0)
 			# Check if GPU renderer is actually using GPU rendering
 			if gpu_ascii_renderer.has_method("is_using_gpu_rendering") and gpu_ascii_renderer.is_using_gpu_rendering():
 				# Hide the original RichTextLabel when using actual GPU rendering

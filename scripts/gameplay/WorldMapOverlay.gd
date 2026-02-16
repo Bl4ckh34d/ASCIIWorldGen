@@ -252,6 +252,9 @@ func _ensure_gpu_ready() -> bool:
 		if gpu_map.has_method("set_cloud_rendering_params"):
 			# Keep cloud shadows visible on the in-game world map.
 			gpu_map.set_cloud_rendering_params(0.28, 0.0, Vector2(1.9, 1.25))
+		if gpu_map.has_method("set_water_rendering_params"):
+			# World map view: keep solar reflection, disable animated wave wobble.
+			gpu_map.set_water_rendering_params(0.0)
 	# Create per-view GPU packing helper.
 	if _gpu_view == null:
 		_gpu_view = GpuMapView.new()

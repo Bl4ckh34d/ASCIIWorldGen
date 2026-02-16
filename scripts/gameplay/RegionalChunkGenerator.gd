@@ -70,6 +70,8 @@ var _active_noise_x_cache: Dictionary = {} # wrapped_global_x -> Vector2(rx, rz)
 var _macro_ocean_mask_cache: Dictionary = {} # Vector2i(world_tile_x, world_tile_y) -> bitmask
 var _tile_river_layout_cache: Dictionary = {} # Vector2i(world_tile_x, world_tile_y) -> layout dictionary
 var _poi_grid_step: int = 12
+var _poi_context_resolver: Callable = Callable()
+var _poi_context_cache: Dictionary = {} # Vector2i(world_tile_x, world_tile_y) -> context dictionary
 
 func configure(
 		seed_hash: int,
@@ -93,6 +95,7 @@ func configure(
 	_biome_param_cache.clear()
 	_macro_ocean_mask_cache.clear()
 	_tile_river_layout_cache.clear()
+	_poi_context_cache.clear()
 	_poi_grid_step = max(1, int(PoiRegistry.POI_GRID_STEP))
 	_seed_noises()
 
@@ -104,6 +107,13 @@ func set_biome_overrides(overrides: Dictionary) -> void:
 		return
 	biome_overrides = overrides.duplicate(true)
 	_macro_ocean_mask_cache.clear()
+
+func set_poi_context_resolver(resolver: Callable) -> void:
+	_poi_context_resolver = resolver
+	_poi_context_cache.clear()
+
+func invalidate_poi_context_cache() -> void:
+	_poi_context_cache.clear()
 
 func set_biome_transition_overrides(overrides: Dictionary) -> void:
 	# Optional gradual transitions keyed by world tile.
@@ -365,7 +375,22 @@ func _poi_at_global(gx: int, gy: int) -> Dictionary:
 	wx = posmod(wx, world_width)
 	wy = clamp(wy, 0, world_height - 1)
 	var biome_id: int = get_world_biome_id(wx, wy)
-	return PoiRegistry.get_poi_at(world_seed_hash, wx, wy, lx, ly, biome_id)
+	var settlement_context: Dictionary = _poi_context_for_tile(wx, wy)
+	return PoiRegistry.get_poi_at(world_seed_hash, wx, wy, lx, ly, biome_id, settlement_context)
+
+func _poi_context_for_tile(wx: int, wy: int) -> Dictionary:
+	var key := Vector2i(posmod(wx, max(1, world_width)), clamp(wy, 0, max(1, world_height) - 1))
+	var cached_v: Variant = _poi_context_cache.get(key, {})
+	if typeof(cached_v) == TYPE_DICTIONARY:
+		return cached_v as Dictionary
+	if _poi_context_resolver.is_valid():
+		var resolved_v: Variant = _poi_context_resolver.call(key.x, key.y)
+		if typeof(resolved_v) == TYPE_DICTIONARY:
+			var resolved: Dictionary = (resolved_v as Dictionary).duplicate(true)
+			_poi_context_cache[key] = resolved
+			return resolved
+	_poi_context_cache[key] = {}
+	return {}
 
 func get_world_biome_id(wx: int, wy: int) -> int:
 	if world_biome_ids.size() != world_width * world_height:

@@ -175,6 +175,12 @@ func reset_run() -> void:
 	society_gpu_stats.clear()
 	_ingame_time_accum_seconds = 0.0
 	_ui_pause_count = 0
+	var startup_state: Node = get_node_or_null("/root/StartupState")
+	if startup_state != null:
+		if startup_state.has_method("clear_runtime_gameplay_state"):
+			startup_state.clear_runtime_gameplay_state()
+		elif startup_state.has_method("reset"):
+			startup_state.reset()
 	_emit_party_changed()
 	_emit_inventory_changed()
 	_emit_time_advanced()
@@ -772,6 +778,41 @@ func get_society_debug_tile(world_x: int, world_y: int) -> Dictionary:
 	out["devastation"] = float(civilization_state.global_devastation)
 	out["tech_level"] = float(civilization_state.tech_level)
 	return out
+
+func get_poi_generation_context(world_x: int, world_y: int) -> Dictionary:
+	_ensure_sim_state_defaults()
+	world_x = posmod(int(world_x), max(1, world_width))
+	world_y = clamp(int(world_y), 0, max(1, world_height) - 1)
+	var humans_emerged: bool = civilization_state != null and bool(civilization_state.humans_emerged)
+	var human_pop: float = 0.0
+	if civilization_state != null and civilization_state.human_pop.size() == world_width * world_height:
+		var idx: int = world_x + world_y * world_width
+		if idx >= 0 and idx < civilization_state.human_pop.size():
+			human_pop = max(0.0, float(civilization_state.human_pop[idx]))
+	var settlement_pop: int = 0
+	if economy_state != null:
+		var settlement_id: String = EconomyStateModel.settlement_id_for_tile(world_x, world_y)
+		var sv: Variant = economy_state.settlements.get(settlement_id, {})
+		if typeof(sv) == TYPE_DICTIONARY:
+			settlement_pop = max(0, int((sv as Dictionary).get("population", 0)))
+	var effective_pop: float = max(human_pop, float(settlement_pop))
+	var settlement_core: bool = false
+	if civilization_state != null and humans_emerged:
+		settlement_core = world_x == int(civilization_state.start_world_x) and world_y == int(civilization_state.start_world_y)
+	var strength: float = clamp(effective_pop / 280.0, 0.0, 1.0)
+	if settlement_core:
+		strength = max(strength, 0.28)
+	var allow_settlement: bool = humans_emerged and (effective_pop >= 8.0 or settlement_core)
+	return {
+		"humans_emerged": humans_emerged,
+		"human_pop": human_pop,
+		"settlement_pop": settlement_pop,
+		"effective_pop": effective_pop,
+		"settlement_strength": strength,
+		"allow_settlement": allow_settlement,
+		"allow_wild_houses": false,
+		"settlement_core": settlement_core,
+	}
 
 func set_local_rest_context(can_rest: bool, rest_type: String = "") -> void:
 	local_rest_context = {
