@@ -39,3 +39,8 @@
 - Regional and local maps do not use text rendering for the map.
 - No new per-frame buffer readbacks were added.
 - Any new compute shaders are wired through `RenderingDevice` and don’t allocate/free buffers every tick.
+
+## Local Tooling
+- Godot installation directory (Windows): `C:\Users\ROG\Desktop\Code_Experiments\Godot_v4.6-stable_mono_win64`
+- Preferred editor executable: `C:\Users\ROG\Desktop\Code_Experiments\Godot_v4.6-stable_mono_win64\Godot_v4.6-stable_mono_win64.exe`
+- Preferred console executable for CLI/test runs: `C:\Users\ROG\Desktop\Code_Experiments\Godot_v4.6-stable_mono_win64\Godot_v4.6-stable_mono_win64_console.exe`

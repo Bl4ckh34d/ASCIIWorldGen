@@ -55,10 +55,15 @@ func step_gpu_buffers(w: int, h: int, boundary_buf: RID, lava_buf: RID, dt_days:
 	var thr: float = float(rates.get("hotspot_threshold", 0.995))
 	var bthr: float = float(rates.get("boundary_spawn_threshold", 0.999))
 	var pc := PackedByteArray()
-	var ints := PackedInt32Array([w, h, int(rng_seed)])
+	# Must match shader layout exactly:
+	# int width, int height, float dt, float decay, float spawn_b, float spawn_h,
+	# float hotspot_threshold, float boundary_spawn_threshold, float phase, int seed
+	var head_ints := PackedInt32Array([w, h])
 	var floats := PackedFloat32Array([dt_days, decay, spawn_b, spawn_h, thr, bthr, fposmod(phase, 1.0)])
-	pc.append_array(ints.to_byte_array())
+	var tail_ints := PackedInt32Array([int(rng_seed)])
+	pc.append_array(head_ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
+	pc.append_array(tail_ints.to_byte_array())
 	var pad := (16 - (pc.size() % 16)) % 16
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)

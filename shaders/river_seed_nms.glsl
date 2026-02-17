@@ -11,6 +11,8 @@ layout(std430, set = 0, binding = 3) buffer SeedsBuf { uint seeds[]; } Seeds;
 layout(push_constant) uniform Params { int width; int height; float threshold; int rx0; int ry0; int rx1; int ry1; } PC;
 
 int idx(int x, int y) { return x + y * PC.width; }
+const int NMS_RADIUS = 2;
+const float NMS_EPS = 1.0e-6;
 
 void main(){
     uint x = gl_GlobalInvocationID.x;
@@ -24,16 +26,19 @@ void main(){
     if (int(x) < PC.rx0 || int(x) >= PC.rx1 || int(y) < PC.ry0 || int(y) >= PC.ry1) return;
     float a = Acc.accum[i];
     if (a < PC.threshold) return;
-    // Non-maximum suppression in 8-neighborhood
+    // Wider non-maximum suppression (5x5): keeps only dominant channel seeds.
     bool is_max = true;
-    for (int dy = -1; dy <= 1 && is_max; dy++){
-        for (int dx = -1; dx <= 1; dx++){
+    for (int dy = -NMS_RADIUS; dy <= NMS_RADIUS && is_max; dy++){
+        for (int dx = -NMS_RADIUS; dx <= NMS_RADIUS; dx++){
             if (dx == 0 && dy == 0) continue;
             int nx = int(x) + dx; int ny = int(y) + dy;
             if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
             int j = idx(nx, ny);
             if (Land.is_land[j] == 0u) continue;
-            if (Acc.accum[j] > a) { is_max = false; break; }
+            float aj = Acc.accum[j];
+            if (aj > a + NMS_EPS) { is_max = false; break; }
+            // Deterministic tie-break so flat maxima produce one seed, not clusters.
+            if (abs(aj - a) <= NMS_EPS && j < i) { is_max = false; break; }
         }
     }
     if (is_max) Seeds.seeds[i] = 1u;

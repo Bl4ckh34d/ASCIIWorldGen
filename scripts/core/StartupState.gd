@@ -217,7 +217,8 @@ func _derive_world_config(orbit: float) -> Dictionary:
 	# Temperature envelope:
 	# - Left/hot side shifts global baseline hotter.
 	# - Right/cold side shifts global baseline colder with similar strength.
-	var temp_mean_shift_c: float = thermal_bias * 40.0
+	# Global cool bias across the habitable-zone board while preserving orbit-relative shape.
+	var temp_mean_shift_c: float = thermal_bias * 40.0 - 3.0
 	var temp_span_boost_c: float = abs(thermal_bias) * 8.0
 	var temp_min_c: float = -16.0 + temp_mean_shift_c - temp_span_boost_c
 	var temp_max_c: float = 44.0 + temp_mean_shift_c + temp_span_boost_c
@@ -255,7 +256,7 @@ func _derive_world_config(orbit: float) -> Dictionary:
 	return {
 		"temp_min_c": temp_min_c,
 		"temp_max_c": temp_max_c,
-		"temp_base_offset": 0.18 + thermal_bias * 0.52 + hot_extreme * 0.12 - cold_extreme * 0.12,
+		"temp_base_offset": 0.15 + thermal_bias * 0.52 + hot_extreme * 0.12 - cold_extreme * 0.12,
 		"temp_scale": clamp(0.92 + abs(thermal_bias) * 0.26 + hot_extreme * 0.10 + cold_extreme * 0.14 - harshness * 0.03, 0.86, 1.35),
 		"stellar_flux": stellar_flux,
 		"lat_energy_density_strength": lat_energy_density_strength,

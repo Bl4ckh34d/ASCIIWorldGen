@@ -42,6 +42,10 @@ const MAX_CRYOSPHERE_TRANSITION_DT_DAYS: float = 1.0
 
 var run_full_biome: bool = true
 var run_cryosphere: bool = true
+var _warmup_enabled: bool = false
+var _warmup_dt_cap_scale: float = 1.0
+var _warmup_tau_scale: float = 1.0
+var _warmup_step_scale: float = 1.0
 
 func _cleanup_if_supported(obj: Variant) -> void:
 	if obj == null:
@@ -66,6 +70,17 @@ func set_update_modes(full_biome_enabled: bool, cryosphere_enabled: bool) -> voi
 	run_full_biome = VariantCastsUtil.to_bool(full_biome_enabled)
 	run_cryosphere = VariantCastsUtil.to_bool(cryosphere_enabled)
 
+func set_warmup_mode(enabled: bool, dt_cap_scale: float = 1.0, tau_scale: float = 1.0, step_scale: float = 1.0) -> void:
+	_warmup_enabled = VariantCastsUtil.to_bool(enabled)
+	if _warmup_enabled:
+		_warmup_dt_cap_scale = clamp(float(dt_cap_scale), 1.0, 64.0)
+		_warmup_tau_scale = clamp(float(tau_scale), 0.04, 1.0)
+		_warmup_step_scale = clamp(float(step_scale), 1.0, 16.0)
+	else:
+		_warmup_dt_cap_scale = 1.0
+		_warmup_tau_scale = 1.0
+		_warmup_step_scale = 1.0
+
 func cleanup() -> void:
 	_cleanup_if_supported(_biome_tex)
 	_cleanup_if_supported(_lava_tex)
@@ -86,6 +101,10 @@ func cleanup() -> void:
 	_height_cache_size = -1
 	_height_cache_refresh_counter = 0
 	_transition_epoch = 0
+	_warmup_enabled = false
+	_warmup_dt_cap_scale = 1.0
+	_warmup_tau_scale = 1.0
+	_warmup_step_scale = 1.0
 	generator = null
 
 func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
@@ -140,12 +159,19 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		_transition_compute = load("res://scripts/systems/BiomeTransitionCompute.gd").new()
 
 	var dt_sim: float = _compute_sim_dt(world, dt_days)
-	var dt_biome: float = min(dt_sim, MAX_BIOME_EFFECTIVE_DT_DAYS)
-	var dt_fertility: float = min(dt_sim, MAX_FERTILITY_EFFECTIVE_DT_DAYS)
-	var dt_transition_biome: float = min(dt_sim, MAX_BIOME_TRANSITION_DT_DAYS)
-	var dt_transition_cryo: float = min(dt_sim, MAX_CRYOSPHERE_TRANSITION_DT_DAYS)
-	var biome_step: float = _compute_transition_fraction(dt_transition_biome, biome_transition_tau_days, biome_transition_max_step)
-	var cryosphere_step: float = _compute_transition_fraction(dt_transition_cryo, cryosphere_transition_tau_days, cryosphere_transition_max_step)
+	var dt_cap_scale: float = _warmup_dt_cap_scale if _warmup_enabled else 1.0
+	var tau_scale: float = _warmup_tau_scale if _warmup_enabled else 1.0
+	var step_scale: float = _warmup_step_scale if _warmup_enabled else 1.0
+	var dt_biome: float = min(dt_sim, MAX_BIOME_EFFECTIVE_DT_DAYS * dt_cap_scale)
+	var dt_fertility: float = min(dt_sim, MAX_FERTILITY_EFFECTIVE_DT_DAYS * dt_cap_scale)
+	var dt_transition_biome: float = min(dt_sim, MAX_BIOME_TRANSITION_DT_DAYS * dt_cap_scale)
+	var dt_transition_cryo: float = min(dt_sim, MAX_CRYOSPHERE_TRANSITION_DT_DAYS * dt_cap_scale)
+	var biome_transition_tau_eff: float = max(0.001, biome_transition_tau_days * tau_scale)
+	var cryosphere_transition_tau_eff: float = max(0.001, cryosphere_transition_tau_days * tau_scale)
+	var biome_step_max_eff: float = clamp(biome_transition_max_step * step_scale, 0.0, 1.0)
+	var cryosphere_step_max_eff: float = clamp(cryosphere_transition_max_step * step_scale, 0.0, 1.0)
+	var biome_step: float = _compute_transition_fraction(dt_transition_biome, biome_transition_tau_eff, biome_step_max_eff)
+	var cryosphere_step: float = _compute_transition_fraction(dt_transition_cryo, cryosphere_transition_tau_eff, cryosphere_step_max_eff)
 
 	var biome_changed: bool = false
 	var lava_changed: bool = false
@@ -158,8 +184,9 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	# from stripping ice/glacier states between dedicated cryosphere ticks.
 	if _blend and cryo_temp_buf.is_valid() and cryo_moist_buf.is_valid():
 		var alpha_cryo: float = 0.0
-		if dt_biome > 0.0 and cryosphere_climate_tau_days > 0.0:
-			alpha_cryo = 1.0 - exp(-dt_biome / max(0.001, cryosphere_climate_tau_days))
+		var cryosphere_climate_tau_eff: float = max(0.001, cryosphere_climate_tau_days * tau_scale)
+		if dt_biome > 0.0 and cryosphere_climate_tau_eff > 0.0:
+			alpha_cryo = 1.0 - exp(-dt_biome / cryosphere_climate_tau_eff)
 		alpha_cryo = clamp(alpha_cryo, 0.0, 1.0)
 		if _blend.apply(w, h, temp_now_buf, moist_now_buf, cryo_temp_buf, cryo_moist_buf, alpha_cryo):
 			temp_for_cryosphere = cryo_temp_buf
@@ -190,8 +217,9 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		params["biome_moist_elev_dry"] = 0.14
 
 		var alpha: float = 0.0
-		if dt_biome > 0.0 and biome_climate_tau_days > 0.0:
-			alpha = 1.0 - exp(-dt_biome / max(0.001, biome_climate_tau_days))
+		var biome_climate_tau_eff: float = max(0.001, biome_climate_tau_days * tau_scale)
+		if dt_biome > 0.0 and biome_climate_tau_eff > 0.0:
+			alpha = 1.0 - exp(-dt_biome / biome_climate_tau_eff)
 		alpha = clamp(alpha, 0.0, 1.0)
 		var temp_for_classify: RID = temp_now_buf
 		var moist_for_classify: RID = moist_now_buf

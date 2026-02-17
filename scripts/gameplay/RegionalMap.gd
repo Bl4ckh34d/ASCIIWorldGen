@@ -2155,14 +2155,46 @@ func _biome_name_for_id(biome_id: int) -> String:
 			return "Rainforest"
 		16:
 			return "Hills"
+		17:
+			return "Hills"
 		18:
 			return "Mountains"
 		19:
 			return "Alpine"
+		20:
+			return "Tundra"
+		21:
+			return "Savanna"
+		22:
+			return "Frozen Forest"
+		23:
+			return "Frozen Marsh"
 		24:
 			return "Glacier"
+		25:
+			return "Lava Field"
+		26:
+			return "Volcanic Badlands"
+		27:
+			return "Scorched Forest"
 		28:
 			return "Salt Desert"
+		29, 31, 32:
+			return "Frozen Grassland"
+		30:
+			return "Frozen Steppe"
+		33:
+			return "Frozen Savanna"
+		34, 35:
+			return "Frozen Hills"
+		36, 38, 39:
+			return "Scorched Grassland"
+		37:
+			return "Scorched Steppe"
+		40:
+			return "Scorched Savanna"
+		41, 42:
+			return "Scorched Hills"
 		_:
 			return "Biome %d" % biome_id
 

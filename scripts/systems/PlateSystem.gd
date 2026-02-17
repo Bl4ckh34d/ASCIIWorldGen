@@ -25,11 +25,11 @@ var boundary_band_cells: int = 3
 var max_boundary_delta_per_day: float = 0.080
 var divergence_response: float = 1.0
 var terrain_relax_enabled: bool = true
-var terrain_relax_iterations: int = 3
+var terrain_relax_iterations: int = 4
 var terrain_relax_rate: float = 0.55
-var terrain_relax_max_delta_interior: float = 0.030
-var terrain_relax_max_delta_boundary: float = 0.120
-var terrain_relax_max_step_per_iter: float = 0.018
+var terrain_relax_max_delta_interior: float = 0.024
+var terrain_relax_max_delta_boundary: float = 0.082
+var terrain_relax_max_step_per_iter: float = 0.014
 var pinhole_cleanup_enabled: bool = true
 var pinhole_min_land_neighbors: int = 8
 var pinhole_min_boundary_neighbors: int = 2
@@ -333,7 +333,7 @@ func _build_plates() -> void:
 		plate_vel_u[p] = vel.x
 		plate_vel_v[p] = vel.y
 		# Per-plate drift-direction evolution profile.
-		# Geologic-scale cadence: mostly slow turners, with rare moderate outliers.
+		# Multi-year cadence: mostly slow turners, with rare moderate outliers.
 		var fast_turner: bool = rng.randf() < 0.08
 		var bias_mag: float = rng.randf_range(6.0e-10, 7.0e-9)
 		var amp_mag: float = rng.randf_range(1.2e-9, 1.2e-8)
@@ -342,8 +342,8 @@ func _build_plates() -> void:
 			amp_mag *= rng.randf_range(1.5, 2.4)
 		plate_turn_bias_rad_per_day[p] = bias_mag * (-1.0 if rng.randf() < 0.5 else 1.0)
 		plate_turn_amp_rad_per_day[p] = amp_mag * (-1.0 if rng.randf() < 0.5 else 1.0)
-		# Period range: ~5k to ~50k years (in sim-days) with plate-specific phase.
-		plate_turn_freq_cycles_per_day[p] = rng.randf_range(1.0 / 18250000.0, 1.0 / 1825000.0)
+		# Period range: ~5 to ~25 years (in sim-days) with plate-specific phase.
+		plate_turn_freq_cycles_per_day[p] = rng.randf_range(1.0 / 9125.0, 1.0 / 1825.0)
 		plate_turn_phase[p] = rng.randf_range(-PI, PI)
 	cell_plate_id.resize(size)
 	boundary_mask.resize(size)

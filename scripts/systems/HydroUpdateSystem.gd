@@ -1,6 +1,7 @@
 # File: res://scripts/systems/HydroUpdateSystem.gd
 extends RefCounted
 const VariantCastsUtil = preload("res://scripts/core/VariantCasts.gd")
+const BiomeClassifier = preload("res://scripts/generation/BiomeClassifier.gd")
 
 # Lightweight system to update flow/accumulation/rivers on a cadence.
 # Adds a simple tiling scheduler to amortize updates over several ticks.
@@ -11,10 +12,12 @@ var tiles_y: int = 4
 var tiles_per_tick: int = 2
 var _tile_cursor: int = 0
 var _river_tex: Object = null
-var river_threshold: float = 4.0
+var river_threshold: float = 6.0
 const RIVER_STAGE_BUFFER_NAME: String = "river_stage"
 const CATCHUP_BOOST_DT1: float = 1.5
 const CATCHUP_BOOST_DT2: float = 3.5
+const RIVER_FREEZE_C: float = 0.5
+const RIVER_THAW_C: float = 2.8
 
 func cleanup() -> void:
 	if _river_tex is Object:
@@ -62,6 +65,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	# GPU-only: ensure compute objects exist
 	var flow_compute: Object = generator.ensure_flow_compute() if "ensure_flow_compute" in generator else null
 	var river_compute: Object = generator.ensure_river_compute() if "ensure_river_compute" in generator else null
+	var river_freeze_compute: Object = generator.ensure_river_freeze_compute() if "ensure_river_freeze_compute" in generator else null
 	var gpu_mgr: Object = generator.get_gpu_buffer_manager() if "get_gpu_buffer_manager" in generator else null
 	if flow_compute == null or river_compute == null:
 		return {}
@@ -86,6 +90,8 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			var acc_buf: RID = generator.get_persistent_buffer("flow_accum")
 			var lake_buf: RID = generator.get_persistent_buffer("lake")
 			var river_buf: RID = generator.get_persistent_buffer("river")
+			var temp_buf: RID = generator.get_persistent_buffer("temperature")
+			var biome_buf: RID = generator.get_persistent_buffer("biome_id")
 			var river_stage_buf: RID = RID()
 			if "ensure_gpu_storage_buffer" in generator:
 				river_stage_buf = generator.ensure_gpu_storage_buffer(RIVER_STAGE_BUFFER_NAME, w * h * 4)
@@ -108,6 +114,20 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				river_trace_any = true
 				var cycle_end_now: bool = ((_tile_cursor + 1) % total_tiles == 0)
 				if cycle_end_now and river_stage_buf.is_valid() and river_buf.is_valid():
+					if river_freeze_compute != null and temp_buf.is_valid() and biome_buf.is_valid():
+						river_freeze_compute.apply_gpu_buffers(
+							w,
+							h,
+							river_stage_buf,
+							land_buf,
+							temp_buf,
+							biome_buf,
+							float(generator.config.temp_min_c),
+							float(generator.config.temp_max_c),
+							int(BiomeClassifier.Biome.GLACIER),
+							RIVER_FREEZE_C,
+							RIVER_THAW_C
+						)
 					if "dispatch_copy_u32" in generator:
 						river_cycle_committed = VariantCastsUtil.to_bool(generator.dispatch_copy_u32(river_stage_buf, river_buf, w * h)) or river_cycle_committed
 		processed += 1

@@ -25,7 +25,7 @@ static func update_label(
 	var info: Dictionary = info_v as Dictionary
 	var coords: String = "(%d,%d)" % [x, y]
 	var htxt: String = "%.2f" % float(info.get("height_m", 0.0))
-	var humid: float = float(info.get("moisture", 0.0))
+	var humid: float = float(info.get("humidity", info.get("moisture", 0.0)))
 	var temp_c: float = float(info.get("temp_c", 0.0))
 	var ttxt: String = String(info.get("rock_name", "Unknown Rock")) if show_bedrock_view else String(info.get("biome_name", "Unknown"))
 	var flags: PackedStringArray = PackedStringArray()

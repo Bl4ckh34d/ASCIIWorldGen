@@ -3,8 +3,8 @@
 // File: res://shaders/plate_update.glsl
 // Plate update with stylized but more realistic tectonic behavior:
 // - Slow plate drift (advection-like lateral transport)
-// - Convergent boundaries: overriding-plate uplift + subducting-plate trench carving
-// - Divergent boundaries: rifts are net extensional lowering where appropriate
+// - Convergent boundaries: uplift-dominant mountain building (no deep trench carving)
+// - Divergent boundaries: extensional rifts, with polar ice-sheet guarding
 // - Transform boundaries: shear roughness
 // All done in a single GPU pass.
 
@@ -35,6 +35,9 @@ layout(push_constant) uniform Params {
     float max_boundary_delta_per_day;
     float divergence_response;
 } PC;
+
+const float HEIGHT_MIN = -1.0;
+const float HEIGHT_MAX = 1.25;
 
 uint idx(int x, int y) { return uint(x + y * PC.width); }
 
@@ -78,7 +81,7 @@ void main() {
     float h_base = mix(h, h_drift, clamp(drift_shift * 1.6, 0.0, 0.7));
 
     if (Bnd.boundary_mask[i] == 0) {
-        HOut.height_out[i] = clamp(h_base, -1.0, 2.0);
+        HOut.height_out[i] = clamp(h_base, HEIGHT_MIN, HEIGHT_MAX);
         return;
     }
 
@@ -111,7 +114,7 @@ void main() {
         }
     }
     if (!found) {
-        HOut.height_out[i] = clamp(h_base, -1.0, 2.0);
+        HOut.height_out[i] = clamp(h_base, HEIGHT_MIN, HEIGHT_MAX);
         return;
     }
 
@@ -159,6 +162,8 @@ void main() {
     if (h_base <= PC.sea_level) {
         marine_context = max(marine_context, 0.7);
     }
+    float lat_abs = abs((float(y) / max(1.0, float(H - 1))) * 2.0 - 1.0); // 0 equator .. 1 poles
+    float polar_ice_guard = smoothstep(0.62, 0.90, lat_abs);
     const float conv_thresh = 0.08;
     const float div_thresh = -0.08;
     if (approach > conv_thresh) {
@@ -167,17 +172,15 @@ void main() {
         bool other_subducts = (b_other + 0.03 < b_self);
         float buoy_contrast = abs(b_self - b_other);
         float uplift_gain = (0.50 + 0.75 * buoy_contrast);
-        float trench_gain = (0.72 + 1.05 * buoy_contrast);
+        // Convergent boundaries should build relief, not open deep chasms.
+        float marine_arc = mix(1.0, 1.16, marine_context);
+        float buoy_split = 0.35 + 0.65 * buoy_contrast;
         if (self_subducts) {
-            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain * 0.18;
-            delta_h -= PC.subduction_rate_per_day * PC.dt_days * conv * trench_gain;
-            delta_h -= PC.trench_rate_per_day * PC.dt_days * conv * trench_gain * 0.58;
+            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain * (0.42 + 0.38 * buoy_split) * marine_arc;
         } else if (other_subducts) {
-            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain * 0.88;
-            delta_h -= PC.trench_rate_per_day * PC.dt_days * conv * trench_gain * 0.16;
+            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * uplift_gain * (0.92 + 0.26 * buoy_split) * marine_arc;
         } else {
-            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * 0.58;
-            delta_h -= PC.trench_rate_per_day * PC.dt_days * conv * 0.08;
+            delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * (0.68 + 0.20 * buoy_split) * marine_arc;
         }
     } else if (approach < div_thresh) {
         divergent = true;
@@ -195,30 +198,37 @@ void main() {
         float land_raise = smoothstep(0.55, 1.0, land_factor) * 0.030;
         float rift_target = local_ref + jitter + land_raise;
         float to_target = rift_target - h_base;
-        float settle_rate = PC.subduction_rate_per_day * PC.dt_days * div * mix(0.26, 0.14, land_factor);
+        float settle_rate = PC.subduction_rate_per_day * PC.dt_days * div * mix(0.24, 0.12, land_factor);
+        settle_rate *= mix(1.0, 0.55, polar_ice_guard);
         delta_h += clamp(to_target, -settle_rate, settle_rate);
         // Keep a narrow deep axis only at the seam itself.
         float seam_w = smoothstep(1.60, 0.60, nearest_d);
-        float deep_axis = PC.trench_rate_per_day * PC.dt_days * div * mix(0.82, 0.16, land_factor);
-        deep_axis *= mix(0.16, 1.0, marine_context);
+        float deep_axis = PC.trench_rate_per_day * PC.dt_days * div * mix(0.66, 0.11, land_factor);
+        deep_axis *= mix(0.12, 0.90, marine_context);
+        deep_axis *= mix(1.0, 0.18, polar_ice_guard);
         delta_h -= deep_axis * seam_w * seam_w;
         // Gentle upwelling so ridge line still reads, without flattening the whole divergent zone.
-        float ridge_gain = mix(0.16, 0.08, land_factor);
+        float ridge_gain = mix(0.26, 0.11, land_factor);
+        ridge_gain = mix(ridge_gain, max(ridge_gain, 0.24), polar_ice_guard * 0.80);
         delta_h += PC.ridge_rate_per_day * PC.dt_days * div * ridge_gain;
         // Dynamic floor: near seam can be deeper, outside seam stays near local ocean floor.
-        float seam_floor = local_ref - mix(0.22, 0.02, land_factor);
-        float flank_floor = local_ref - mix(0.06, -0.01, land_factor);
+        float seam_floor = local_ref - mix(0.16, 0.01, land_factor);
+        float flank_floor = local_ref - mix(0.04, -0.01, land_factor);
         // Land divergence should not auto-create submerged trenches.
-        float seam_sea_floor = PC.sea_level + mix(-0.18, 0.05, land_factor);
-        float flank_sea_floor = PC.sea_level + mix(-0.08, 0.08, land_factor);
+        float seam_sea_floor = PC.sea_level + mix(-0.12, 0.06, land_factor);
+        float flank_sea_floor = PC.sea_level + mix(-0.05, 0.09, land_factor);
         seam_floor = max(seam_floor, seam_sea_floor);
         flank_floor = max(flank_floor, flank_sea_floor);
         divergence_floor = mix(flank_floor, seam_floor, seam_w);
         // Continental interiors should produce rift valleys first, not instant oceanic trenches.
         float continental_floor = PC.sea_level + mix(0.012, -0.04, marine_context);
         divergence_floor = max(divergence_floor, continental_floor);
+        // Polar ice-sheet guard: avoid opening dark ocean rifts through ice-covered caps.
+        float ice_floor = PC.sea_level + mix(-0.03, 0.09, polar_ice_guard);
+        divergence_floor = max(divergence_floor, ice_floor);
         // Reduce net lowering when marine context is weak.
-        delta_h *= mix(0.35, 1.0, marine_context);
+        delta_h *= mix(0.40, 1.0, marine_context);
+        delta_h *= mix(1.0, 0.52, polar_ice_guard);
         // Preserve some rough extensional signal even under strong guard.
         if (continental_guard > 0.2) {
             float n_rift = fract(sin(dot(vec2(float(x) + 19.0, float(y) + 7.0) + vec2(PC.seed_phase * 1.7), vec2(18.9898, 67.233))) * 32768.5453);
@@ -237,13 +247,22 @@ void main() {
     }
 
     float max_abs_delta = max(0.0, PC.max_boundary_delta_per_day * PC.dt_days);
+    if (delta_h > 0.0) {
+        // Taper uplift near the global terrain ceiling to avoid runaway needle peaks.
+        float uplift_guard = 1.0 - smoothstep(HEIGHT_MAX - 0.30, HEIGHT_MAX, h_base);
+        delta_h *= max(0.05, uplift_guard);
+    }
     if (max_abs_delta > 0.0) {
         delta_h = clamp(delta_h, -max_abs_delta, max_abs_delta);
     }
     delta_h *= boundary_w * organic;
-    float h_out = clamp(h_base + delta_h, -1.0, 2.0);
+    float h_out = clamp(h_base + delta_h, HEIGHT_MIN, HEIGHT_MAX);
     if (divergent) {
         h_out = max(h_out, divergence_floor);
+        if (polar_ice_guard > 0.001) {
+            float polar_min = PC.sea_level + mix(-0.01, 0.07, polar_ice_guard);
+            h_out = max(h_out, polar_min);
+        }
     }
     HOut.height_out[i] = h_out;
 }

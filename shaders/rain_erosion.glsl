@@ -252,10 +252,10 @@ void main() {
 	// Extra coast wear: land bordering ocean always has some erosion chance.
 	if (coastal_exposure > 0.0) {
 		float coast_drive = coastal_exposure * (0.55 + 0.45 * clamp(best_drop / 0.10, 0.0, 1.0));
-		float coast_rate = PC.base_rate_per_day * (is_cryo ? 0.30 : 0.42);
-		coast_rate *= (0.78 + 0.42 * rock_erode_mult);
+		float coast_rate = PC.base_rate_per_day * (is_cryo ? 0.24 : 0.31);
+		coast_rate *= (0.76 + 0.34 * rock_erode_mult);
 		float coast_erode = PC.dt_days * coast_rate * coast_drive * (0.88 + 0.28 * shape_noise);
-		float coast_cap = min(PC.max_rate_per_day * PC.dt_days * 0.30, best_drop * 0.25 + 0.0007);
+		float coast_cap = min(PC.max_rate_per_day * PC.dt_days * 0.22, best_drop * 0.20 + 0.00055);
 		erode += min(coast_erode, coast_cap);
 	}
 

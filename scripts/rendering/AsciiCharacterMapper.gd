@@ -86,10 +86,14 @@ func _get_base_character_for_biome(biome_id: int) -> int:
 			return CHAR_RAINFOREST
 		BiomeClassifier.Biome.HILLS:
 			return CHAR_HILLS
+		BiomeClassifier.Biome.SCORCHED_FOREST:
+			return CHAR_FOREST
 		BiomeClassifier.Biome.MOUNTAINS:
 			return CHAR_MOUNTAINS
 		BiomeClassifier.Biome.ALPINE:
 			return CHAR_ALPINE
+		BiomeClassifier.Biome.VOLCANIC_BADLANDS:
+			return CHAR_MOUNTAINS
 		_:
 			return CHAR_DEFAULT
 

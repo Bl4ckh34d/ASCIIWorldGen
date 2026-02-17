@@ -20,6 +20,11 @@ enum Biome {
 	FROZEN_GRASSLAND = 29,
 	GRASSLAND = 7,
 	SCORCHED_GRASSLAND = 36,
+	# Legacy compatibility IDs mapped to grassland visuals/rules.
+	FROZEN_MEADOW = 31,
+	FROZEN_PRAIRIE = 32,
+	SCORCHED_MEADOW = 38,
+	SCORCHED_PRAIRIE = 39,
 
 	# Steppe triad
 	FROZEN_STEPPE = 30,
@@ -37,8 +42,10 @@ enum Biome {
 	FROZEN_HILLS = 34,
 	HILLS = 16,
 	SCORCHED_HILLS = 41,
-
-	# Foothills collapsed into Hills
+	# Legacy compatibility IDs mapped to hills visuals/rules.
+	FOOTHILLS = 17,
+	FROZEN_FOOTHILLS = 35,
+	SCORCHED_FOOTHILLS = 42,
 
 	# Forest triad (multiple normals share one frozen/scorched)
 	FROZEN_FOREST = 22,

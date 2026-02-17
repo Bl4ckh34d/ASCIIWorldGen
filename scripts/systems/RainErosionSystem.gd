@@ -21,6 +21,9 @@ const MAX_EROSION_RATE_PER_DAY: float = 0.00020
 const GLACIER_SMOOTHING_BIAS: float = 0.65
 const CRYO_EROSION_RATE_SCALE: float = 1.25
 const CRYO_EROSION_CAP_SCALE: float = 1.55
+var _warmup_enabled: bool = false
+var _warmup_max_dt_days: float = MAX_DT_DAYS
+var _warmup_rate_scale: float = 1.0
 
 func _cleanup_if_supported(obj: Variant) -> void:
 	if obj == null:
@@ -33,6 +36,9 @@ func _cleanup_if_supported(obj: Variant) -> void:
 func initialize(gen: Object) -> void:
 	generator = gen
 	_step_counter = 0
+	_warmup_enabled = false
+	_warmup_max_dt_days = MAX_DT_DAYS
+	_warmup_rate_scale = 1.0
 	if _compute == null:
 		_compute = RainErosionCompute.new()
 	if _land_mask_compute == null:
@@ -44,7 +50,19 @@ func cleanup() -> void:
 	_compute = null
 	_land_mask_compute = null
 	_step_counter = 0
+	_warmup_enabled = false
+	_warmup_max_dt_days = MAX_DT_DAYS
+	_warmup_rate_scale = 1.0
 	generator = null
+
+func set_warmup_mode(enabled: bool, dt_cap_days: float = MAX_DT_DAYS, rate_scale: float = 1.0) -> void:
+	_warmup_enabled = VariantCastsUtil.to_bool(enabled)
+	if _warmup_enabled:
+		_warmup_max_dt_days = clamp(float(dt_cap_days), MAX_DT_DAYS, 64.0)
+		_warmup_rate_scale = clamp(float(rate_scale), 1.0, 16.0)
+	else:
+		_warmup_max_dt_days = MAX_DT_DAYS
+		_warmup_rate_scale = 1.0
 
 func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if generator == null:
@@ -55,9 +73,11 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if size <= 0:
 		return {}
 
-	var dt_eff: float = clamp(float(dt_days), 0.0, MAX_DT_DAYS)
+	var dt_cap: float = _warmup_max_dt_days if _warmup_enabled else MAX_DT_DAYS
+	var dt_eff: float = clamp(float(dt_days), 0.0, dt_cap)
 	if dt_eff <= 0.0:
 		return {}
+	var erosion_rate_scale: float = _warmup_rate_scale if _warmup_enabled else 1.0
 
 	if "ensure_persistent_buffers" in generator:
 		generator.ensure_persistent_buffers(false)
@@ -96,8 +116,8 @@ func tick(dt_days: float, _world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		rock_buf,
 		dt_eff,
 		float(generator.config.sea_level),
-		BASE_EROSION_RATE_PER_DAY,
-		MAX_EROSION_RATE_PER_DAY,
+		BASE_EROSION_RATE_PER_DAY * erosion_rate_scale,
+		MAX_EROSION_RATE_PER_DAY * erosion_rate_scale,
 		noise_phase,
 		GLACIER_SMOOTHING_BIAS,
 		CRYO_EROSION_RATE_SCALE,

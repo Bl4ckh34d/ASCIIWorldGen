@@ -78,7 +78,7 @@ class Config:
 	# Rivers toggle
 	var rivers_enabled: bool = true
 	# River flow threshold (absolute seed threshold in GPU-only mode).
-	var river_threshold: float = 1.0
+	var river_threshold: float = 2.0
 	# Multiplier applied to river_threshold in GPU-only seeding.
 	var river_threshold_factor: float = 1.0
 	# Widen river deltas near coast for major rivers.
@@ -501,8 +501,22 @@ func _compute_river_seed_threshold(
 		min_threshold: float,
 		factor: float
 	) -> float:
-	# GPU-only river seeding: use configured fixed threshold and avoid CPU percentile sort.
-	return max(min_threshold, min_threshold * max(0.1, factor))
+	# GPU-only river seeding:
+	# use configured threshold, then apply a land-fraction-scaled density multiplier
+	# to avoid over-dense minor channels on large continental interiors.
+	var base_thr: float = max(min_threshold, min_threshold * max(0.1, factor))
+	var size: int = _is_land.size()
+	if size <= 0:
+		return max(0.1, base_thr * 2.0)
+	var land_cells: int = 0
+	for i in range(size):
+		if _is_land[i] != 0:
+			land_cells += 1
+	var land_frac: float = float(land_cells) / float(max(1, size))
+	# Stronger density attenuation than before: prioritize only major trunks.
+	var density_mult: float = lerp(2.90, 4.60, clamp(land_frac, 0.0, 1.0))
+	var area_floor: float = max(10.0, float(max(1, land_cells)) * 0.0010)
+	return max(0.1, max(area_floor, base_thr * density_mult))
 
 func _compute_delta_source_min_accum(
 		flow_accum: PackedFloat32Array,
@@ -1159,7 +1173,8 @@ func generate() -> PackedByteArray:
 				config.temp_min_c,
 				config.temp_max_c,
 				int(BiomeClassifier.Biome.GLACIER),
-				0.0
+				0.5,
+				2.8
 			)
 	else:
 		var sz: int = w * h
@@ -1848,7 +1863,8 @@ func quick_update_flow_rivers() -> void:
 			config.temp_min_c,
 			config.temp_max_c,
 			int(BiomeClassifier.Biome.GLACIER),
-			0.0
+			0.5,
+			2.8
 		)
 
 	# Update GPU texture override from the authoritative river buffer.
@@ -2226,16 +2242,7 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 	var fertility: float = (last_fertility[i] if i < last_fertility.size() else _base_fertility_for_rock(rock_id))
 	if ci >= 0 and ci < _debug_cache_fertility.size():
 		fertility = _debug_cache_fertility[ci]
-	# Apply descriptive prefixes for extreme temperatures in info panel
 	var display_name: String = biome_name
-	if land and not is_lava:
-		var bid2: int = bid
-		if temp_c <= -5.0:
-			if bid2 != BiomeClassifier.Biome.GLACIER and bid2 != BiomeClassifier.Biome.DESERT_ICE and bid2 != BiomeClassifier.Biome.ICE_SHEET and bid2 != BiomeClassifier.Biome.FROZEN_FOREST and bid2 != BiomeClassifier.Biome.FROZEN_MARSH:
-				display_name = "Frozen " + display_name
-		elif temp_c >= 45.0:
-			if bid2 != BiomeClassifier.Biome.LAVA_FIELD:
-				display_name = "Scorched " + display_name
 	var rock_name: String = _rock_to_string(rock_id)
 	var height_m: float = h_val * config.height_scale_m
 	return {
@@ -2253,6 +2260,8 @@ func get_cell_info(x: int, y: int) -> Dictionary:
 		"rock_name": rock_name,
 		"temp_c": temp_c,
 		"humidity": humidity,
+		# Backward-compatible alias used by some UI paths.
+		"moisture": humidity,
 		"fertility": fertility,
 		# Tectonic information
 		"is_plate_boundary": (_plates_boundary_mask_i32.size() > i and _plates_boundary_mask_i32[i] == 1),
@@ -2282,10 +2291,10 @@ func _rock_to_string(r: int) -> String:
 
 func _biome_to_string(b: int) -> String:
 	match b:
-		BiomeClassifier.Biome.ICE_SHEET:
-			return "Ice Sheet"
 		BiomeClassifier.Biome.OCEAN:
 			return "Ocean"
+		BiomeClassifier.Biome.ICE_SHEET:
+			return "Ice Sheet"
 		BiomeClassifier.Biome.BEACH:
 			return "Beach"
 		BiomeClassifier.Biome.DESERT_SAND:
@@ -2298,48 +2307,60 @@ func _biome_to_string(b: int) -> String:
 			return "Steppe"
 		BiomeClassifier.Biome.GRASSLAND:
 			return "Grassland"
-		BiomeClassifier.Biome.SWAMP:
-			return "Swamp"
+		BiomeClassifier.Biome.SAVANNA:
+			return "Savanna"
+		BiomeClassifier.Biome.TUNDRA:
+			return "Tundra"
+		BiomeClassifier.Biome.TROPICAL_FOREST:
+			return "Tropical Forest"
 		BiomeClassifier.Biome.BOREAL_FOREST:
 			return "Boreal Forest"
+		BiomeClassifier.Biome.CONIFER_FOREST:
+			return "Conifer Forest"
 		BiomeClassifier.Biome.TEMPERATE_FOREST:
 			return "Temperate Forest"
 		BiomeClassifier.Biome.RAINFOREST:
 			return "Rainforest"
-		BiomeClassifier.Biome.HILLS:
+		BiomeClassifier.Biome.SWAMP:
+			return "Swamp"
+		BiomeClassifier.Biome.HILLS, BiomeClassifier.Biome.FOOTHILLS:
 			return "Hills"
 		BiomeClassifier.Biome.MOUNTAINS:
 			return "Mountains"
 		BiomeClassifier.Biome.ALPINE:
 			return "Alpine"
+		BiomeClassifier.Biome.GLACIER:
+			return "Glacier"
 		BiomeClassifier.Biome.FROZEN_FOREST:
 			return "Frozen Forest"
 		BiomeClassifier.Biome.FROZEN_MARSH:
 			return "Frozen Marsh"
-		BiomeClassifier.Biome.FROZEN_GRASSLAND:
+		BiomeClassifier.Biome.FROZEN_GRASSLAND, BiomeClassifier.Biome.FROZEN_MEADOW, BiomeClassifier.Biome.FROZEN_PRAIRIE:
 			return "Frozen Grassland"
 		BiomeClassifier.Biome.FROZEN_STEPPE:
 			return "Frozen Steppe"
-		# Frozen Meadow/Prairie merged into Frozen Grassland
 		BiomeClassifier.Biome.FROZEN_SAVANNA:
 			return "Frozen Savanna"
-		BiomeClassifier.Biome.FROZEN_HILLS:
+		BiomeClassifier.Biome.FROZEN_HILLS, BiomeClassifier.Biome.FROZEN_FOOTHILLS:
 			return "Frozen Hills"
-		# Foothills merged into Hills
-		BiomeClassifier.Biome.SCORCHED_GRASSLAND:
+		BiomeClassifier.Biome.SCORCHED_GRASSLAND, BiomeClassifier.Biome.SCORCHED_MEADOW, BiomeClassifier.Biome.SCORCHED_PRAIRIE:
 			return "Scorched Grassland"
 		BiomeClassifier.Biome.SCORCHED_STEPPE:
 			return "Scorched Steppe"
-		# Scorched Meadow/Prairie merged into Scorched Grassland
 		BiomeClassifier.Biome.SCORCHED_SAVANNA:
 			return "Scorched Savanna"
-		BiomeClassifier.Biome.SCORCHED_HILLS:
+		BiomeClassifier.Biome.SCORCHED_HILLS, BiomeClassifier.Biome.SCORCHED_FOOTHILLS:
 			return "Scorched Hills"
-		# Foothills merged into Hills
+		BiomeClassifier.Biome.SCORCHED_FOREST:
+			return "Scorched Forest"
+		BiomeClassifier.Biome.LAVA_FIELD:
+			return "Lava Field"
+		BiomeClassifier.Biome.VOLCANIC_BADLANDS:
+			return "Volcanic Badlands"
 		BiomeClassifier.Biome.SALT_DESERT:
 			return "Salt Desert"
 		_:
-			return "Grassland"
+			return "Unknown Biome (%d)" % b
 
 # GPU Buffer Management for Persistent SSBOs
 func ensure_persistent_buffers(refresh: bool = true) -> void:

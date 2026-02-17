@@ -94,11 +94,6 @@ void main() {
 
     int out_b = b;
     float lava = Lava.lava_mask[i];
-    // Full lava-update passes (world generation / explicit biome refresh) must
-    // start from a clean slate; otherwise stale lava from prior worlds can persist.
-    if (PC.update_lava > 0.5) {
-        lava = 0.0;
-    }
     int rock = Rock.rock_type[i];
     if (land) {
         // Hot override: at high temps, remove forests/grass and move to dry biomes

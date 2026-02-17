@@ -46,7 +46,8 @@ func apply_gpu_buffers(
 		temp_min_c: float,
 		temp_max_c: float,
 		glacier_biome_id: int,
-		freeze_c: float = 0.0
+		freeze_c: float = 0.5,
+		thaw_c: float = 2.8
 	) -> bool:
 	_ensure()
 	if not _pipeline.is_valid():
@@ -66,7 +67,7 @@ func apply_gpu_buffers(
 
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h, glacier_biome_id, 0])
-	var floats := PackedFloat32Array([temp_min_c, temp_max_c, freeze_c, 0.0])
+	var floats := PackedFloat32Array([temp_min_c, temp_max_c, freeze_c, thaw_c])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
 	var pad := (16 - (pc.size() % 16)) % 16

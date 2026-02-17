@@ -104,7 +104,8 @@ void main() {
     float elev_cool = clamp(rel_elev * 0.6, 0.0, 1.0);
     float zonal = 0.5 + 0.5 * sin(6.28318 * (float(y) / float(H) + 0.11));
     float u = 1.0 - lat;
-    float t_lat = 0.65 * pow(u, 0.8) + 0.35 * pow(u, 1.6);
+    // Stronger meridional baseline so pole-to-equator contrast reads clearly on worldgen maps.
+    float t_lat = 0.74 * pow(u, 1.25) + 0.26 * pow(u, 2.40);
     float lat_amp = land_px ? 1.0 : 0.82;
     float t_base = t_lat * 0.82 * lat_amp + zonal * 0.06 - elev_cool * 0.9;
     float t_noise = 0.18 * TempNoise.temp_noise_data[i];
@@ -144,7 +145,8 @@ void main() {
     float coast_dist01 = clamp(dc_norm, 0.0, 1.0);
     float coast_wet = 1.0 - smoothstep(0.02, 0.45, dc_norm);
     float land_diurnal_gain = mix(0.55, 1.35, coast_dist01);
-    float amp_cont_d = land_px ? land_diurnal_gain : PC.diurnal_ocean_damp;
+    float ocean_diurnal_damp = PC.diurnal_ocean_damp * mix(0.42, 0.22, coast_dist01);
+    float amp_cont_d = land_px ? land_diurnal_gain : ocean_diurnal_damp;
     float diurnal = amp_lat_d * amp_cont_d * diurnal_driver;
 
     // Precompute a humidity proxy from large-scale moisture drivers so humidity can
@@ -168,20 +170,24 @@ void main() {
     float noon_incidence = clamp01(max(0.0, cos(phi - decl)));
     float mean_energy = day_fraction * noon_incidence;
     float equator_bias = 1.0 - lat;
+    // Boost latitudinal energy-density contrast (about 2x perceived vs previous tuning).
+    float lat_strength = clamp(PC.lat_energy_density_strength, 0.0, 1.0);
+    float lat_strength_boosted = 1.0 - pow(1.0 - lat_strength, 2.6);
     float density_lat = mix(
         1.0,
-        mix(0.20, 1.0, pow(clamp(equator_bias, 0.0, 1.0), 0.85)),
-        clamp(PC.lat_energy_density_strength, 0.0, 1.0)
+        mix(0.16, 1.0, pow(clamp(equator_bias, 0.0, 1.0), 0.85)),
+        lat_strength_boosted
     );
     float flux_scale = clamp(PC.stellar_flux, 0.35, 2.0);
-    float solar_energy = clamp01(mix(mean_energy, insol_inst, 0.72) * density_lat * flux_scale);
+    float solar_inst_weight = land_px ? 0.72 : mix(0.38, 0.16, coast_dist01);
+    float solar_energy = clamp01(mix(mean_energy, insol_inst, solar_inst_weight) * density_lat * flux_scale);
     float light_local = clamp01(Light.light_data[i]);
     float relief_shadow_hint = max(0.0, insol_inst - light_local);
     float relief_temp_cool = 0.035 * relief_shadow_hint * smoothstep(0.06, 0.40, insol_inst) * (land_px ? 1.0 : 0.45);
-    float night_retention = humidity_heat * (1.0 - daylight) * (land_px ? mix(0.010, 0.026, coast_wet) : 0.032);
-    float evap_cooling = humidity_heat * daylight * (land_px ? 0.012 : 0.008);
+    float night_retention = humidity_heat * (1.0 - daylight) * (land_px ? mix(0.010, 0.026, coast_wet) : mix(0.040, 0.060, coast_dist01));
+    float evap_cooling = humidity_heat * daylight * (land_px ? 0.012 : mix(0.006, 0.004, coast_dist01));
     float t_solar = clamp01(pow(solar_energy, 0.72) * (1.0 - 0.42 * albedo) + 0.06 + season + diurnal + night_retention - relief_temp_cool - evap_cooling);
-    float cont_blend = land_px ? mix(0.58, 0.88, coast_dist01) : 0.42;
+    float cont_blend = land_px ? mix(0.58, 0.88, coast_dist01) : mix(0.30, 0.16, coast_dist01);
     float t = clamp01(mix(t_climatology, t_solar, cont_blend));
     // FIXED: Reduce extreme temperature scaling to prevent lava everywhere
     // Apply gentler temperature transformation to avoid extreme artifacts

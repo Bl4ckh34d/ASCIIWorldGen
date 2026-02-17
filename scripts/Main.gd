@@ -45,6 +45,12 @@ const HIGH_SPEED_PROGRESS_RATIO_LIMIT: float = 0.55
 const HIGH_SPEED_BACKLOG_DAYS_LIMIT: float = 365.0
 const STARTUP_ACCLIMATE_STEPS: int = 2
 const STARTUP_ACCLIMATE_STEP_DAYS: float = 0.25
+const STARTUP_PRESIM_REALTIME_BUDGET_SEC: float = 9.0
+const STARTUP_PRESIM_COARSE_STEPS: int = 120
+const STARTUP_PRESIM_COARSE_STEP_DAYS: float = 20.0
+const STARTUP_PRESIM_EQUIVALENT_YEARS: float = 2500.0
+const STARTUP_PRESIM_CLOUD_STEPS: int = 24
+const STARTUP_PRESIM_CLOUD_STEP_DAYS: float = 1.0 / 12.0
 const INTRO_SCENE_REVEAL_MIN_DELAY_SEC: float = 0.30
 const INTRO_SCENE_REVEAL_MAX_DELAY_SEC: float = 3.00
 const REGIONAL_MAP_SCENE_PATH: String = SceneContractsRef.SCENE_REGIONAL_MAP
@@ -715,7 +721,9 @@ func _start_simulation() -> void:
 		_update_top_seed_label()
 	# Ensure persistent buffers are seeded before first simulation tick.
 	if generator and "ensure_persistent_buffers" in generator:
-		generator.ensure_persistent_buffers(true)
+		# Do not force-refresh from CPU mirrors here; pre-sim updates climate on GPU
+		# and a forced refresh can overwrite fresh temperature/moisture state.
+		generator.ensure_persistent_buffers(false)
 	_refresh_plate_masks_for_current_size()
 	_redraw_ascii_from_current_state()
 	
@@ -1444,72 +1452,235 @@ func _generate_and_draw() -> void:
 		generator._world_state.time_scale = float(time_system.time_scale)
 		generator._world_state.tick_days = float(time_system.tick_days)
 
+func _tick_system_once(sys_obj: Object, dt_days: float, world_state: Object) -> void:
+	if sys_obj == null or world_state == null:
+		return
+	if "tick" in sys_obj:
+		sys_obj.tick(max(0.0, dt_days), world_state, {})
+
+func _tick_biome_runtime_systems(dt_days: float, world_state: Object) -> void:
+	var ran_any: bool = false
+	for sys_obj in _biome_like_systems:
+		if sys_obj == null:
+			continue
+		_tick_system_once(sys_obj, dt_days, world_state)
+		ran_any = true
+	if not ran_any and _biome_sys != null:
+		_tick_system_once(_biome_sys, dt_days, world_state)
+	if _cryosphere_sys != null and _cryosphere_sys != _biome_sys:
+		_tick_system_once(_cryosphere_sys, dt_days, world_state)
+
+func _set_biome_warmup_mode(enabled: bool, dt_cap_scale: float = 1.0, tau_scale: float = 1.0, step_scale: float = 1.0) -> void:
+	var targets: Array = []
+	for sys_obj in _biome_like_systems:
+		if sys_obj != null:
+			targets.append(sys_obj)
+	if targets.is_empty() and _biome_sys != null:
+		targets.append(_biome_sys)
+	if _cryosphere_sys != null:
+		targets.append(_cryosphere_sys)
+	var seen := {}
+	for sys_obj in targets:
+		if sys_obj == null:
+			continue
+		var sid: int = int(sys_obj.get_instance_id())
+		if seen.has(sid):
+			continue
+		seen[sid] = true
+		if "set_warmup_mode" in sys_obj:
+			sys_obj.set_warmup_mode(enabled, dt_cap_scale, tau_scale, step_scale)
+
 func _acclimate_generated_world() -> void:
-	# Run a tiny hidden warm-up so the first visible frame matches the immediate post-Play state.
+	# Startup hidden warmup:
+	# 1) coarse geology + erosion + climate trend pass
+	# 2) short biome/cryosphere settle on the final-era geometry/climate
+	# 3) short cloud settle
 	if generator == null or not ("_world_state" in generator) or generator._world_state == null:
 		return
-	if simulation == null:
-		return
 	var world_state = generator._world_state
+	var base_sim_days: float = float(world_state.simulation_time_days)
+	var base_time_scale: float = 1.0
+	var base_tick_days: float = WorldConstants.TICK_DAYS_PER_MINUTE
+	var days_per_year: float = 365.0
 	if time_system:
-		world_state.simulation_time_days = float(time_system.simulation_time_days)
-		world_state.time_scale = float(time_system.time_scale)
-		world_state.tick_days = float(time_system.tick_days)
-	# Temporarily unthrottle the simulation scheduler so warm-up reaches a stable state.
-	var prev_budget_mode_time: bool = true
-	var prev_max_systems: int = 2
-	var prev_max_tick_ms: float = 12.0
-	if "budget_mode_time_ms" in simulation:
-		prev_budget_mode_time = bool(simulation.budget_mode_time_ms)
-	if "max_systems_per_tick" in simulation:
-		prev_max_systems = int(simulation.max_systems_per_tick)
-	if "max_tick_time_ms" in simulation:
-		prev_max_tick_ms = float(simulation.max_tick_time_ms)
-	if "set_budget_mode_time" in simulation:
-		simulation.set_budget_mode_time(false)
-	if "set_max_systems_per_tick" in simulation:
-		var sys_count: int = 8
-		if "systems" in simulation:
-			sys_count = max(8, int(simulation.systems.size()) + 4)
-		simulation.set_max_systems_per_tick(sys_count)
-	if "set_max_tick_time_ms" in simulation:
-		simulation.set_max_tick_time_ms(max(prev_max_tick_ms, 1000.0))
-	var dt_days: float = STARTUP_ACCLIMATE_STEP_DAYS
-	if time_system and "tick_days" in time_system:
-		dt_days = max(dt_days, float(time_system.tick_days))
-	dt_days = clamp(dt_days, 1.0 / 1440.0, 0.5)
-	var warmup_steps: int = max(1, STARTUP_ACCLIMATE_STEPS)
-	if "systems" in simulation:
-		warmup_steps = max(warmup_steps, int(simulation.systems.size()) + 2)
-	if simulation and "request_catchup_all" in simulation:
-		simulation.request_catchup_all()
-	if _clouds_sys and "request_full_resync" in _clouds_sys:
-		# Warm-up should trigger a single cloud resync; cloud ticks themselves are driven via simulation.on_tick().
+		if "simulation_time_days" in time_system:
+			base_sim_days = float(time_system.simulation_time_days)
+		if "time_scale" in time_system:
+			base_time_scale = max(1.0, float(time_system.time_scale))
+		if "tick_days" in time_system:
+			base_tick_days = max(1e-6, float(time_system.tick_days))
+		if "get_days_per_year" in time_system:
+			days_per_year = max(1.0, float(time_system.get_days_per_year()))
+	world_state.simulation_time_days = base_sim_days
+	world_state.time_scale = base_time_scale
+	world_state.tick_days = base_tick_days
+
+	var budget_usec: int = int(max(0.25, STARTUP_PRESIM_REALTIME_BUDGET_SEC) * 1000000.0)
+	var coarse_budget_usec: int = int(float(budget_usec) * 0.80)
+	var start_usec: int = Time.get_ticks_usec()
+	var coarse_steps: int = max(1, STARTUP_PRESIM_COARSE_STEPS)
+	var coarse_system_dt_days: float = clamp(STARTUP_PRESIM_COARSE_STEP_DAYS, 1.0 / 24.0, 30.0)
+	var coarse_target_days: float = max(
+		coarse_system_dt_days * float(coarse_steps),
+		STARTUP_PRESIM_EQUIVALENT_YEARS * days_per_year
+	)
+	var coarse_timeline_dt_days: float = coarse_target_days / float(coarse_steps)
+	var timeline_scale: float = max(1.0, coarse_timeline_dt_days / max(1e-6, coarse_system_dt_days))
+
+	var prev_climate_interval: int = 1
+	var prev_light_interval: int = 1
+	if _seasonal_sys != null:
+		if "climate_update_interval_ticks" in _seasonal_sys:
+			prev_climate_interval = max(1, int(_seasonal_sys.climate_update_interval_ticks))
+		if "light_update_interval_ticks" in _seasonal_sys:
+			prev_light_interval = max(1, int(_seasonal_sys.light_update_interval_ticks))
+		if "set_update_intervals" in _seasonal_sys:
+			_seasonal_sys.set_update_intervals(1, 1)
+		if "request_full_resync" in _seasonal_sys:
+			_seasonal_sys.request_full_resync()
+
+	var prev_hydro_tiles_per_tick: int = 1
+	if _hydro_sys != null and "tiles_per_tick" in _hydro_sys:
+		prev_hydro_tiles_per_tick = max(1, int(_hydro_sys.tiles_per_tick))
+		var warm_tiles: int = prev_hydro_tiles_per_tick
+		if "tiles_x" in _hydro_sys and "tiles_y" in _hydro_sys:
+			warm_tiles = max(warm_tiles, int(_hydro_sys.tiles_x) * int(_hydro_sys.tiles_y))
+		_hydro_sys.tiles_per_tick = max(1, warm_tiles)
+
+	var erosion_dt_cap_days: float = clamp(coarse_system_dt_days * 1.2, 0.5, 24.0)
+	var erosion_rate_scale: float = clamp(pow(timeline_scale, 0.33), 1.0, 10.0)
+	if _erosion_sys != null and "set_warmup_mode" in _erosion_sys:
+		_erosion_sys.set_warmup_mode(true, erosion_dt_cap_days, erosion_rate_scale)
+	var plate_prev_profile: Dictionary = {}
+	if _plates_sys != null:
+		var plate_keys: Array = [
+			"uplift_rate_per_day",
+			"ridge_rate_per_day",
+			"subsidence_rate_per_day",
+			"transform_roughness_per_day",
+			"subduction_rate_per_day",
+			"trench_rate_per_day",
+			"drift_cells_per_day",
+			"terrain_relax_iterations",
+		]
+		for k in plate_keys:
+			var key: String = String(k)
+			if key in _plates_sys:
+				plate_prev_profile[key] = _plates_sys.get(key)
+		if "uplift_rate_per_day" in _plates_sys:
+			_plates_sys.uplift_rate_per_day = float(_plates_sys.uplift_rate_per_day) * 2.8
+		if "ridge_rate_per_day" in _plates_sys:
+			_plates_sys.ridge_rate_per_day = float(_plates_sys.ridge_rate_per_day) * 2.5
+		if "subsidence_rate_per_day" in _plates_sys:
+			_plates_sys.subsidence_rate_per_day = float(_plates_sys.subsidence_rate_per_day) * 2.4
+		if "transform_roughness_per_day" in _plates_sys:
+			_plates_sys.transform_roughness_per_day = float(_plates_sys.transform_roughness_per_day) * 2.0
+		if "subduction_rate_per_day" in _plates_sys:
+			_plates_sys.subduction_rate_per_day = float(_plates_sys.subduction_rate_per_day) * 2.8
+		if "trench_rate_per_day" in _plates_sys:
+			_plates_sys.trench_rate_per_day = float(_plates_sys.trench_rate_per_day) * 2.6
+		if "drift_cells_per_day" in _plates_sys:
+			_plates_sys.drift_cells_per_day = float(_plates_sys.drift_cells_per_day) * 3.0
+		if "terrain_relax_iterations" in _plates_sys:
+			_plates_sys.terrain_relax_iterations = clamp(int(_plates_sys.terrain_relax_iterations) + 1, 1, 8)
+
+	# Coarse pass does not run cloud advection; clouds get a dedicated short settle pass later.
+	if _clouds_sys != null and "set_runtime_lod" in _clouds_sys:
+		_clouds_sys.set_runtime_lod(true, 1, 1, 1, 1, 1)
+
+	var plate_dt_days: float = clamp(coarse_system_dt_days * 0.75, 0.25, 18.0)
+	var volcanism_dt_days: float = clamp(coarse_system_dt_days * 0.20, 0.05, 4.0)
+	var coarse_cursor_days: float = base_sim_days
+	for i in range(coarse_steps):
+		if i > 0 and (Time.get_ticks_usec() - start_usec) >= coarse_budget_usec:
+			break
+		world_state.simulation_time_days = coarse_cursor_days
+		world_state.time_scale = max(base_time_scale, timeline_scale)
+		world_state.tick_days = coarse_system_dt_days
+		_tick_system_once(_seasonal_sys, coarse_system_dt_days, world_state)
+		_tick_system_once(_plates_sys, plate_dt_days, world_state)
+		_tick_system_once(_volcanism_sys, volcanism_dt_days, world_state)
+		_tick_system_once(_hydro_sys, coarse_system_dt_days, world_state)
+		_tick_system_once(_erosion_sys, coarse_system_dt_days, world_state)
+		coarse_cursor_days += coarse_timeline_dt_days
+
+	# Final-era biome settle over a shorter horizon so it reflects the latest geometry.
+	var biome_settle_steps: int = clamp(int(round(float(coarse_steps) * 0.18)), 8, 24)
+	var biome_settle_years: float = clamp(STARTUP_PRESIM_EQUIVALENT_YEARS * 0.6, 250.0, 2200.0)
+	var biome_settle_days: float = biome_settle_years * days_per_year
+	var biome_system_dt_days: float = clamp(coarse_system_dt_days * 0.8, 1.0, 12.0)
+	var biome_timeline_dt_days: float = max(biome_system_dt_days, biome_settle_days / float(max(1, biome_settle_steps)))
+	var biome_timeline_scale: float = max(1.0, biome_timeline_dt_days / max(1e-6, biome_system_dt_days))
+	var biome_dt_cap_scale: float = clamp(pow(biome_timeline_scale, 0.60), 1.0, 48.0)
+	var biome_tau_scale: float = clamp(1.0 / pow(biome_timeline_scale, 0.15), 0.45, 1.0)
+	var biome_step_scale: float = clamp(pow(biome_timeline_scale, 0.30), 1.0, 10.0)
+	_set_biome_warmup_mode(true, biome_dt_cap_scale, biome_tau_scale, biome_step_scale)
+	var biome_cursor_days: float = max(base_sim_days, coarse_cursor_days - biome_settle_days)
+	var full_biome_stride: int = 3
+	for bi in range(biome_settle_steps):
+		if bi > 0 and (Time.get_ticks_usec() - start_usec) >= coarse_budget_usec:
+			break
+		world_state.time_scale = max(base_time_scale, biome_timeline_scale)
+		world_state.tick_days = biome_system_dt_days
+		# Apply hydro/erosion once per biome step using the step anchor.
+		world_state.simulation_time_days = biome_cursor_days
+		_tick_system_once(_seasonal_sys, biome_system_dt_days, world_state)
+		_tick_system_once(_hydro_sys, biome_system_dt_days, world_state)
+		_tick_system_once(_erosion_sys, biome_system_dt_days, world_state)
+		# Alternate both hemispheric seasons every step so cryosphere accumulation
+		# does not bias to a single-pole summer state at startup.
+		var season_offsets: Array = [0.0, days_per_year * 0.5]
+		for soff in season_offsets:
+			world_state.simulation_time_days = biome_cursor_days + float(soff)
+			_tick_system_once(_seasonal_sys, biome_system_dt_days, world_state)
+			if _cryosphere_sys != null:
+				_tick_system_once(_cryosphere_sys, biome_system_dt_days, world_state)
+			elif _biome_sys != null:
+				_tick_system_once(_biome_sys, biome_system_dt_days, world_state)
+		# Full biome classification is intentionally lower-frequency than cryosphere.
+		var run_full_biome_now: bool = (_biome_sys != null) and ((_cryosphere_sys == null) or ((bi % full_biome_stride) == 0))
+		if run_full_biome_now:
+			world_state.simulation_time_days = biome_cursor_days + days_per_year * 0.25
+			_tick_system_once(_seasonal_sys, biome_system_dt_days, world_state)
+			_tick_system_once(_biome_sys, biome_system_dt_days, world_state)
+		biome_cursor_days += biome_timeline_dt_days
+	_set_biome_warmup_mode(false)
+
+	if _clouds_sys != null and "set_runtime_lod" in _clouds_sys:
+		_clouds_sys.set_runtime_lod(false, 1, 1, 1, 1, 1)
+	if _clouds_sys != null and "request_full_resync" in _clouds_sys:
 		_clouds_sys.request_full_resync()
-	for wi in range(warmup_steps):
-		if _seasonal_sys and "tick" in _seasonal_sys:
-			_seasonal_sys.tick(dt_days, world_state, {})
-		if simulation and "on_tick" in simulation:
-			simulation.on_tick(dt_days, world_state, {})
-		world_state.simulation_time_days += dt_days
-		# Early out once all forced catch-up flags have been consumed.
-		if "systems" in simulation and wi >= max(0, STARTUP_ACCLIMATE_STEPS - 1):
-			var has_pending_forced: bool = false
-			for sys_state in simulation.systems:
-				if bool(sys_state.get("force_next_run", false)):
-					has_pending_forced = true
-					break
-			if not has_pending_forced:
-				break
-	# Restore scheduler settings.
-	if "set_budget_mode_time" in simulation:
-		simulation.set_budget_mode_time(prev_budget_mode_time)
-	if "set_max_systems_per_tick" in simulation:
-		simulation.set_max_systems_per_tick(prev_max_systems)
-	if "set_max_tick_time_ms" in simulation:
-		simulation.set_max_tick_time_ms(prev_max_tick_ms)
+	var cloud_steps: int = max(1, STARTUP_PRESIM_CLOUD_STEPS)
+	var cloud_dt_days: float = clamp(STARTUP_PRESIM_CLOUD_STEP_DAYS, 1.0 / 1440.0, 0.25)
+	var cloud_cursor_days: float = base_sim_days
+	for ci in range(cloud_steps):
+		if ci > 0 and (Time.get_ticks_usec() - start_usec) >= budget_usec:
+			break
+		world_state.simulation_time_days = cloud_cursor_days
+		world_state.time_scale = base_time_scale
+		world_state.tick_days = cloud_dt_days
+		_tick_system_once(_seasonal_sys, cloud_dt_days, world_state)
+		_tick_system_once(_clouds_sys, cloud_dt_days, world_state)
+		cloud_cursor_days += cloud_dt_days
+
+	if _erosion_sys != null and "set_warmup_mode" in _erosion_sys:
+		_erosion_sys.set_warmup_mode(false)
+	if _plates_sys != null and not plate_prev_profile.is_empty():
+		for k in plate_prev_profile.keys():
+			_plates_sys.set(String(k), plate_prev_profile[k])
+	if _hydro_sys != null and "tiles_per_tick" in _hydro_sys:
+		_hydro_sys.tiles_per_tick = prev_hydro_tiles_per_tick
+	if _seasonal_sys != null:
+		if "set_update_intervals" in _seasonal_sys:
+			_seasonal_sys.set_update_intervals(prev_climate_interval, prev_light_interval)
+		if "request_full_resync" in _seasonal_sys:
+			_seasonal_sys.request_full_resync()
+	world_state.simulation_time_days = base_sim_days
+	world_state.time_scale = base_time_scale
+	world_state.tick_days = base_tick_days
+	_tick_system_once(_seasonal_sys, max(base_tick_days, 1.0 / 1440.0), world_state)
 	if time_system:
-		time_system.simulation_time_days = float(world_state.simulation_time_days)
+		time_system.simulation_time_days = base_sim_days
 	if year_label and time_system and "get_year_float" in time_system:
 		year_label.text = "Year: %.2f" % float(time_system.get_year_float())
 
@@ -1525,10 +1696,12 @@ func _prime_startup_cloud_overrides() -> void:
 		generator._world_state.simulation_time_days = float(time_system.simulation_time_days)
 		generator._world_state.time_scale = float(time_system.time_scale)
 		generator._world_state.tick_days = float(time_system.tick_days)
-	if "request_full_resync" in _clouds_sys:
-		_clouds_sys.request_full_resync()
-	if "tick" in _clouds_sys:
-		_clouds_sys.tick(0.0, generator._world_state, {})
+	var has_cloud_tex: bool = ("cloud_texture_override" in generator) and (generator.cloud_texture_override != null)
+	if not has_cloud_tex:
+		if "request_full_resync" in _clouds_sys:
+			_clouds_sys.request_full_resync()
+		if "tick" in _clouds_sys:
+			_clouds_sys.tick(0.0, generator._world_state, {})
 	if "cloud_texture_override" in generator and generator.cloud_texture_override:
 		gpu_ascii_renderer.set_cloud_texture_override(generator.cloud_texture_override)
 	if "light_texture_override" in generator and generator.light_texture_override:
@@ -3069,7 +3242,7 @@ func _update_info_panel_for_tile(x: int, y: int) -> void:
 	var info = generator.get_cell_info(x, y)
 	var coords: String = "(%d,%d)" % [x, y]
 	var htxt: String = "%.2f" % info.get("height_m", 0.0)
-	var humid: float = info.get("moisture", 0.0)
+	var humid: float = float(info.get("humidity", info.get("moisture", 0.0)))
 	var temp_c: float = info.get("temp_c", 0.0)
 	var ttxt: String = info.get("rock_name", "Unknown Rock") if show_bedrock_view else info.get("biome_name", "Unknown")
 	var flags: PackedStringArray = PackedStringArray()

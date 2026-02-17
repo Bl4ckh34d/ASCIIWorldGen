@@ -22,6 +22,9 @@ layout(push_constant) uniform Params {
 	float max_step_per_iter;
 } PC;
 
+const float TERRAIN_MIN_HEIGHT = -1.0;
+const float TERRAIN_MAX_HEIGHT = 1.18;
+
 int idx_wrap_x(int x, int y) {
 	int xx = (x + PC.width) % PC.width;
 	return xx + y * PC.width;
@@ -81,6 +84,39 @@ void main() {
 	float d = (w_sum > 0.0) ? (delta / w_sum) : 0.0;
 	d = clamp(d, -PC.max_step_per_iter, PC.max_step_per_iter);
 
-	float h_out = clamp(h0 + d, -1.0, 2.0);
+	float h_candidate = clamp(h0 + d, TERRAIN_MIN_HEIGHT, 2.0);
+
+	// Hard slope clip: constrain output so local height differences stay within
+	// the configured per-neighbor allowed range (interior/boundary aware).
+	float lower_bound = -1e9;
+	float upper_bound = 1e9;
+	for (int oy = -1; oy <= 1; oy++) {
+		for (int ox = -1; ox <= 1; ox++) {
+			if (ox == 0 && oy == 0) {
+				continue;
+			}
+			int ny = y + oy;
+			if (ny < 0 || ny >= PC.height) {
+				continue;
+			}
+			int j = idx_wrap_x(x + ox, ny);
+			float hn = HeightIn.height_in[j];
+			float nb_b = (Boundary.boundary_mask[j] != 0) ? 1.0 : 0.0;
+			float bmix = max(self_b, nb_b);
+			float allowed = mix(PC.max_delta_interior, PC.max_delta_boundary, bmix);
+			allowed *= mix(1.0, 1.75, lava_boost);
+			lower_bound = max(lower_bound, hn - allowed);
+			upper_bound = min(upper_bound, hn + allowed);
+		}
+	}
+	if (lower_bound <= upper_bound) {
+		h_candidate = clamp(h_candidate, lower_bound, upper_bound);
+	} else {
+		// Degenerate neighborhood constraints: collapse to the midpoint.
+		h_candidate = 0.5 * (lower_bound + upper_bound);
+	}
+
+	float max_cap = mix(TERRAIN_MAX_HEIGHT, TERRAIN_MAX_HEIGHT + 0.08, lava_boost);
+	float h_out = clamp(min(h_candidate, max_cap), TERRAIN_MIN_HEIGHT, 2.0);
 	HeightOut.height_out[i] = h_out;
 }
