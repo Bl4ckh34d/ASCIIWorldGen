@@ -168,6 +168,8 @@ void main() {
     const float div_thresh = -0.08;
     if (approach > conv_thresh) {
         float conv = approach - conv_thresh;
+        // Convergent belts should be narrower than generic boundary bands.
+        boundary_w = mix(pow(belt_w, 1.45), pow(belt_w, 1.18), marine_context);
         bool self_subducts = (b_self + 0.03 < b_other);
         bool other_subducts = (b_other + 0.03 < b_self);
         float buoy_contrast = abs(b_self - b_other);
@@ -182,6 +184,30 @@ void main() {
         } else {
             delta_h += PC.uplift_rate_per_day * PC.dt_days * conv * (0.68 + 0.20 * buoy_split) * marine_arc;
         }
+
+        // Break up long linear fold-lines:
+        // segment uplift along strike and carve noisy incision bands.
+        float strike_u = -diry;
+        float strike_v = dirx;
+        float strike_coord = float(x) * strike_u + float(y) * strike_v;
+        float cross_coord = float(x) * dirx + float(y) * diry;
+        float n_seg0 = fract(sin(strike_coord * 0.179 + float(pid * 13 + p_other * 7) + PC.seed_phase * 57.0) * 43758.5453);
+        float n_seg1 = fract(sin(strike_coord * 0.613 - cross_coord * 0.231 + float(pid * 5 - p_other * 11) + PC.seed_phase * 31.0) * 24634.6345);
+        float n_seg2 = fract(sin(strike_coord * 1.337 + cross_coord * 0.417 + PC.seed_phase * 13.0) * 32768.5453);
+        float ridge_segment_gain = mix(0.55, 1.25, n_seg0);
+        delta_h *= ridge_segment_gain;
+
+        float relief = max(0.0, h_base - PC.sea_level);
+        float relief_w = smoothstep(0.04, 0.70, relief);
+        float crest_break = smoothstep(0.72, 0.96, n_seg1) * smoothstep(0.05, 0.85, belt_w);
+        float incision = PC.subduction_rate_per_day * PC.dt_days * conv * (0.10 + 0.26 * buoy_contrast);
+        incision *= crest_break * relief_w * (0.65 + 0.35 * n_seg2);
+        delta_h -= incision;
+
+        // Add small strike-slip roughness so ridges read as broken ranges, not skin wrinkles.
+        float shear_rough = PC.transform_roughness_per_day * PC.dt_days * (0.25 + 0.60 * shear);
+        shear_rough *= (n_seg2 - 0.5) * 1.2 * belt_w;
+        delta_h += shear_rough;
     } else if (approach < div_thresh) {
         divergent = true;
         float div = max(0.0, ((-approach) - (-div_thresh)) * PC.divergence_response);
@@ -195,28 +221,32 @@ void main() {
         float local_ref = mix(min(h_base, h_other), 0.5 * (h_base + h_other), 0.72);
         float n_div = fract(sin(dot(vec2(float(x), float(y)) + vec2(float(pid), float(p_other)) * 0.73 + vec2(PC.seed_phase * 2.0), vec2(41.73, 19.91))) * 24634.6345);
         float jitter = (n_div - 0.5) * mix(0.016, 0.009, land_factor);
-        float land_raise = smoothstep(0.55, 1.0, land_factor) * 0.030;
+        float land_raise = smoothstep(0.55, 1.0, land_factor) * 0.022;
         float rift_target = local_ref + jitter + land_raise;
+        // In marine divergent settings, bias target toward a deeper spreading-floor state.
+        float marine_target = PC.sea_level + mix(-0.22, -0.08, polar_ice_guard);
+        float marine_mix = clamp(marine_context * (1.0 - 0.45 * polar_ice_guard), 0.0, 1.0);
+        rift_target = mix(rift_target, min(rift_target, marine_target), marine_mix);
         float to_target = rift_target - h_base;
-        float settle_rate = PC.subduction_rate_per_day * PC.dt_days * div * mix(0.24, 0.12, land_factor);
+        float settle_rate = PC.subduction_rate_per_day * PC.dt_days * div * mix(0.34, 0.16, land_factor);
         settle_rate *= mix(1.0, 0.55, polar_ice_guard);
         delta_h += clamp(to_target, -settle_rate, settle_rate);
         // Keep a narrow deep axis only at the seam itself.
         float seam_w = smoothstep(1.60, 0.60, nearest_d);
-        float deep_axis = PC.trench_rate_per_day * PC.dt_days * div * mix(0.66, 0.11, land_factor);
+        float deep_axis = PC.trench_rate_per_day * PC.dt_days * div * mix(1.10, 0.14, land_factor);
         deep_axis *= mix(0.12, 0.90, marine_context);
         deep_axis *= mix(1.0, 0.18, polar_ice_guard);
         delta_h -= deep_axis * seam_w * seam_w;
         // Gentle upwelling so ridge line still reads, without flattening the whole divergent zone.
-        float ridge_gain = mix(0.26, 0.11, land_factor);
+        float ridge_gain = mix(0.08, 0.10, land_factor);
         ridge_gain = mix(ridge_gain, max(ridge_gain, 0.24), polar_ice_guard * 0.80);
         delta_h += PC.ridge_rate_per_day * PC.dt_days * div * ridge_gain;
         // Dynamic floor: near seam can be deeper, outside seam stays near local ocean floor.
-        float seam_floor = local_ref - mix(0.16, 0.01, land_factor);
-        float flank_floor = local_ref - mix(0.04, -0.01, land_factor);
+        float seam_floor = local_ref - mix(0.30, 0.02, land_factor);
+        float flank_floor = local_ref - mix(0.14, -0.005, land_factor);
         // Land divergence should not auto-create submerged trenches.
-        float seam_sea_floor = PC.sea_level + mix(-0.12, 0.06, land_factor);
-        float flank_sea_floor = PC.sea_level + mix(-0.05, 0.09, land_factor);
+        float seam_sea_floor = PC.sea_level + mix(-0.24, 0.05, land_factor);
+        float flank_sea_floor = PC.sea_level + mix(-0.12, 0.08, land_factor);
         seam_floor = max(seam_floor, seam_sea_floor);
         flank_floor = max(flank_floor, flank_sea_floor);
         divergence_floor = mix(flank_floor, seam_floor, seam_w);

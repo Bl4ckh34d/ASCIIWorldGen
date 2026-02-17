@@ -11,7 +11,7 @@ layout(std430, set = 0, binding = 3) buffer SeedsBuf { uint seeds[]; } Seeds;
 layout(push_constant) uniform Params { int width; int height; float threshold; int rx0; int ry0; int rx1; int ry1; } PC;
 
 int idx(int x, int y) { return x + y * PC.width; }
-const int NMS_RADIUS = 2;
+const int NMS_RADIUS = 1;
 const float NMS_EPS = 1.0e-6;
 
 void main(){

@@ -502,20 +502,20 @@ func _compute_river_seed_threshold(
 		factor: float
 	) -> float:
 	# GPU-only river seeding:
-	# use configured threshold, then apply a land-fraction-scaled density multiplier
-	# to avoid over-dense minor channels on large continental interiors.
+	# use configured threshold, then apply a moderate land-fraction-scaled density
+	# multiplier to avoid over-dense minor channels while still keeping visible trunks.
 	var base_thr: float = max(min_threshold, min_threshold * max(0.1, factor))
 	var size: int = _is_land.size()
 	if size <= 0:
-		return max(0.1, base_thr * 2.0)
+		return max(0.1, base_thr * 1.6)
 	var land_cells: int = 0
 	for i in range(size):
 		if _is_land[i] != 0:
 			land_cells += 1
 	var land_frac: float = float(land_cells) / float(max(1, size))
-	# Stronger density attenuation than before: prioritize only major trunks.
-	var density_mult: float = lerp(2.90, 4.60, clamp(land_frac, 0.0, 1.0))
-	var area_floor: float = max(10.0, float(max(1, land_cells)) * 0.0010)
+	# Balance seed density: keep major channels while restoring visible river presence.
+	var density_mult: float = lerp(1.70, 2.75, clamp(land_frac, 0.0, 1.0))
+	var area_floor: float = max(2.0, float(max(1, land_cells)) * 0.00025)
 	return max(0.1, max(area_floor, base_thr * density_mult))
 
 func _compute_delta_source_min_accum(
@@ -1387,15 +1387,34 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 	quick_update_biomes()
 
 	# 6) Lakes and rivers recompute on sea-level change (order: lakes, then rivers)
-	var lake_buf2: RID = get_persistent_buffer("lake")
-	var lake_id_buf2: RID = get_persistent_buffer("lake_id")
+	if not quick_update_lakes_and_rivers():
+		push_error("quick_update_sea_level: lake/river refresh failed (CPU fallback disabled).")
+		return last_is_land
+
+	if _gpu_buffer_manager != null:
+		ensure_persistent_buffers(false)
+	return last_is_land
+
+
+func quick_update_lakes_and_rivers() -> bool:
+	var w: int = config.width
+	var h: int = config.height
+	var size: int = w * h
+	if size <= 0:
+		return false
+	if _gpu_buffer_manager == null:
+		return false
+	ensure_persistent_buffers(false)
+	var height_buf: RID = get_persistent_buffer("height")
+	var land_buf: RID = get_persistent_buffer("is_land")
+	var lake_buf: RID = get_persistent_buffer("lake")
+	var lake_id_buf: RID = get_persistent_buffer("lake_id")
+	if not height_buf.is_valid() or not land_buf.is_valid() or not lake_buf.is_valid() or not lake_id_buf.is_valid():
+		return false
 	if config.lakes_enabled:
-		if _gpu_buffer_manager == null or not height_buf.is_valid() or not land_buf.is_valid() or not lake_buf2.is_valid() or not lake_id_buf2.is_valid():
-			push_error("quick_update_sea_level: lake buffers unavailable (CPU fallback disabled).")
-			return last_is_land
 		var lakes_ok: bool = false
 		if config.realistic_pooling_enabled:
-			var iters2: int = _lake_fill_iterations(w, h, last_ocean_fraction)
+			var iters: int = _lake_fill_iterations(w, h, last_ocean_fraction)
 			var e_primary: RID = ensure_gpu_storage_buffer("lake_e_primary", size * 4)
 			var e_tmp: RID = ensure_gpu_storage_buffer("lake_e_tmp", size * 4)
 			if e_primary.is_valid() and e_tmp.is_valid():
@@ -1407,25 +1426,27 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 						height_buf,
 						land_buf,
 						true,
-						iters2,
+						iters,
 						e_primary,
 						e_tmp,
-						lake_buf2
+						lake_buf
 					)
 					if fill_ok:
-						var lab2: Object = LakeLabelFromMaskCompute.new()
+						var label_from_mask: Object = LakeLabelFromMaskCompute.new()
 						var label_iters: int = max(16, min(512, w + h))
-						if lab2 != null and "label_from_mask_gpu_buffers" in lab2:
-							lakes_ok = lab2.label_from_mask_gpu_buffers(w, h, lake_buf2, true, lake_id_buf2, label_iters)
+						if label_from_mask != null and "label_from_mask_gpu_buffers" in label_from_mask:
+							lakes_ok = label_from_mask.label_from_mask_gpu_buffers(w, h, lake_buf, true, lake_id_buf, label_iters)
 		else:
 			if _lake_label_compute == null:
 				_lake_label_compute = LakeLabelCompute.new()
 			if _lake_label_compute != null and "label_lakes_gpu_buffers" in _lake_label_compute:
 				var label_iters2: int = max(16, min(512, w + h))
-				lakes_ok = _lake_label_compute.label_lakes_gpu_buffers(w, h, land_buf, true, lake_buf2, lake_id_buf2, label_iters2)
+				lakes_ok = _lake_label_compute.label_lakes_gpu_buffers(w, h, land_buf, true, lake_buf, lake_id_buf, label_iters2)
 		if not lakes_ok:
-			push_error("quick_update_sea_level: lake recompute GPU path failed (CPU fallback disabled).")
-			return last_is_land
+			return false
+		if config.ocean_connectivity_gate_enabled:
+			if not apply_ocean_connectivity_gate_runtime():
+				push_warning("quick_update_lakes_and_rivers: ocean connectivity gate failed after lake refresh.")
 	else:
 		# If lakes are disabled, clear lake buffers and CPU mirror arrays.
 		var zeros_i32 := PackedInt32Array()
@@ -1438,10 +1459,7 @@ func quick_update_sea_level(new_sea_level: float) -> PackedByteArray:
 		last_lake_id.fill(0)
 	# Flow/rivers refresh on GPU-only path.
 	quick_update_flow_rivers()
-
-	if _gpu_buffer_manager != null:
-		ensure_persistent_buffers(false)
-	return last_is_land
+	return true
 
 
 func quick_update_climate(skip_light: bool = false) -> void:

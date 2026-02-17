@@ -54,14 +54,14 @@ const int BIOME_SCORCHED_STEPPE = 37;
 const int BIOME_SCORCHED_SAVANNA = 40;
 const int BIOME_SCORCHED_HILLS = 41;
 const int BIOME_SCORCHED_FOOTHILLS = 42;
-const float GLACIER_ELEV_FORM_C = -4.5;
-const float GLACIER_ELEV_HOLD_C = 1.8;
-const float GLACIER_DEEP_FORM_C = -20.0;
-const float GLACIER_DEEP_HOLD_C = -11.0;
-const float GLACIER_ELEV_FORM_MOIST = 0.27;
-const float GLACIER_ELEV_HOLD_MOIST = 0.20;
-const float GLACIER_DEEP_FORM_MOIST = 0.20;
-const float GLACIER_DEEP_HOLD_MOIST = 0.18;
+const float GLACIER_ELEV_FORM_C = -7.0;
+const float GLACIER_ELEV_HOLD_C = -1.2;
+const float GLACIER_DEEP_FORM_C = -21.5;
+const float GLACIER_DEEP_HOLD_C = -12.5;
+const float GLACIER_ELEV_FORM_MOIST = 0.30;
+const float GLACIER_ELEV_HOLD_MOIST = 0.24;
+const float GLACIER_DEEP_FORM_MOIST = 0.22;
+const float GLACIER_DEEP_HOLD_MOIST = 0.20;
 
 float clamp01(float v){ return clamp(v, 0.0, 1.0); }
 
@@ -206,14 +206,14 @@ void main(){
     float deep_hold_m = GLACIER_DEEP_HOLD_MOIST + equator * 0.06 + temperate_cont * 0.02;
 
     bool glacier_form = false;
-    if (elev_m >= 1800.0 && t_c_adj <= elev_form_c && m >= elev_form_m) {
+    if (elev_m >= 2300.0 && t_c_adj <= elev_form_c && m >= elev_form_m) {
         glacier_form = true;
     } else if (t_c0 <= deep_form_c && m >= deep_form_m) {
         glacier_form = true;
     }
     bool glacier_hold = false;
     if (b == BIOME_GLACIER) {
-        if (elev_m >= 1800.0 && t_c_adj <= elev_hold_c && m >= elev_hold_m) {
+        if (elev_m >= 2200.0 && t_c_adj <= elev_hold_c && m >= elev_hold_m) {
             glacier_hold = true;
         } else if (t_c0 <= deep_hold_c && m >= deep_hold_m) {
             glacier_hold = true;

@@ -11,12 +11,13 @@ func classify_cell(t_c: float, m: float, elev_norm: float, is_land: bool) -> int
     if not is_land:
         return BiomeClassifier.Biome.ICE_SHEET if t_c <= -10.0 else BiomeClassifier.Biome.OCEAN
 
-    # Elevation-first bands (collapse foothills into hills)
-    if elev_norm > 0.80:
+    # Elevation-first bands (collapse foothills into hills).
+    # Slightly broaden mountain range presence for worldmap readability.
+    if elev_norm > 0.90:
         return BiomeClassifier.Biome.ALPINE
-    if elev_norm > 0.60:
+    if elev_norm > 0.80:
         return BiomeClassifier.Biome.MOUNTAINS
-    if elev_norm > 0.30:
+    if elev_norm > 0.65:
         # Forest overrides hills: if any forest condition matches, prefer that over hills
         if t_c <= 8.0 and m >= 0.50:
             return BiomeClassifier.Biome.BOREAL_FOREST
@@ -60,4 +61,3 @@ func classify_cell(t_c: float, m: float, elev_norm: float, is_land: bool) -> int
         return BiomeClassifier.Biome.WASTELAND
     # Otherwise apply relief/forest hot overrides
     return BiomeClassifier.Biome.STEPPE
-

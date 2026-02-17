@@ -428,19 +428,19 @@ func _gui_input(event: InputEvent) -> void:
 			_confirm_planet_position()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not (event is InputEventKey):
-		return
-	var key := event as InputEventKey
-	if not key.pressed or key.echo:
-		return
-
-	if key.keycode == KEY_ESCAPE:
-		if _phase == PHASE_QUOTE or _phase == PHASE_BIG_BANG:
+	if event.is_action_pressed("ui_cancel", false):
+		if _phase < PHASE_PLANET_PLACE:
 			_skip_to_planet_place()
 			return
 		if _phase == PHASE_PLANET_PLACE:
 			_confirm_planet_position()
 			return
+
+	if not (event is InputEventKey):
+		return
+	var key := event as InputEventKey
+	if not key.pressed or key.echo:
+		return
 
 	if _is_prompt_input_phase():
 		_handle_prompt_key(key)

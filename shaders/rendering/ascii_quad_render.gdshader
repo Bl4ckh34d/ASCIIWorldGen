@@ -542,8 +542,43 @@ void fragment() {
         }
     }
 
-    // Keep world water stable and readable; avoid per-tile wave crest styling.
+    // Water glint around subsolar region with sparkle breakup.
+    float wave_crest = 0.0;
+    float wave_strength = clamp(water_wave_strength, 0.0, 2.0);
+    if (water_surface && wave_strength > 0.0001) {
+        float depth = max(0.0, sea_level - height_raw);
+        float shallowness = clamp(1.0 - depth / 0.30, 0.0, 1.0);
+        float wave = water_wave_signal(world_cell, char_uv) * wave_strength;
+        float ripple_amp = mix(0.016, 0.052, shallowness);
+        base_color = clamp(base_color * (1.0 + wave * ripple_amp), vec3(0.0), vec3(1.0));
+        wave_crest = smoothstep(0.46, 0.98, wave) * (0.12 + shallowness * 0.88) * wave_strength;
+        base_color = mix(base_color, vec3(0.84, 0.93, 0.99), wave_crest * 0.24);
+    }
     float glint_add = 0.0;
+    if (water_surface) {
+        float sun_vis = max(0.0, sun_dot);
+        float abs_lat = abs(lat_norm_signed) * 2.0;
+        float polar_tighten = smoothstep(0.60, 0.98, abs_lat);
+        // Smaller central blob, but sparkles can spread farther from center.
+        float core = pow(sun_vis, mix(220.0, 304.0, polar_tighten));
+        float halo = pow(sun_vis, mix(30.0, 50.0, polar_tighten));
+        float outer = pow(sun_vis, mix(14.0, 24.0, polar_tighten));
+        float sparkle_noise = _hash12(noise_cell * vec2(1.73, 1.19) + vec2(time_of_day * 920.0, day_of_year * 410.0));
+        float sparkle_density = mix(0.885, 0.935, polar_tighten);
+        float sparkle = smoothstep(sparkle_density, 0.998, sparkle_noise) * halo;
+        float micro_noise = _hash12(noise_cell * vec2(2.41, 0.93) + vec2(time_of_day * 1280.0 + 13.0, day_of_year * 560.0 - 5.0));
+        float micro_spark = smoothstep(mix(0.978, 0.989, polar_tighten), 1.0, micro_noise) * core;
+        float far_noise = _hash12(noise_cell * vec2(0.89, 2.17) + vec2(time_of_day * 740.0 - 11.0, day_of_year * 300.0 + 9.0));
+        float far_spark = smoothstep(mix(0.955, 0.978, polar_tighten), 1.0, far_noise) * outer;
+        float day_gate = smoothstep(0.05, 0.34, sun_vis);
+        float glint = core * 0.90 + halo * 0.005 + sparkle * 0.24 + micro_spark * 0.16 + far_spark * 0.18;
+        glint += wave_crest * 0.08;
+        glint *= day_gate;
+        glint *= smoothstep(0.07, 0.95, light_mod);
+        glint *= (1.0 - cloud_cov * 0.62);
+        glint *= 0.56;
+        glint_add = clamp(glint, 0.0, 0.62);
+    }
 
     if (cloud_cov > 0.0 && !is_unknown_marker) {
         // Suppress relief-scale ground contrast under cloud cover so terrain
@@ -565,7 +600,7 @@ void fragment() {
         lit_color *= (1.0 + tone_noise * 0.08);
     }
     if (glint_add > 0.0) {
-        lit_color += vec3(0.88, 0.95, 1.0) * glint_add;
+        lit_color += vec3(1.0, 0.98, 0.90) * glint_add;
         lit_color = clamp(lit_color, vec3(0.0), vec3(1.0));
     }
     

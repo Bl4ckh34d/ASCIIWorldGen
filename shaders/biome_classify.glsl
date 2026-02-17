@@ -155,8 +155,9 @@ void main() {
         return;
     }
 
-    // Glacier rule prior to generic classification
-    if ((elev_m >= 1800.0 && t_c_adj <= -2.0 && m >= 0.25) || (t_c0 <= -18.0 && m >= 0.20)) {
+    // Glacier rule prior to generic classification.
+    // Keep mountain relief visible longer: require higher/cooler/wetter conditions.
+    if ((elev_m >= 2300.0 && t_c_adj <= -5.0 && m >= 0.30) || (t_c0 <= -20.0 && m >= 0.22)) {
         Out.out_biome[i] = BIOME_GLACIER;
         return;
     }
@@ -164,11 +165,12 @@ void main() {
     // Remove hard freeze-to-ice-desert. Let base classifier run and apply
     // frozen variants later in post-processing based on temperature.
 
-    // Relief-first bands using global min/max to approximate top percentiles
+    // Relief-first bands using global min/max to approximate top percentiles.
+    // Slightly broader mountain bands improve worldmap readability.
     float elev_norm = clamp01((elev - PC.min_h) / max(0.0001, (PC.max_h - PC.min_h)));
-    // Keep alpine/mountains strict to preserve top 1%/5%
-    if (elev_norm >= 0.99) { Out.out_biome[i] = BIOME_ALPINE; return; }       // top 1%
-    if (elev_norm >= 0.94) { Out.out_biome[i] = BIOME_MOUNTAINS; return; }    // next 5%
+    // Keep alpine rare but less needle-thin than before.
+    if (elev_norm >= 0.98) { Out.out_biome[i] = BIOME_ALPINE; return; }       // top ~2%
+    if (elev_norm >= 0.91) { Out.out_biome[i] = BIOME_MOUNTAINS; return; }    // next ~9%
     // Apply temperature/noise-driven jitter to break up homogenous hills/foothills
     float hnoise = tri_noise(x * 2u, y * 2u, PC.biome_phase * 0.7 + 1.234);
     if (PC.has_biome_noise_field == 1) {
@@ -180,8 +182,8 @@ void main() {
     float t_mid = clamp(1.0 - abs((t_c0 - 15.0) / 25.0), 0.0, 1.0); // strongest near ~15C
     float jitter = 0.03 * t_mid * ((hnoise - 0.5) * 2.0);
     float elev_j = clamp01(elev_norm + jitter);
-    if (elev_j >= 0.87) { Out.out_biome[i] = BIOME_FOOTHILLS; return; }       // next ~7% with jittered edges
-    if (elev_j >= 0.78) {
+    if (elev_j >= 0.84) { Out.out_biome[i] = BIOME_FOOTHILLS; return; }       // broaden foothill belt
+    if (elev_j >= 0.74) {
         // Forest overrides hills: check forests before returning hills
         if (t_c0 <= 8.0 && m_forest >= 0.50) { Out.out_biome[i] = BIOME_BOREAL_FOREST; return; }
         if (t_c0 <= 18.0) {

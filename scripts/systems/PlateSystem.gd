@@ -14,13 +14,16 @@ var generator: Object = null
 
 # Configuration
 var num_plates: int = 12
+var randomize_plate_count: bool = true
+const RANDOM_PLATE_COUNT_MIN: int = 4
+const RANDOM_PLATE_COUNT_MAX: int = 18
 var uplift_rate_per_day: float = 0.0012  # lower convergent uplift to avoid ridge-dominated worlds
 var ridge_rate_per_day: float = 0.0005  # divergent ridges are secondary to extensional subsidence
 var subsidence_rate_per_day: float = 0.0016 # legacy divergence sink
 var transform_roughness_per_day: float = 0.0004
 var subduction_rate_per_day: float = 0.0018
 var trench_rate_per_day: float = 0.00135
-var drift_cells_per_day: float = 0.02
+var drift_cells_per_day: float = 0.0008
 var boundary_band_cells: int = 3
 var max_boundary_delta_per_day: float = 0.080
 var divergence_response: float = 1.0
@@ -66,6 +69,7 @@ var _field_advection_compute: Object = null
 var _pinhole_cleanup_compute: Object = null
 var _terrain_relax_compute: Object = null
 var _boundary_readback_accum_days: float = 0.0
+var _last_hydrology_refresh_marker: int = -1
 
 func _cleanup_if_supported(obj: Variant) -> void:
 	if obj == null:
@@ -103,6 +107,7 @@ func cleanup() -> void:
 	boundary_mask.clear()
 	boundary_mask_render.clear()
 	_boundary_readback_accum_days = 0.0
+	_last_hydrology_refresh_marker = -1
 
 func initialize(gen: Object) -> void:
 	generator = gen
@@ -133,6 +138,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 	if _gpu_update == null:
 		_gpu_update = PlateUpdateCompute.new()
 	var gpu_ok: bool = false
+	var hydrology_refreshed: bool = false
 	var boundary_buf: RID = RID()
 	if "ensure_persistent_buffers" in generator:
 		generator.ensure_persistent_buffers(false)
@@ -221,7 +227,7 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 				if gpu_ok and "apply_ocean_connectivity_gate_runtime" in generator:
 					if not VariantCastsUtil.to_bool(generator.apply_ocean_connectivity_gate_runtime()):
 						gpu_ok = false
-		# Advect plate-bound categorical fields so biomes/lithology move with plate drift.
+		# Keep categorical plate-linked fields moving with tectonic drift.
 		if gpu_ok and field_tmp_buf.is_valid():
 			if _field_advection_compute == null:
 				_field_advection_compute = PlateFieldAdvectionCompute.new()
@@ -251,6 +257,8 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 			):
 				if not ("dispatch_copy_u32" in generator and VariantCastsUtil.to_bool(generator.dispatch_copy_u32(field_tmp_buf, rock_buf, w * h))):
 					gpu_ok = false
+	if gpu_ok:
+		hydrology_refreshed = _refresh_hydrology_after_tectonics(world)
 	if gpu_ok and boundary_buf.is_valid():
 		_boundary_readback_accum_days += max(0.0, dt_days)
 		if boundary_readback_interval_days <= 0.0 or _boundary_readback_accum_days >= boundary_readback_interval_days:
@@ -280,7 +288,12 @@ func tick(dt_days: float, world: Object, _gpu_ctx: Dictionary) -> Dictionary:
 		)
 	if "register_tectonic_tick_metrics" in generator:
 		generator.register_tectonic_tick_metrics(dt_days)
-	return {"dirty_fields": PackedStringArray(["height", "is_land", "lava", "shelf", "biome_id", "rock_type"]), "boundary_count": boundary_count}
+	var dirty := PackedStringArray(["height", "is_land", "lava", "shelf", "biome_id", "rock_type"])
+	if hydrology_refreshed:
+		dirty.append("flow")
+		dirty.append("river")
+		dirty.append("lake")
+	return {"dirty_fields": dirty, "boundary_count": boundary_count}
 
 func _build_plates() -> void:
 	if generator == null:
@@ -290,7 +303,11 @@ func _build_plates() -> void:
 	var size: int = max(0, w * h)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(generator.config.rng_seed) ^ 0xC1A0
-	var n: int = clamp(num_plates, 2, 128)
+	var target_plate_count: int = num_plates
+	if randomize_plate_count:
+		target_plate_count = rng.randi_range(RANDOM_PLATE_COUNT_MIN, RANDOM_PLATE_COUNT_MAX)
+	var n: int = clamp(target_plate_count, 2, 128)
+	num_plates = n
 	plate_site_x.resize(n)
 	plate_site_y.resize(n)
 	plate_site_weight.resize(n)
@@ -451,6 +468,25 @@ func _update_plate_direction(dt_days: float, world: Object) -> void:
 				PackedInt32Array(),
 				PackedByteArray()
 			)
+
+func _refresh_hydrology_after_tectonics(world: Object) -> bool:
+	if generator == null:
+		return false
+	var marker: int = _simulation_refresh_marker(world)
+	if marker == _last_hydrology_refresh_marker:
+		return false
+	_last_hydrology_refresh_marker = marker
+	if "quick_update_lakes_and_rivers" in generator:
+		return VariantCastsUtil.to_bool(generator.quick_update_lakes_and_rivers())
+	if "quick_update_flow_rivers" in generator:
+		generator.quick_update_flow_rivers()
+		return true
+	return false
+
+func _simulation_refresh_marker(world: Object) -> int:
+	if world != null and "simulation_time_days" in world:
+		return int(round(float(world.simulation_time_days) * 1000000.0))
+	return int(Time.get_ticks_msec())
 
 func _build_boundary_render_mask(w: int, h: int) -> void:
 	var size: int = w * h

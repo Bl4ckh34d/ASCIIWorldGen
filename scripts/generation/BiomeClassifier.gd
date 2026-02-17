@@ -313,9 +313,9 @@ func _classify_land_cell(
 	return choice
 
 func _is_glacier_candidate(elev_m: float, t_c0: float, t_c_adj: float, moisture: float, snowline_c: float) -> bool:
-	if elev_m >= 1800.0 and t_c_adj <= snowline_c and moisture >= 0.25:
+	if elev_m >= 2300.0 and t_c_adj <= min(snowline_c, -5.0) and moisture >= 0.30:
 		return true
-	if t_c0 <= -18.0 and moisture >= 0.20:
+	if t_c0 <= -20.0 and moisture >= 0.22:
 		return true
 	return false
 
