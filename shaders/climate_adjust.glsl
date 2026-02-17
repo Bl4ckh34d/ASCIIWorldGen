@@ -8,7 +8,7 @@
 //   b0 height_data, b1 is_land_data, b2 distance_to_coast, b3 temp_noise, b4 moist_noise_base
 //   b5 flow_u, b6 flow_v, b7 out_temp, b8 out_moist, b9 out_precip, b10 light_data
 // Push constants:
-//   ivec2(width,height) + 16 floats (sea/temp/moist/season/diurnal terms), padded to 80 bytes.
+//   ivec2(width,height) + 20 floats (sea/temp/moist/season/diurnal/orbit terms), padded to 96 bytes.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -46,6 +46,10 @@ layout(push_constant) uniform Params {
     float diurnal_amp_pole;
     float diurnal_ocean_damp;
     float time_of_day;            // 0..1
+    float stellar_flux;           // relative incoming stellar power (1.0 = baseline)
+    float lat_energy_density_strength; // 0..1, boosts equator-vs-pole energy density contrast
+    float humidity_heat_capacity; // 0..1, humidity thermal buffering strength
+    float _pad0;
 } PC;
 
 // Helpers
@@ -138,19 +142,45 @@ void main() {
     float season = amp_lat * amp_cont * season_driver * 0.75;
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat, 1.2));
     float coast_dist01 = clamp(dc_norm, 0.0, 1.0);
+    float coast_wet = 1.0 - smoothstep(0.02, 0.45, dc_norm);
     float land_diurnal_gain = mix(0.55, 1.35, coast_dist01);
     float amp_cont_d = land_px ? land_diurnal_gain : PC.diurnal_ocean_damp;
     float diurnal = amp_lat_d * amp_cont_d * diurnal_driver;
+
+    // Precompute a humidity proxy from large-scale moisture drivers so humidity can
+    // buffer temperature swings (high humidity reduces day/night thermal amplitude).
+    float m_base = 0.5 + 0.16 * sin(6.28318 * (float(y) / float(H) * 1.4 + 0.17));
+    float m_noise = 0.3 * sample_bilinear_moist(W, H, float(x) * PC.noise_x_scale + 100.0, float(y) * PC.noise_x_scale - 50.0);
+    float adv_u = FlowU.flow_u_data[i];
+    float adv_v = FlowV.flow_v_data[i];
+    float sx = clamp(float(x) + adv_u * 6.0, 0.0, float(W - 1));
+    float sy = clamp(float(y) + adv_v * 6.0, 0.0, float(H - 1));
+    // Keep one bilinear path for baseline moisture and use point sample for advection to cut fetches.
+    float m_adv = 0.2 * sample_point_moist(W, H, sx * PC.noise_x_scale, sy * PC.noise_x_scale);
+    float sea_mod = clamp(PC.sea_level, -1.0, 1.0) * 0.08;
+    float m_seed = 0.48 + 0.18 * m_noise + 0.12 * m_adv + 0.10 * m_base;
+    float humidity_proxy = clamp01(m_seed + sea_mod + coast_wet * 0.12 + (land_px ? 0.0 : 0.12));
+    float humidity_heat = smoothstep(0.24, 0.92, humidity_proxy) * clamp(PC.humidity_heat_capacity, 0.0, 1.0);
+    diurnal *= mix(1.0, 0.58, humidity_heat);
 
     float cryo_hint = smoothstep(0.36, 0.14, t_climatology);
     float albedo = mix(0.20, 0.58, cryo_hint);
     float noon_incidence = clamp01(max(0.0, cos(phi - decl)));
     float mean_energy = day_fraction * noon_incidence;
-    float solar_energy = clamp01(mix(mean_energy, insol_inst, 0.72));
+    float equator_bias = 1.0 - lat;
+    float density_lat = mix(
+        1.0,
+        mix(0.20, 1.0, pow(clamp(equator_bias, 0.0, 1.0), 0.85)),
+        clamp(PC.lat_energy_density_strength, 0.0, 1.0)
+    );
+    float flux_scale = clamp(PC.stellar_flux, 0.35, 2.0);
+    float solar_energy = clamp01(mix(mean_energy, insol_inst, 0.72) * density_lat * flux_scale);
     float light_local = clamp01(Light.light_data[i]);
     float relief_shadow_hint = max(0.0, insol_inst - light_local);
     float relief_temp_cool = 0.035 * relief_shadow_hint * smoothstep(0.06, 0.40, insol_inst) * (land_px ? 1.0 : 0.45);
-    float t_solar = clamp01(pow(solar_energy, 0.72) * (1.0 - 0.42 * albedo) + 0.06 + season + diurnal - relief_temp_cool);
+    float night_retention = humidity_heat * (1.0 - daylight) * (land_px ? mix(0.010, 0.026, coast_wet) : 0.032);
+    float evap_cooling = humidity_heat * daylight * (land_px ? 0.012 : 0.008);
+    float t_solar = clamp01(pow(solar_energy, 0.72) * (1.0 - 0.42 * albedo) + 0.06 + season + diurnal + night_retention - relief_temp_cool - evap_cooling);
     float cont_blend = land_px ? mix(0.58, 0.88, coast_dist01) : 0.42;
     float t = clamp01(mix(t_climatology, t_solar, cont_blend));
     // FIXED: Reduce extreme temperature scaling to prevent lava everywhere
@@ -169,19 +199,9 @@ void main() {
         t = mix(t, shore_target, 0.75 * shore_strength);
     }
 
-    float m_base = 0.5 + 0.16 * sin(6.28318 * (float(y) / float(H) * 1.4 + 0.17));
-    float m_noise = 0.3 * sample_bilinear_moist(W, H, float(x) * PC.noise_x_scale + 100.0, float(y) * PC.noise_x_scale - 50.0);
-    float adv_u = FlowU.flow_u_data[i];
-    float adv_v = FlowV.flow_v_data[i];
-    float sx = clamp(float(x) + adv_u * 6.0, 0.0, float(W - 1));
-    float sy = clamp(float(y) + adv_v * 6.0, 0.0, float(H - 1));
-    // Keep one bilinear path for baseline moisture and use point sample for advection to cut fetches.
-    float m_adv = 0.2 * sample_point_moist(W, H, sx * PC.noise_x_scale, sy * PC.noise_x_scale);
-
     float local_day = 0.5 - 0.5 * cos(6.28318 * (PC.time_of_day + float(x) / float(max(1, W))));
     float night = 1.0 - local_day;
     float warm = smoothstep(0.30, 0.90, t);
-    float coast_wet = 1.0 - smoothstep(0.02, 0.45, dc_norm);
     float interior = smoothstep(0.18, 0.90, dc_norm);
     float polar_dry = smoothstep(0.65, 1.0, lat) * 0.22;
 
@@ -193,9 +213,6 @@ void main() {
     float transp = evap_land * veg_potential;
     float trade_dry = interior * (0.04 + 0.11 * warm);
     float nocturnal_condense = (0.03 + 0.10 * night) * (0.35 + 0.65 * warm);
-    float sea_mod = clamp(PC.sea_level, -1.0, 1.0) * 0.08;
-
-    float m_seed = 0.48 + 0.18 * m_noise + 0.12 * m_adv + 0.10 * m_base;
     float m_source = evap_ocean + transp + coast_wet * 0.12;
     float m_sink = polar_dry + trade_dry + nocturnal_condense;
     float target = land_px

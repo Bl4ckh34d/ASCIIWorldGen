@@ -88,6 +88,10 @@ class Config:
 	# Climate jitter and continentality
 	var temp_base_offset: float = 0.25
 	var temp_scale: float = 1.0
+	# Orbit/habitable-zone climate controls
+	var stellar_flux: float = 1.0
+	var lat_energy_density_strength: float = 0.75
+	var humidity_heat_capacity: float = 0.34
 	var moist_base_offset: float = 0.1
 	var moist_scale: float = 1.0
 	var continentality_scale: float = 1.2
@@ -325,6 +329,12 @@ func apply_config(dict: Dictionary) -> void:
 		config.moist_scale = float(dict["moist_scale"]) 
 	if dict.has("continentality_scale"):
 		config.continentality_scale = float(dict["continentality_scale"]) 
+	if dict.has("stellar_flux"):
+		config.stellar_flux = clamp(float(dict["stellar_flux"]), 0.35, 2.0)
+	if dict.has("lat_energy_density_strength"):
+		config.lat_energy_density_strength = clamp(float(dict["lat_energy_density_strength"]), 0.0, 1.0)
+	if dict.has("humidity_heat_capacity"):
+		config.humidity_heat_capacity = clamp(float(dict["humidity_heat_capacity"]), 0.0, 1.0)
 	# Seasonal params (safe defaults keep parity when absent)
 	if dict.has("season_phase"):
 		config.season_phase = float(dict["season_phase"])
@@ -409,6 +419,9 @@ func _apply_seeded_physical_defaults(force: bool = false) -> void:
 	config.diurnal_amp_equator = clamp(0.05 + rng.randf_range(-0.012, 0.012), 0.035, 0.065)
 	config.diurnal_amp_pole = clamp(0.09 + rng.randf_range(-0.015, 0.015), 0.07, 0.12)
 	config.diurnal_ocean_damp = clamp(0.28 + rng.randf_range(-0.06, 0.06), 0.16, 0.40)
+	config.stellar_flux = clamp(1.0 + rng.randf_range(-0.10, 0.10), 0.80, 1.20)
+	config.lat_energy_density_strength = clamp(0.75 + rng.randf_range(-0.08, 0.08), 0.55, 0.95)
+	config.humidity_heat_capacity = clamp(0.34 + rng.randf_range(-0.08, 0.08), 0.12, 0.60)
 	_physical_defaults_seed = int(config.rng_seed)
 
 func _setup_temperature_extremes() -> void:
@@ -731,6 +744,9 @@ func generate() -> PackedByteArray:
 		"noise_x_scale": config.noise_x_scale,
 		"temp_base_offset": config.temp_base_offset,
 		"temp_scale": config.temp_scale,
+		"stellar_flux": config.stellar_flux,
+		"lat_energy_density_strength": config.lat_energy_density_strength,
+		"humidity_heat_capacity": config.humidity_heat_capacity,
 		"moist_base_offset": config.moist_base_offset,
 		"moist_scale": config.moist_scale,
 		"continentality_scale": config.continentality_scale,
@@ -1434,6 +1450,9 @@ func quick_update_climate(skip_light: bool = false) -> void:
 		"sea_level": config.sea_level,
 		"temp_base_offset": config.temp_base_offset,
 		"temp_scale": config.temp_scale,
+		"stellar_flux": config.stellar_flux,
+		"lat_energy_density_strength": config.lat_energy_density_strength,
+		"humidity_heat_capacity": config.humidity_heat_capacity,
 		"moist_base_offset": config.moist_base_offset,
 		"moist_scale": config.moist_scale,
 		"continentality_scale": config.continentality_scale,
@@ -1482,11 +1501,11 @@ func quick_update_climate(skip_light: bool = false) -> void:
 	if use_fast_path:
 		# Use previous runtime temperature as input so sunlight forcing has thermal memory.
 		if temp_tmp_buf.is_valid():
-			climate_ok = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_buf, land_buf, dist_buf, light_buf, params, temp_tmp_buf)
+			climate_ok = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_buf, moist_buf, land_buf, dist_buf, light_buf, params, temp_tmp_buf)
 			if climate_ok:
 				dispatch_copy_u32(temp_tmp_buf, temp_buf, size)
 		else:
-			climate_ok = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_buf, land_buf, dist_buf, light_buf, params, temp_buf)
+			climate_ok = _climate_compute_gpu.apply_cycles_only_gpu(w, h, temp_buf, moist_buf, land_buf, dist_buf, light_buf, params, temp_buf)
 	else:
 		var precip_buf: RID = ensure_gpu_storage_buffer("precip", size * 4)
 		if precip_buf.is_valid():

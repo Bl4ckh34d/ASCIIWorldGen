@@ -893,7 +893,7 @@ vec3 render_stage2(vec2 uv, float t) {
 			bool in_planet_window = abs(p_rel.x) <= planet_window_half.x && abs(p_rel.y) <= planet_window_half.y;
 		const float ORBIT_MUL_MAX = 2.80 + 2.0 * 1.45 + 0.40;
 		float max_orbit_r = p_rad_base * ORBIT_SCALE * ORBIT_MUL_MAX;
-		float max_moon_r = p_rad * 0.50;
+		float max_moon_r = p_rad * 0.32;
 		vec2 moon_domain_half = vec2(
 			max_orbit_r + max_moon_r + 12.0 / max(1.0, float(PC.height)),
 			max_orbit_r * 0.22 + max_moon_r + 12.0 / max(1.0, float(PC.height))
@@ -947,11 +947,43 @@ vec3 render_stage2(vec2 uv, float t) {
 			(1.0 - smoothstep(sea_level + coast_w * 0.20, sea_level + coast_w * 1.60, terrain));
 
 		float lat_abs = abs(p_norm.y);
-		float cap_start = mix(0.90, 0.20, pow(coldness, 1.20));
-		cap_start = min(cap_start + hotness * 0.14, 0.95);
-		float polar_band = smoothstep(cap_start, min(1.0, cap_start + 0.22), lat_abs);
-		float freeze_global = smoothstep(0.74, 1.0, coldness) * (0.55 + 0.45 * climate_extreme);
-		float freeze_amt = clamp(polar_band + freeze_global + coldness * 0.30, 0.0, 1.0);
+		// Polar caps by orbit placement:
+		// - leftmost quarter of the habitable band: no caps
+		// - around center: Earth-like persistent polar caps
+		// - right side: caps keep growing until they meet at the equator
+		float cap_survival = smoothstep(0.25, 0.34, orbit_norm);
+		float temperate_caps = smoothstep(0.25, 0.50, orbit_norm);
+		float deep_cold_caps = pow(clamp((orbit_norm - 0.50) / 0.50, 0.0, 1.0), 1.08);
+		float cap_growth = clamp(cap_survival * (temperate_caps * 0.46 + deep_cold_caps * 0.54), 0.0, 1.0);
+		float cap_edge = mix(0.030, 0.18, cap_growth);
+		float cap_start = mix(1.015, -cap_edge, cap_growth);
+		// Break up cap front with low-frequency meanders + high-frequency edge noise.
+		float cap_n0 = fbm(rot2(0.23) * p_surf * 5.2 + vec2(12.4, -18.7) + flow_dir(p_surf * 2.1, t * 0.09) * 0.18);
+		float cap_n1 = fbm(rot2(0.61) * p_surf * 11.2 + vec2(-8.3, 5.9));
+		float cap_n2 = fbm(rot2(-0.44) * p_surf * 24.0 + vec2(3.7, -11.6));
+		float cap_n3 = fbm(rot2(1.07) * p_surf * 46.0 + vec2(-14.2, 6.3));
+		float cap_noise_low = cap_n0 * 0.62 + cap_n1 * 0.38 - 0.5;
+		float cap_noise_hi = cap_n2 - 0.5;
+		float cap_noise_micro = cap_n3 - 0.5;
+		float cap_relief = (terrain - sea_level) * land_mask;
+		float cap_start_local = cap_start + cap_noise_low * mix(0.050, 0.220, cap_growth) * cap_survival + cap_relief * 0.075 * cap_survival;
+		float cap_edge_local = max(0.009, cap_edge * (0.58 + 1.05 * cap_n1));
+		float cap_lat = clamp(lat_abs + cap_noise_hi * mix(0.015, 0.060, cap_growth) * cap_survival, 0.0, 1.0);
+		float polar_band = smoothstep(cap_start_local, cap_start_local + cap_edge_local, cap_lat);
+		float cap_front = pow(max(0.0, 1.0 - abs(polar_band * 2.0 - 1.0)), 0.55);
+		float cap_breakup = smoothstep(0.35, 0.70, cap_n2) - 0.5;
+		float cap_breakup_micro = smoothstep(0.28, 0.74, cap_n3) - 0.5;
+		polar_band = clamp(
+			polar_band + cap_front * (
+				cap_breakup * mix(0.04, 0.14, cap_growth) +
+				cap_breakup_micro * mix(0.015, 0.060, cap_growth) +
+				cap_noise_micro * mix(0.010, 0.045, cap_growth)
+			),
+			0.0,
+			1.0
+		);
+		float freeze_global = smoothstep(0.90, 1.0, coldness) * (0.45 + 0.55 * climate_extreme);
+		float freeze_amt = clamp(polar_band + freeze_global, 0.0, 1.0);
 		float snow_amt = clamp(freeze_amt * (0.42 + land_mask * 0.58), 0.0, 1.0);
 		float ice_ocean_amt = clamp(freeze_amt * ocean_mask * (0.70 + 0.30 * coldness), 0.0, 1.0);
 
@@ -1061,6 +1093,10 @@ vec3 render_stage2(vec2 uv, float t) {
 			float h3 = hash12(vec2(moon_seed * 0.197 + fi * 17.11, moon_seed * 0.089 + fi * 19.73));
 			float h4 = hash12(vec2(moon_seed * 0.251 + fi * 23.03, moon_seed * 0.131 + fi * 29.31));
 			float h5 = hash12(vec2(moon_seed * 0.307 + fi * 31.39, moon_seed * 0.149 + fi * 37.71));
+			float h6 = hash12(vec2(moon_seed * 0.359 + fi * 41.83, moon_seed * 0.173 + fi * 43.07));
+			float h7 = hash12(vec2(moon_seed * 0.419 + fi * 47.21, moon_seed * 0.197 + fi * 53.11));
+			float h8 = hash12(vec2(moon_seed * 0.463 + fi * 59.23, moon_seed * 0.211 + fi * 61.79));
+			float h9 = hash12(vec2(moon_seed * 0.521 + fi * 67.37, moon_seed * 0.239 + fi * 71.09));
 
 			// Keep moons on separated equatorial shells (side-view: mostly horizontal motion).
 			float orbit_mul = 2.80 + fi * 1.45 + h0 * 0.40;
@@ -1072,7 +1108,8 @@ vec3 render_stage2(vec2 uv, float t) {
 				vec2 m_off = vec2(cos(ang), sin(ang) * orbit_incl) * orbit_r;
 
 				vec2 m_rel = p_rel - m_off;
-				float m_rad = p_rad * mix(0.10, 0.50, h4);
+				float size_bias = pow(h4, 0.85);
+				float m_rad = p_rad * mix(0.08, 0.32, size_bias);
 				// Rectangular moon work window for cheaper branch culling.
 				vec2 moon_window_half = vec2(m_rad + 0.0035);
 				if (abs(m_rel.x) > moon_window_half.x || abs(m_rel.y) > moon_window_half.y) {
@@ -1104,45 +1141,54 @@ vec3 render_stage2(vec2 uv, float t) {
 			float m_lon = atan(m_norm.x, m_norm.z) / TAU + 0.5;
 			float m_lat = acos(clamp(m_norm.y, -1.0, 1.0)) / PI;
 			vec2 m_uv = vec2(fract(m_lon + spin_phase + h0 * 0.37), clamp(m_lat + (h3 - 0.5) * 0.08, 0.0, 1.0));
-			// Low-res moon shading budget: evaluate detail on a coarse 100x50 UV grid.
-			vec2 moon_lod = vec2(100.0, 50.0);
+			// Low-res moon shading budget: each moon gets a slightly different sampling grid.
+			vec2 moon_lod = vec2(mix(86.0, 128.0, h6), mix(44.0, 68.0, h7));
 			vec2 m_uv_lod = (floor(m_uv * moon_lod) + vec2(0.5)) / moon_lod;
-			float patch0 = fbm(m_uv_lod * (2.8 + h4 * 1.8) + vec2(1.7, -2.3));
-			float patch1 = fbm(rot2(0.97 + h5 * 0.24) * m_uv_lod * (5.6 + h2 * 2.4) + vec2(-3.7, 2.1));
-			float patch_mix = clamp(patch0 * 0.68 + patch1 * 0.32, 0.0, 1.0);
-			float crater_seed = fbm(rot2(0.73 + h4 * 0.30) * m_uv_lod * (14.0 + h5 * 4.0) + vec2(-4.0, 9.0));
-			float crater_pit = pow(smoothstep(0.72, 0.99, crater_seed), 1.25);
-			float crater_rim = smoothstep(0.50, 0.80, crater_seed) * (1.0 - crater_pit);
+			float patch0 = fbm(rot2(0.31 + h6 * 1.10) * m_uv_lod * (2.2 + h4 * 2.8) + vec2(1.7, -2.3));
+			float patch1 = fbm(rot2(0.97 + h5 * 1.40) * m_uv_lod * (5.0 + h2 * 3.6) + vec2(-3.7, 2.1));
+			float patch2 = fbm(rot2(-0.53 + h8 * 1.30) * m_uv_lod * (9.0 + h9 * 5.0) + vec2(5.1, -6.4));
+			float patch_mix = clamp(patch0 * 0.46 + patch1 * 0.34 + patch2 * 0.20, 0.0, 1.0);
+			float crater_seed0 = fbm(rot2(0.73 + h4 * 0.55) * m_uv_lod * (12.0 + h5 * 8.0) + vec2(-4.0, 9.0));
+			float crater_seed1 = fbm(rot2(-1.11 + h7 * 0.90) * m_uv_lod * (22.0 + h8 * 12.0) + vec2(6.2, -3.1));
+			float crater_seed = clamp(crater_seed0 * 0.60 + crater_seed1 * 0.40, 0.0, 1.0);
+			float crater_gate = mix(0.64, 0.83, h9);
+			float crater_pit = pow(smoothstep(crater_gate, 0.995, crater_seed), mix(1.05, 1.45, h6));
+			float crater_rim = smoothstep(crater_gate - 0.20, crater_gate + 0.03, crater_seed) * (1.0 - crater_pit);
+			float ridge_noise = fbm(rot2(1.42 + h3 * 0.70) * m_uv_lod * (18.0 + h6 * 10.0) + vec2(-8.4, 4.7));
+			float ridge = pow(abs(ridge_noise * 2.0 - 1.0), mix(1.4, 2.6, h7));
 
-			float grey_base = 0.34 + (h3 - 0.5) * 0.30;
+			float grey_base = 0.30 + (h3 - 0.5) * 0.36;
 			float albedo = grey_base;
-			albedo *= 0.78 + patch_mix * 0.48;
-			albedo += crater_rim * 0.12;
-			albedo -= crater_pit * 0.18;
-			albedo = clamp(albedo, 0.10, 1.0);
+			albedo *= 0.70 + patch_mix * (0.54 + h8 * 0.18);
+			albedo += crater_rim * (0.10 + h6 * 0.10);
+			albedo -= crater_pit * (0.14 + h9 * 0.16);
+			albedo += ridge * 0.06 * (0.50 + h7 * 0.50);
+			albedo = clamp(albedo, 0.08, 1.0);
 
 			vec3 tint = vec3(
-				0.92 + (h0 - 0.5) * 0.14,
-				0.92 + (h1 - 0.5) * 0.14,
-				0.92 + (h2 - 0.5) * 0.14
+				0.88 + (h0 - 0.5) * 0.24,
+				0.88 + (h1 - 0.5) * 0.22,
+				0.88 + (h2 - 0.5) * 0.26
 			);
-			float tint_amt = 0.02 + h5 * 0.05;
-			albedo *= 0.86 + (h4 - 0.5) * 0.34;
+			float tint_amt = 0.03 + h5 * 0.08;
+			float moon_exposure = mix(0.82, 1.20, h8);
+			albedo *= (0.78 + (h4 - 0.5) * 0.40) * moon_exposure;
 
 			vec2 moon_to_sun = sun_rel_planet - m_off;
 			vec3 moon_light_dir = normalize(vec3(moon_to_sun, 0.92));
 			float moon_ndl = clamp(dot(m_norm, moon_light_dir), 0.0, 1.0);
 			float moon_fres = pow(1.0 - clamp(m_norm.z, 0.0, 1.0), 2.4);
-			float moon_shade = 0.42 + moon_ndl * (0.60 + h2 * 0.16) + moon_fres * 0.10;
+			float moon_shade = 0.38 + moon_ndl * (0.56 + h2 * 0.24) + moon_fres * (0.08 + h6 * 0.08);
 
 			vec3 moon_col = vec3(albedo) * moon_shade;
 			moon_col *= mix(vec3(1.0), tint, tint_amt);
-			moon_col += vec3(0.10) * crater_rim * (0.28 + moon_ndl * 0.62);
-			moon_col -= vec3(0.10) * crater_pit * 0.48;
+			moon_col += vec3(0.10) * crater_rim * (0.22 + moon_ndl * 0.70);
+			moon_col -= vec3(0.10) * crater_pit * (0.38 + h9 * 0.26);
+			moon_col += vec3(0.08) * ridge * (0.16 + moon_ndl * 0.34);
 			moon_col = clamp(moon_col, 0.0, 1.0);
 			col = mix(col, moon_col, moon_visible_mask);
 			float moon_rim = exp(-abs(mr - m_rad) * 110.0);
-			col += mix(vec3(0.78), tint, tint_amt * 0.7) * moon_rim * 0.05 * moon_visible_mask;
+			col += mix(vec3(0.76), tint, tint_amt * 0.8) * moon_rim * (0.035 + 0.020 * h7) * moon_visible_mask;
 		}
 		}
 

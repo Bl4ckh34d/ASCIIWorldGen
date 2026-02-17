@@ -2,17 +2,18 @@
 #version 450
 // File: res://shaders/cycle_apply.glsl
 // Lightweight temperature update applying seasonal + diurnal cycles ONLY.
-// Inputs: current temperature, land mask, distance to coast
+// Inputs: current temperature, moisture, land mask, distance to coast
 // Output: updated temperature (additive clamp)
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 // Buffers (set=0)
 layout(std430, set = 0, binding = 0) buffer TempBuf { float temp_in[]; } Temp;
-layout(std430, set = 0, binding = 1) buffer IsLandBuf { uint is_land_data[]; } IsLand;
-layout(std430, set = 0, binding = 2) buffer DistBuf { float dist_data[]; } Dist;
-layout(std430, set = 0, binding = 3) buffer TempOutBuf { float temp_out[]; } OutT;
-layout(std430, set = 0, binding = 4) buffer LightBuf { float light_data[]; } Light;
+layout(std430, set = 0, binding = 1) buffer MoistBuf { float moist_in[]; } Moist;
+layout(std430, set = 0, binding = 2) buffer IsLandBuf { uint is_land_data[]; } IsLand;
+layout(std430, set = 0, binding = 3) buffer DistBuf { float dist_data[]; } Dist;
+layout(std430, set = 0, binding = 4) buffer TempOutBuf { float temp_out[]; } OutT;
+layout(std430, set = 0, binding = 5) buffer LightBuf { float light_data[]; } Light;
 
 layout(push_constant) uniform Params {
     int width;
@@ -31,6 +32,9 @@ layout(push_constant) uniform Params {
     float continentality_scale;   // scales coast distance -> 0..1
     float temp_base_offset_delta; // delta vs temperature_base reference offset
     float temp_scale_ratio;       // current temp_scale / temperature_base reference scale
+    float stellar_flux;           // relative incoming stellar power (1.0 = baseline)
+    float lat_energy_density_strength; // 0..1, boosts equator-vs-pole energy density contrast
+    float humidity_heat_capacity; // 0..1, humidity thermal buffering strength
 } PC;
 
 float clamp01(float v){ return clamp(v, 0.0, 1.0); }
@@ -48,6 +52,7 @@ void main(){
     float lat_abs = abs(lat_norm_signed) * 2.0; // 0..1
 
     bool land = (IsLand.is_land_data[i] != 0u);
+    float moist = clamp01(Moist.moist_in[i]);
     float dc_norm = clamp(Dist.dist_data[i] / float(max(1, W)), 0.0, 1.0) * PC.continentality_scale;
     float cont_amp = land ? (0.2 + 0.8 * dc_norm) : 0.0;
 
@@ -91,9 +96,12 @@ void main(){
 
     float amp_lat_d = mix(PC.diurnal_amp_equator, PC.diurnal_amp_pole, pow(lat_abs, 1.2));
     float coast_dist01 = clamp(dc_norm, 0.0, 1.0);
+    float coast_wet = 1.0 - smoothstep(0.02, 0.45, dc_norm);
     float land_diurnal_gain = mix(0.55, 1.35, coast_dist01);
     float amp_cont_d = land ? land_diurnal_gain : PC.diurnal_ocean_damp;
     float dT_diurnal = amp_lat_d * amp_cont_d * diurnal_driver;
+    float humidity_heat = smoothstep(0.24, 0.92, moist) * clamp(PC.humidity_heat_capacity, 0.0, 1.0);
+    dT_diurnal *= mix(1.0, 0.58, humidity_heat);
 
     float t_prev = Temp.temp_in[i];
     float cryo_hint = smoothstep(0.36, 0.14, t_prev);
@@ -102,12 +110,21 @@ void main(){
     // Blend instantaneous insolation (day/night shadow) with day-length energy budget.
     float noon_incidence = clamp01(max(0.0, cos(phi - decl)));
     float mean_energy = day_fraction * noon_incidence;
-    float solar_energy = clamp01(mix(mean_energy, insol_inst, 0.72));
+    float equator_bias = 1.0 - lat_abs;
+    float density_lat = mix(
+        1.0,
+        mix(0.20, 1.0, pow(clamp(equator_bias, 0.0, 1.0), 0.85)),
+        clamp(PC.lat_energy_density_strength, 0.0, 1.0)
+    );
+    float flux_scale = clamp(PC.stellar_flux, 0.35, 2.0);
+    float solar_energy = clamp01(mix(mean_energy, insol_inst, 0.72) * density_lat * flux_scale);
     float light_local = clamp01(Light.light_data[i]);
     float relief_shadow_hint = max(0.0, insol_inst - light_local);
     float relief_temp_cool = 0.035 * relief_shadow_hint * smoothstep(0.06, 0.40, insol_inst) * (land ? 1.0 : 0.45);
     float eq_temp = clamp01(pow(solar_energy, 0.72) * (1.0 - 0.42 * albedo) + 0.06);
-    eq_temp = clamp01(eq_temp + dT_season + dT_diurnal - relief_temp_cool);
+    float night_retention = humidity_heat * (1.0 - daylight) * (land ? mix(0.010, 0.026, coast_wet) : 0.032);
+    float evap_cooling = humidity_heat * daylight * (land ? 0.012 : 0.008);
+    eq_temp = clamp01(eq_temp + dT_season + dT_diurnal + night_retention - relief_temp_cool - evap_cooling);
 
     // Thermal response per climate tick (ocean slower, interior land faster).
     float ocean_response = mix(0.0012, 0.0040, coast_dist01);

@@ -211,6 +211,8 @@ func _derive_world_config(orbit: float) -> Dictionary:
 	var harshness: float = pow(edge, 1.55)
 	var orbit_signed: float = clamp((0.5 - orbit_n) * 2.0, -1.0, 1.0) # left=+hot, right=-cold
 	var thermal_bias: float = sign(orbit_signed) * pow(abs(orbit_signed), 1.30)
+	var orbit_dist_rel: float = lerp(0.82, 1.20, orbit_n)
+	var stellar_flux: float = clamp(1.0 / max(0.05, orbit_dist_rel * orbit_dist_rel), 0.55, 1.60)
 
 	# Temperature envelope:
 	# - Left/hot side shifts global baseline hotter.
@@ -244,6 +246,8 @@ func _derive_world_config(orbit: float) -> Dictionary:
 	var season_amp_pole: float = clamp(0.14 + cold_extreme * 0.22 + harshness * 0.05 - hot_extreme * 0.08, 0.10, 0.40)
 	var diurnal_amp_equator: float = lerp(0.08, 0.20, hot_extreme)
 	var diurnal_amp_pole: float = lerp(0.04, 0.12, hot_extreme)
+	var lat_energy_density_strength: float = clamp(0.66 + cold_extreme * 0.22 + harshness * 0.08 - hot_extreme * 0.06, 0.55, 0.95)
+	var humidity_heat_capacity: float = clamp(0.22 + habitability * 0.26 + cold_extreme * 0.10 - hot_extreme * 0.06, 0.12, 0.60)
 	var min_ocean_fraction_base: float = clamp(0.02 + habitability * 0.11 + cold_extreme * 0.03, 0.0, 0.18)
 	var min_ocean_fraction: float = clamp(min_ocean_fraction_base - left_dryness * 0.22, 0.0, 0.18)
 	var lake_fill_ocean_ref: float = clamp(0.48 + habitability * 0.36 + cold_extreme * 0.09 - hot_extreme * 0.08 - left_dryness * 0.22, 0.08, 1.00)
@@ -253,6 +257,9 @@ func _derive_world_config(orbit: float) -> Dictionary:
 		"temp_max_c": temp_max_c,
 		"temp_base_offset": 0.18 + thermal_bias * 0.52 + hot_extreme * 0.12 - cold_extreme * 0.12,
 		"temp_scale": clamp(0.92 + abs(thermal_bias) * 0.26 + hot_extreme * 0.10 + cold_extreme * 0.14 - harshness * 0.03, 0.86, 1.35),
+		"stellar_flux": stellar_flux,
+		"lat_energy_density_strength": lat_energy_density_strength,
+		"humidity_heat_capacity": humidity_heat_capacity,
 		"sea_level": sea_level,
 		"polar_cap_frac": polar_cap_frac,
 		"moist_base_offset": moist_base_offset,
@@ -265,4 +272,5 @@ func _derive_world_config(orbit: float) -> Dictionary:
 		"continentality_scale": lerp(1.08, 1.40, harshness),
 		"min_ocean_fraction": min_ocean_fraction,
 		"lake_fill_ocean_ref": lake_fill_ocean_ref,
+		"auto_physical_defaults": false,
 	}

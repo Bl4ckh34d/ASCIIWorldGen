@@ -349,9 +349,13 @@ func _capture_config() -> Dictionary:
 	d["lava_temp_threshold_c"] = float(c.lava_temp_threshold_c)
 	d["temp_base_offset"] = float(c.temp_base_offset)
 	d["temp_scale"] = float(c.temp_scale)
+	d["stellar_flux"] = float(c.stellar_flux)
+	d["lat_energy_density_strength"] = float(c.lat_energy_density_strength)
+	d["humidity_heat_capacity"] = float(c.humidity_heat_capacity)
 	d["moist_base_offset"] = float(c.moist_base_offset)
 	d["moist_scale"] = float(c.moist_scale)
 	d["continentality_scale"] = float(c.continentality_scale)
+	d["auto_physical_defaults"] = VariantCastsUtil.to_bool(c.auto_physical_defaults)
 	# Seasonal
 	d["season_phase"] = float(c.season_phase)
 	d["season_amp_equator"] = float(c.season_amp_equator)

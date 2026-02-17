@@ -201,6 +201,7 @@ var _pending_intro_reveal: bool = false
 var _intro_reveal_min_delay_elapsed: bool = false
 var _intro_reveal_first_tick_seen: bool = false
 var _high_speed_validator: HighSpeedValidator = HighSpeedValidatorScript.new()
+var _intro_reset_base_cfg: Dictionary = {}
 
 func _initialize_ui_nodes() -> void:
 	"""Initialize all UI node references with the new layout"""
@@ -654,6 +655,10 @@ func _apply_intro_startup_config() -> bool:
 	var cfg: Dictionary = startup_state.consume_world_config()
 	if cfg.is_empty():
 		return false
+	# Preserve intro climate profile for future Reset clicks, but never lock the seed.
+	_intro_reset_base_cfg = cfg.duplicate(true)
+	if _intro_reset_base_cfg.has("seed"):
+		_intro_reset_base_cfg.erase("seed")
 	generator.apply_config(cfg)
 	if sea_slider:
 		sea_signal_blocked = true
@@ -758,6 +763,10 @@ func _generate_new_world() -> void:
 		"seed": ""  # Empty seed triggers random generation
 	}
 	generator.apply_config(defaults)
+	# If this run came from intro placement, keep the same habitable-zone climate profile
+	# while still using a fresh random seed each reset.
+	if _entered_from_intro and not _intro_reset_base_cfg.is_empty():
+		generator.apply_config(_intro_reset_base_cfg)
 	_generate_and_draw()
 
 func _on_settings_pressed() -> void:

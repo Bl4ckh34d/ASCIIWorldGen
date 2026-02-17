@@ -99,6 +99,10 @@ func _pack_push_constants(width: int, height: int, params: Dictionary, ocean_fra
 		float(params.get("diurnal_amp_pole", 0.0)),
 		float(params.get("diurnal_ocean_damp", 0.0)),
 		float(params.get("time_of_day", 0.0)),
+		float(params.get("stellar_flux", 1.0)),
+		float(params.get("lat_energy_density_strength", 0.75)),
+		float(params.get("humidity_heat_capacity", 0.34)),
+		0.0,
 	])
 	arr.append_array(ints.to_byte_array())
 	arr.append_array(floats.to_byte_array())
@@ -245,7 +249,7 @@ func evaluate_to_buffers_gpu(
 	if pad > 0:
 		var zeros := PackedByteArray(); zeros.resize(pad)
 		pc.append_array(zeros)
-	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 80, "ClimateAdjustCompute.evaluate"):
+	if not ComputeShaderBaseUtil.validate_push_constant_size(pc, 96, "ClimateAdjustCompute.evaluate"):
 		return false
 	var groups_x: int = int(ceil(float(w) / 16.0))
 	var groups_y: int = int(ceil(float(h) / 16.0))
@@ -259,19 +263,20 @@ func evaluate_to_buffers_gpu(
 	return true
 
 # GPU-only fast path: apply cycles in-place or into provided output buffer (no readback).
-func apply_cycles_only_gpu(w: int, h: int, temp_buf: RID, land_buf: RID, dist_buf: RID, light_buf: RID, params: Dictionary, out_buf: RID) -> bool:
+func apply_cycles_only_gpu(w: int, h: int, temp_buf: RID, moist_buf: RID, land_buf: RID, dist_buf: RID, light_buf: RID, params: Dictionary, out_buf: RID) -> bool:
 	_ensure_device_and_pipeline()
 	var size: int = max(0, w * h)
 	if size == 0 or not _cycle_pipeline.is_valid():
 		return false
-	if not temp_buf.is_valid() or not land_buf.is_valid() or not dist_buf.is_valid() or not light_buf.is_valid() or not out_buf.is_valid():
+	if not temp_buf.is_valid() or not moist_buf.is_valid() or not land_buf.is_valid() or not dist_buf.is_valid() or not light_buf.is_valid() or not out_buf.is_valid():
 		return false
 	var uniforms: Array = []
 	var u0: RDUniform = RDUniform.new(); u0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u0.binding = 0; u0.add_id(temp_buf); uniforms.append(u0)
-	var u1: RDUniform = RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(land_buf); uniforms.append(u1)
-	var u2: RDUniform = RDUniform.new(); u2.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u2.binding = 2; u2.add_id(dist_buf); uniforms.append(u2)
-	var u3: RDUniform = RDUniform.new(); u3.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u3.binding = 3; u3.add_id(out_buf); uniforms.append(u3)
-	var u4: RDUniform = RDUniform.new(); u4.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u4.binding = 4; u4.add_id(light_buf); uniforms.append(u4)
+	var u1: RDUniform = RDUniform.new(); u1.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u1.binding = 1; u1.add_id(moist_buf); uniforms.append(u1)
+	var u2: RDUniform = RDUniform.new(); u2.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u2.binding = 2; u2.add_id(land_buf); uniforms.append(u2)
+	var u3: RDUniform = RDUniform.new(); u3.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u3.binding = 3; u3.add_id(dist_buf); uniforms.append(u3)
+	var u4: RDUniform = RDUniform.new(); u4.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u4.binding = 4; u4.add_id(out_buf); uniforms.append(u4)
+	var u5: RDUniform = RDUniform.new(); u5.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER; u5.binding = 5; u5.add_id(light_buf); uniforms.append(u5)
 	var uniform_set: RID = _rd.uniform_set_create(uniforms, _cycle_shader, 0)
 	var pc := PackedByteArray()
 	var ints := PackedInt32Array([w, h])
@@ -287,6 +292,9 @@ func apply_cycles_only_gpu(w: int, h: int, temp_buf: RID, land_buf: RID, dist_bu
 		float(params.get("continentality_scale", 1.0)),
 		float(params.get("temp_base_offset_delta", 0.0)),
 		float(params.get("temp_scale_ratio", 1.0)),
+		float(params.get("stellar_flux", 1.0)),
+		float(params.get("lat_energy_density_strength", 0.75)),
+		float(params.get("humidity_heat_capacity", 0.34)),
 	])
 	pc.append_array(ints.to_byte_array())
 	pc.append_array(floats.to_byte_array())
